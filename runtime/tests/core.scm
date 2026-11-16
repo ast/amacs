@@ -167,3 +167,8 @@
   (check-false (buffer-modified? "*test*"))
   (check-true (if (member "*scratch*" (buffer-list)) #t #f))
   (check-error (lambda () (buffer-string "no such buffer"))))
+
+(deftest environment
+  (check-true (string? (system-name)))
+  (check-false (getenv "AMACS_SURELY_NOT_SET"))
+  (check-true (string? (getenv "HOME"))))

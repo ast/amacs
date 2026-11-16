@@ -1,11 +1,22 @@
 ;;; Example init file for amacs.
 ;;;
-;;; Copy it to ~/.config/amacs/init.scm, or try it with
+;;; To use it:
+;;;   mkdir -p ~/.config/amacs && cp examples/init.scm ~/.config/amacs/init.scm
+;;; or try it without installing:
 ;;;   amacs --init examples/init.scm
+;;; The server reads the init file when it starts, so restart it after a
+;;; change: amacsclient --eval '(exit-editor)'.
 ;;;
 ;;; It ports the parts of an Emacs configuration that amacs can express so
 ;;; far. Key sequences use Emacs notation. `H-` stands for Hyper, which is
 ;;; sent as Ctrl+Meta+Super.
+
+;;; Appearance
+
+;; The font of graphical frames. The size is in pixels, before the output's
+;; scale is applied, and depends on the machine.
+(set-option! 'font-family "JetBrainsMono Nerd Font Mono")
+(set-option! 'font-size (if (equal? (system-name) "evo") 16 13))
 
 ;;; Editing defaults
 
@@ -97,3 +108,4 @@
 ;;;   sexp motion, bookmarks, ibuffer, window resizing and windmove
 ;;;   scrolling without moving point (H-p, H-n)
 ;;;   LSP, tree-sitter modes, formatters, snippets, git, the file manager
+;;;   themes (the window uses modus-operandi-tinted colours for now)

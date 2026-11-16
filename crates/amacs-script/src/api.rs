@@ -387,6 +387,13 @@ pub const API: &[ApiFn] = api! {
             }
             Ok(Value::Void)
         };
+    "system-name" (0, Some(0)) "Host name of the machine the editor runs on." =>
+        |_, _| {
+            let name = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
+            Ok(name.trim().into())
+        };
+    "getenv" (1, Some(1)) "Value of an environment variable, or #f if it is not set." =>
+        |_, args| Ok(std::env::var(string(args, 0)?).ok().into());
     "exit-editor" (0, Some(0)) "Exit without asking about unsaved buffers." =>
         |ed, _| {
             ed.request_exit();
