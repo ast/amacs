@@ -1,0 +1,13 @@
+---
+source: crates/amacs-testkit/tests/editing.rs
+expression: h.screen.text()
+---
+shared!                       │shared!
+                              │
+                              │
+                              │
+                              │ **  *scratch*   L1 C7
+                              │shared!
+                              │
+                              │
+ **  *scratch*   L1 C6          **  *scratch*   L1 C7

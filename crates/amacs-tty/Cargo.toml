@@ -1,0 +1,15 @@
+[package]
+name = "amacs-tty"
+description = "Terminal frontend for amacs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+amacs-proto.workspace = true
+crossterm.workspace = true
+unicode-width.workspace = true
+
+[lints]
+workspace = true

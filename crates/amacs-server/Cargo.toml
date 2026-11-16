@@ -1,0 +1,20 @@
+[package]
+name = "amacs-server"
+description = "The amacs editor binary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+amacs-core.workspace = true
+amacs-proto.workspace = true
+amacs-tty.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "amacs"
+path = "src/main.rs"

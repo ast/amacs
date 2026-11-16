@@ -1,0 +1,20 @@
+[package]
+name = "amacs-testkit"
+description = "Headless frontend and test helpers for amacs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+amacs-core.workspace = true
+amacs-proto.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

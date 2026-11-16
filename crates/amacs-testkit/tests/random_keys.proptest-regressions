@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c6b20da558d504b9fd1d1ea8ab8bc6ef911c4db826d633b1793a524497cf8161 # shrinks to keys = ["日"], cols = 1, rows = 3
+cc 80aebb5a3096ff419fbeb60644e73d29cbd1c830dd21d3d2eeb3c3e3b68bb5cf # shrinks to keys = ["日", "a", "a", "a", "a", "a", "a", "a", "a", "a"], cols = 2, rows = 4
+cc c321d6372cc7fcf3a7b46938280d42ff2d83fc482d838e11b8d3b80baa4a7c31 # shrinks to keys = ["ESC", "C-x C-x", "C-f", "b", "RET"]
