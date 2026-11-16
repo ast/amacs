@@ -175,6 +175,16 @@ impl Harness {
     }
 
     fn redisplay(&mut self) {
+        // Wait for the matcher's worker threads, so that what a test sees
+        // does not depend on timing.
+        let start = std::time::Instant::now();
+        loop {
+            self.editor.poll(std::time::Instant::now());
+            if !self.editor.is_matching() || start.elapsed().as_secs() >= 5 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         let ops = self.editor.redisplay();
         self.screen.apply(&ops);
     }
@@ -228,5 +238,33 @@ impl Harness {
     /// The echo area, the last row of the frame.
     pub fn echo(&self) -> String {
         self.screen.row(self.screen.size().1 - 1)
+    }
+
+    /// The row with the minibuffer prompt. Candidates are listed below it.
+    pub fn prompt(&self) -> String {
+        self.screen.row(self.prompt_row())
+    }
+
+    fn prompt_row(&self) -> usize {
+        self.screen.size().1 - usize::from(self.editor.echo_rows())
+    }
+
+    /// The candidates listed under the prompt, without trailing empty rows.
+    pub fn candidates(&self) -> Vec<String> {
+        let mut rows: Vec<String> = (self.prompt_row() + 1..self.screen.size().1)
+            .map(|row| self.screen.row(row))
+            .collect();
+        while rows.last().is_some_and(String::is_empty) {
+            rows.pop();
+        }
+        rows
+    }
+
+    /// Advances the editor's clock, for things that happen after a delay.
+    pub fn wait(&mut self, duration: std::time::Duration) -> &mut Self {
+        self.editor.poll(std::time::Instant::now() + duration);
+        let ops = self.editor.redisplay();
+        self.screen.apply(&ops);
+        self
     }
 }

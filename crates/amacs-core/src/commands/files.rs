@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
-use crate::buffer::{Buffer, BufferId};
+use crate::buffer::BufferId;
+use crate::completion::Completion;
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
 use crate::files::{abbreviate_path, expand_path, modified_time};
-use crate::minibuffer::{Completion, default_directory};
+use crate::minibuffer::default_directory;
 
 pub fn find_file(ed: &mut Editor) -> CmdResult {
     ed.forbid_in_minibuffer()?;
@@ -63,35 +64,14 @@ pub fn write_file(ed: &mut Editor) -> CmdResult {
     })
 }
 
-pub fn switch_to_buffer(ed: &mut Editor) -> CmdResult {
-    ed.forbid_in_minibuffer()?;
-    let default = ed.other_buffer();
-    let prompt = match default {
-        Some(id) => format!("Switch to buffer (default {}): ", ed.buffers[id].name),
-        None => "Switch to buffer: ".to_owned(),
-    };
-    ed.read_string(prompt, "", Completion::Buffer, move |ed, input| {
-        let id = if input.is_empty() {
-            default.filter(|id| ed.buffers.contains_key(*id))
-        } else {
-            ed.find_buffer(&input)
-        };
-        let id = match id {
-            Some(id) => id,
-            None if input.is_empty() => return Ok(()),
-            None => ed.add_buffer(Buffer::new(input)),
-        };
-        ed.switch_to_buffer(id);
-        Ok(())
-    })
-}
-
 pub fn kill_buffer(ed: &mut Editor) -> CmdResult {
     ed.forbid_in_minibuffer()?;
-    let current = ed.buffer().name.clone();
-    let prompt = format!("Kill buffer (default {current}): ");
-    ed.read_string(prompt, "", Completion::Buffer, move |ed, input| {
-        let name = if input.is_empty() { &current } else { &input };
+    let completion = Completion::Items {
+        candidates: ed.buffer_candidates(true),
+        category: "buffer".to_owned(),
+    };
+    ed.read_string("Kill buffer: ", "", completion, move |ed, name| {
+        let name = &name;
         let id = ed
             .find_buffer(name)
             .ok_or_else(|| CmdError::msg(format!("No such buffer: {name}")))?;

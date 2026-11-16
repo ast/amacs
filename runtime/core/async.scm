@@ -56,6 +56,14 @@
 (define (read-buffer-name prompt)
   (await (%read-string prompt "" 'buffer)))
 
+;; Lets the user choose one of CANDIDATES, narrowing them by typing, and
+;; returns the choice as a string. A candidate is a string, or a list of a
+;; string and an annotation shown beside it. If nothing matches, the text
+;; typed is returned. The optional category names the kind of thing, which
+;; keeps a separate input history for it.
+(define (completing-read prompt candidates . category)
+  (await (%completing-read prompt candidates (if (null? category) 'choice (car category)))))
+
 ;; Asks a yes-or-no question and returns a boolean.
 (define (y-or-n? prompt)
   (await (%y-or-n prompt)))

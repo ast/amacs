@@ -8,6 +8,10 @@ pub const MODE_LINE: FaceId = FaceId(2);
 pub const MODE_LINE_INACTIVE: FaceId = FaceId(3);
 pub const MINIBUFFER_PROMPT: FaceId = FaceId(4);
 pub const VERTICAL_BORDER: FaceId = FaceId(5);
+/// The selected candidate in the minibuffer.
+pub const CURRENT_CANDIDATE: FaceId = FaceId(6);
+/// Text of less importance, such as annotations.
+pub const SHADOW: FaceId = FaceId(7);
 
 /// Faces indexed by [`FaceId`]. The default face keeps the terminal's own
 /// colours, so every other face sets both colours or neither.
@@ -36,5 +40,15 @@ pub fn table() -> Vec<FaceAttrs> {
             ..plain
         },
         plain,
+        FaceAttrs {
+            fg: black,
+            bg: Some(Color::rgb(0xf0, 0xc1, 0xcf)),
+            bold: true,
+            ..plain
+        },
+        FaceAttrs {
+            italic: true,
+            ..plain
+        },
     ]
 }

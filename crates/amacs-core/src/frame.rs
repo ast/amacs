@@ -26,6 +26,9 @@ pub(crate) struct Frame {
     pub redisplay: RedisplayState,
     /// The message in the echo area.
     pub echo: Option<String>,
+    /// Lines shown under the echo area until the next key, such as the keys
+    /// that can follow a prefix.
+    pub hint: Vec<String>,
 }
 
 impl Editor {
@@ -55,6 +58,7 @@ impl Editor {
             size: (cols, rows),
             redisplay: RedisplayState::default(),
             echo: None,
+            hint: Vec::new(),
         })
     }
 

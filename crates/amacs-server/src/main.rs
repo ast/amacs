@@ -132,6 +132,23 @@ const AUTO_SAVE_IDLE: Duration = Duration::from_secs(5);
 /// Unsaved changes are auto-saved at least this often while the editor is busy.
 const AUTO_SAVE_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How long to wait for the next event: until the editor has something due,
+/// but no longer than the idle time after which unsaved changes are saved.
+fn wait_time(session: &Session) -> Duration {
+    let until_due = session
+        .next_deadline()
+        .map(|due| due.saturating_duration_since(std::time::Instant::now()));
+    until_due.map_or(AUTO_SAVE_IDLE, |wait| wait.min(AUTO_SAVE_IDLE))
+}
+
+/// Writes what must survive the process: unsaved changes go to the
+/// auto-save directory, and input history to the state directory.
+fn save_everything(session: &mut Session, force: bool) -> usize {
+    let mut editor = session.editor_mut();
+    editor.save_state();
+    editor.auto_save(force)
+}
+
 /// Where auto-save files and other persistent state go:
 /// `$XDG_STATE_HOME/amacs`, or `~/.local/state/amacs`.
 fn state_directory() -> Option<PathBuf> {

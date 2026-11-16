@@ -3,11 +3,15 @@
 mod edit;
 mod files;
 mod motion;
+mod search;
 mod windows;
 
+use crate::completion::Completion;
 use crate::editor::{CommandBody, Editor, GLOBAL_MAP, MINIBUFFER_MAP, Prefix};
 use crate::error::{CmdError, CmdResult};
-use crate::minibuffer::{self, Completion};
+use crate::minibuffer;
+
+pub(crate) use edit::delete_backward_char;
 
 macro_rules! commands {
     ($editor:expr; $( $name:literal => $run:path, $doc:literal; )*) => {
@@ -28,7 +32,11 @@ pub fn install(ed: &mut Editor) {
         "kill-region" => edit::kill_region, "Kill the text between point and mark.";
         "kill-ring-save" => edit::kill_ring_save, "Save the region as if killed, without killing it.";
         "yank" => edit::yank, "Reinsert the most recently killed text.";
-        "yank-pop" => edit::yank_pop, "Replace the just-yanked text with an earlier kill.";
+        "yank-pop" => search::yank_pop, "Replace the just-yanked text with an earlier kill, or choose a kill to insert.";
+        "search-lines" => search::search_lines, "Go to a line of the buffer chosen by its text.";
+        "search-files" => search::search_files, "Search the project's files with ripgrep and visit a match.";
+        "recent-file" => search::recent_file, "Visit a recently visited file.";
+        "act-on-candidate" => search::act_on_candidate, "Do something else with the selected candidate.";
         "undo" => edit::undo, "Undo the last change.";
         "undo-redo" => edit::undo_redo, "Redo the last undone change.";
         "set-mark-command" => edit::set_mark, "Set the mark at point and activate the region.";
@@ -60,7 +68,7 @@ pub fn install(ed: &mut Editor) {
         "find-file" => files::find_file, "Visit a file in its own buffer.";
         "save-buffer" => files::save_buffer, "Save the current buffer in its file.";
         "write-file" => files::write_file, "Write the current buffer to a file and visit that file.";
-        "switch-to-buffer" => files::switch_to_buffer, "Show another buffer in the selected window.";
+        "switch-to-buffer" => search::switch_to_buffer, "Show another buffer, or a recent file, in the selected window.";
         "kill-buffer" => files::kill_buffer, "Kill a buffer.";
         "save-buffers-kill-terminal" => files::save_buffers_kill_terminal, "Leave the editor from this terminal: close a client's frame, or exit.";
         "kill-editor" => files::kill_editor, "Exit the editor and close every frame.";
@@ -77,7 +85,17 @@ pub fn install(ed: &mut Editor) {
 
         "exit-minibuffer" => minibuffer::exit_minibuffer, "Finish minibuffer input.";
         "abort-minibuffer" => minibuffer::abort_minibuffer, "Cancel minibuffer input.";
-        "minibuffer-complete" => minibuffer::minibuffer_complete, "Complete the minibuffer input as far as possible.";
+        "exit-minibuffer-with-input" => minibuffer::exit_with_input, "Accept the text as typed, ignoring the candidates.";
+        "next-candidate" => minibuffer::next_candidate, "Select the next candidate.";
+        "previous-candidate" => minibuffer::previous_candidate, "Select the previous candidate, or the input itself.";
+        "next-candidate-page" => minibuffer::next_candidate_page, "Move the selection down by a page of candidates.";
+        "previous-candidate-page" => minibuffer::previous_candidate_page, "Move the selection up by a page of candidates.";
+        "first-candidate" => minibuffer::first_candidate, "Select the first candidate.";
+        "last-candidate" => minibuffer::last_candidate, "Select the last candidate.";
+        "insert-candidate" => minibuffer::insert_candidate, "Replace the input with the selected candidate.";
+        "minibuffer-delete-backward" => minibuffer::delete_backward, "Delete backward; in a file name, delete a whole directory.";
+        "previous-history-element" => minibuffer::previous_history, "Replace the input with the previous one from history.";
+        "next-history-element" => minibuffer::next_history, "Replace the input with the next one from history.";
     }
 
     const GLOBAL: &[(&str, &str)] = &[
@@ -144,6 +162,9 @@ pub fn install(ed: &mut Editor) {
         ("C-x C-s", "save-buffer"),
         ("C-x C-w", "write-file"),
         ("C-x b", "switch-to-buffer"),
+        ("C-s", "search-lines"),
+        ("C-c /", "search-files"),
+        ("C-x C-r", "recent-file"),
         ("C-x k", "kill-buffer"),
         ("C-x C-c", "save-buffers-kill-terminal"),
         ("C-x 5 0", "delete-frame"),
@@ -169,8 +190,23 @@ pub fn install(ed: &mut Editor) {
         ("C-m", "exit-minibuffer"),
         ("C-j", "exit-minibuffer"),
         ("C-g", "abort-minibuffer"),
-        ("TAB", "minibuffer-complete"),
-        ("C-i", "minibuffer-complete"),
+        ("M-RET", "exit-minibuffer-with-input"),
+        ("TAB", "insert-candidate"),
+        ("C-i", "insert-candidate"),
+        ("C-n", "next-candidate"),
+        ("<down>", "next-candidate"),
+        ("C-p", "previous-candidate"),
+        ("<up>", "previous-candidate"),
+        ("C-v", "next-candidate-page"),
+        ("<next>", "next-candidate-page"),
+        ("M-v", "previous-candidate-page"),
+        ("<prior>", "previous-candidate-page"),
+        ("M-<", "first-candidate"),
+        ("M->", "last-candidate"),
+        ("DEL", "minibuffer-delete-backward"),
+        ("M-p", "previous-history-element"),
+        ("M-n", "next-history-element"),
+        ("C-.", "act-on-candidate"),
     ];
     let minibuffer = ed.keymap_mut(MINIBUFFER_MAP);
     for (keys, command) in MINIBUFFER {

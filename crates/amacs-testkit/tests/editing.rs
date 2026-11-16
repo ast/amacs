@@ -68,9 +68,13 @@ fn kill_and_yank() {
     assert_eq!(h.buffer_text(), "gammaalpha ");
     h.keys("C-y M-y");
     assert_eq!(h.buffer_text(), "gammaalpha alpha beta\n");
+    // Not after a yank, M-y offers the kill ring to choose from.
     h.keys("C-f");
     h.keys("M-y");
-    assert_eq!(h.echo(), "Previous command was not a yank");
+    assert_eq!(h.prompt(), "1/2 Yank:");
+    assert_eq!(h.candidates(), ["beta", "alpha beta"]);
+    h.keys("C-n RET");
+    assert_eq!(h.buffer_text(), "gammaalpha alpha beta\nalpha beta\n");
 }
 
 #[test]
@@ -238,40 +242,187 @@ fn escape_acts_as_meta() {
 }
 
 #[test]
-fn m_x_runs_a_command_by_name_with_completion() {
-    let mut h = harness();
+fn m_x_narrows_commands_as_words_are_typed() {
+    let mut h = Harness::new(70, 16);
     h.type_text("abc").keys("M-x");
-    assert_eq!(h.echo(), "M-x");
-    h.type_text("move-beg").keys("TAB");
-    assert_eq!(h.echo(), "M-x move-beginning-of-line");
+    assert!(h.prompt().ends_with(" M-x"), "{}", h.prompt());
+    assert_eq!(h.candidates().len(), 10, "ten candidates are listed");
+
+    h.type_text("line beg");
+    assert_eq!(h.prompt(), "1/1 M-x line beg");
+    assert_eq!(
+        h.candidates(),
+        ["move-beginning-of-line  Move point to the beginning of the line."]
+    );
+    h.keys("RET");
+    assert_eq!(h.screen.cursor(), Some((0, 0)));
+    assert_eq!(
+        h.screen.row(14),
+        " **  *scratch*   L1 C0  (Fundamental)",
+        "the windows get their rows back"
+    );
+
+    h.keys("M-x").type_text("no-such-command");
+    assert_eq!(h.prompt(), "*/0 M-x no-such-command");
+    assert!(h.candidates().is_empty());
+    h.keys("RET");
+    assert_eq!(h.echo(), "Unknown command: no-such-command");
+}
+
+#[test]
+fn the_selection_moves_through_the_candidates_and_onto_the_input() {
+    let mut h = Harness::new(70, 16);
+    h.keys("M-x").type_text("kill-");
+    assert_eq!(h.prompt(), "1/8 M-x kill-");
+    let mut names: Vec<String> = h
+        .candidates()
+        .iter()
+        .map(|row| row.split_whitespace().next().unwrap().to_owned())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "backward-kill-word",
+            "kill-buffer",
+            "kill-editor",
+            "kill-line",
+            "kill-region",
+            "kill-ring-save",
+            "kill-word",
+            "save-buffers-kill-terminal"
+        ],
+        "a word matches anywhere in a name"
+    );
+    // The selected candidate has the highlight.
+    assert!(h.screen.face_at(6, 0).bg.is_some());
+    assert!(h.screen.face_at(7, 0).bg.is_none());
+
+    h.keys("C-n C-n");
+    assert_eq!(h.prompt(), "3/8 M-x kill-");
+    assert!(h.screen.face_at(8, 0).bg.is_some());
+    h.keys("M->");
+    assert_eq!(h.prompt(), "8/8 M-x kill-");
+    h.keys("M-< C-p");
+    assert_eq!(
+        h.prompt(),
+        "*/8 M-x kill-",
+        "above the first candidate, the input is selected"
+    );
+    h.keys("RET");
+    assert_eq!(h.echo(), "Unknown command: kill-");
+
+    h.type_text("x").keys("M-x").type_text("kill-").keys("C-g");
+    assert_eq!(h.echo(), "Quit");
+    h.type_text("y");
+    assert_eq!(h.buffer_text(), "xy", "quitting returns to the buffer");
+}
+
+#[test]
+fn candidates_can_be_inserted_and_input_recalled_from_history() {
+    let mut h = Harness::new(70, 16);
+    h.type_text("word")
+        .keys("M-x")
+        .type_text("backward-w")
+        .keys("TAB");
+    assert_eq!(h.prompt(), "1/1 M-x backward-word");
     h.keys("RET");
     assert_eq!(h.screen.cursor(), Some((0, 0)));
 
-    h.keys("M-x").type_text("kill-").keys("TAB");
+    // Commands that were run come first the next time.
+    h.keys("M-x");
     assert!(
-        h.echo()
-            .starts_with("M-x kill- [kill-buffer, kill-editor, "),
-        "{}",
-        h.echo()
+        h.candidates()[0].starts_with("backward-word "),
+        "{:?}",
+        h.candidates()
     );
+    h.keys("M-p");
+    assert_eq!(h.prompt(), "1/1 M-x backward-word");
     h.keys("C-g");
-    assert_eq!(h.echo(), "Quit");
-    h.type_text("x");
-    assert_eq!(h.buffer_text(), "xabc", "aborting returns to the buffer");
+}
 
-    h.keys("M-x").type_text("no-such-command").keys("RET");
-    assert_eq!(h.echo(), "Unknown command: no-such-command");
+#[test]
+fn lines_are_searched_with_a_live_preview() {
+    let mut h = Harness::new(60, 20);
+    let text: Vec<String> = (1..=40).map(|n| format!("line number {n}")).collect();
+    h.paste(&text.join("\n"));
+    h.keys("M-<");
+
+    h.keys("C-s");
+    assert_eq!(h.prompt(), "1/40 Go to line:");
+    h.type_text("3 number");
+    assert_eq!(h.prompt(), "1/13 Go to line: 3 number");
+    assert!(
+        h.candidates()[0].starts_with("line number 3 "),
+        "{:?}",
+        h.candidates()
+    );
+    assert!(
+        h.candidates()[0].ends_with(" 3"),
+        "the line number is the annotation"
+    );
+    // The window already shows the selected line.
+    assert_eq!(h.screen.row(8), " **  *scratch*   L3 C0  (Fundamental)");
+    h.keys("C-n C-n");
+    assert_ne!(
+        h.screen.row(8),
+        " **  *scratch*   L3 C0  (Fundamental)",
+        "the preview follows"
+    );
+    assert!(h.screen.row(8).contains('3'), "{}", h.screen.row(8));
+
+    h.keys("C-g");
+    assert_eq!(
+        h.screen.row(18),
+        " **  *scratch*   L1 C0  (Fundamental)",
+        "quitting goes back"
+    );
+    assert_eq!(h.screen.row(0), "line number 1");
+
+    h.keys("C-s").type_text("number 37").keys("RET");
+    assert_eq!(h.screen.row(18), " **  *scratch*   L37 C0  (Fundamental)");
+    h.keys("C-x C-x");
+    assert_eq!(
+        h.screen.row(18),
+        " **  *scratch*   L1 C0  (Fundamental)",
+        "the mark is where the search began"
+    );
+}
+
+#[test]
+fn a_prefix_key_shows_what_can_follow_after_a_pause() {
+    let mut h = Harness::new(100, 20);
+    h.keys("C-x");
+    assert_eq!(h.echo(), "C-x-");
+    h.wait(std::time::Duration::from_secs(1));
+    assert_eq!(h.prompt(), "C-x-");
+    let hint = h.candidates().join("\n");
+    assert!(hint.contains("C-f → find-file"), "{hint}");
+    assert!(hint.contains("5 → +prefix"), "{hint}");
+    assert!(hint.contains("o → other-window"), "{hint}");
+
+    h.keys("o");
+    assert!(
+        h.candidates().is_empty(),
+        "the hint goes away with the next key"
+    );
+    h.keys("C-x C-g");
+    h.wait(std::time::Duration::from_secs(1));
+    assert!(
+        h.candidates().is_empty(),
+        "a cancelled prefix shows no hint"
+    );
 }
 
 #[test]
 fn minibuffer_scrolls_to_keep_its_cursor_visible() {
     let mut h = Harness::new(20, 5);
-    h.keys("M-x").type_text("abcdefghijklmnopqrstuvwxyz");
+    h.keys("M-g g").type_text("abcdefghijklmnopqrstuvwxyz");
     assert_eq!(h.echo(), "ghijklmnopqrstuvwxyz"[1..].to_owned());
     assert_eq!(h.screen.cursor(), Some((4, 19)));
     h.keys("C-a");
-    assert_eq!(h.echo(), "M-x abcdefghijklmnop");
-    assert_eq!(h.screen.cursor(), Some((4, 4)));
+    assert_eq!(h.echo(), "Goto line: abcdefghi");
+    assert_eq!(h.screen.cursor(), Some((4, 11)));
 }
 
 #[test]
@@ -352,13 +503,25 @@ fn pasted_text_is_one_undo_step() {
 
 #[test]
 fn buffers_switch_and_are_created_on_demand() {
-    let mut h = harness();
+    let mut h = Harness::new(60, 16);
     h.type_text("scratch text");
-    h.keys("C-x b").type_text("notes").keys("RET");
-    assert_eq!(h.screen.row(6), " --  notes   L1 C0  (Fundamental)");
+    h.keys("C-x b").type_text("notes");
+    assert_eq!(h.prompt(), "*/0 Switch to buffer: notes");
+    h.keys("RET");
+    assert_eq!(
+        h.screen.row(14),
+        " --  notes   L1 C0  (Fundamental)",
+        "an unknown name makes a buffer"
+    );
     h.type_text("note");
+
     h.keys("C-x b");
-    assert_eq!(h.echo(), "Switch to buffer (default *scratch*):");
+    assert_eq!(h.prompt(), "1/2 Switch to buffer:");
+    assert_eq!(
+        h.candidates(),
+        ["*scratch*", "notes"],
+        "the other buffer comes first"
+    );
     h.keys("RET");
     assert_eq!(h.screen.row(0), "scratch text");
     assert_eq!(
@@ -367,14 +530,46 @@ fn buffers_switch_and_are_created_on_demand() {
         "the buffer remembers its point"
     );
 
-    h.keys("C-x k RET");
+    h.keys("C-x k");
+    assert_eq!(
+        h.candidates(),
+        ["*scratch*", "notes"],
+        "the current buffer comes first"
+    );
+    h.keys("RET");
     assert_eq!(h.screen.row(0), "note");
     h.keys("C-x k RET");
     assert_eq!(
-        h.screen.row(6),
+        h.screen.row(14),
         " --  *scratch*   L1 C0  (Fundamental)",
         "killing the last buffer leaves a fresh scratch"
     );
+}
+
+#[test]
+fn a_candidate_can_be_acted_on_instead_of_accepted() {
+    let mut h = Harness::new(60, 16);
+    h.keys("C-x b")
+        .type_text("other")
+        .keys("RET C-x b")
+        .type_text("scr")
+        .keys("C-.");
+    assert_eq!(
+        h.prompt(),
+        "Act on *scratch*: w copy, i insert, k kill, o other window"
+    );
+    h.type_text("o");
+    assert_eq!(h.screen.row(0), format!("{:30}│", ""));
+    assert!(h.screen.row(14).contains("other") && h.screen.row(14).contains("*scratch*"));
+
+    h.keys("C-x b").type_text("oth").keys("C-.").type_text("i");
+    assert_eq!(
+        h.buffer_text(),
+        "other",
+        "the candidate is inserted where the prompt was opened"
+    );
+    h.keys("C-x b C-.").type_text("k");
+    assert!(!h.screen.row(14).contains("other"), "{}", h.screen.row(14));
 }
 
 /// A clipboard shared with the test, standing in for the system's.

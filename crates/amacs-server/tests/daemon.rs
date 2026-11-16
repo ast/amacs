@@ -228,9 +228,9 @@ fn two_frames_share_buffers_but_not_prompts() {
     two.sync();
     assert_eq!(two.screen.row(0), "typed in one");
 
-    two.keys("M-x").type_text("forw");
+    two.keys("M-g g").type_text("12");
     one.sync();
-    assert_eq!(two.echo(), "M-x forw");
+    assert_eq!(two.echo(), "Goto line: 12");
     assert_eq!(one.echo(), "");
     two.keys("C-g");
 

@@ -24,7 +24,9 @@ use amacs_proto::{
 use amacs_script::{InterruptHandle, Session};
 use anyhow::{Context, Result, bail};
 
-use crate::{AUTO_SAVE_IDLE, AUTO_SAVE_INTERVAL, Options, start_session};
+use crate::{
+    AUTO_SAVE_IDLE, AUTO_SAVE_INTERVAL, Options, save_everything, start_session, wait_time,
+};
 
 /// The base frame is never shown, so its size only matters to code that
 /// asks for it.
@@ -40,6 +42,8 @@ enum Event {
     Disconnected(ConnId),
     /// A signal asked the server to stop.
     Shutdown,
+    /// A worker thread of the editor has results, or something is due.
+    Wake,
 }
 
 struct Conn {
@@ -178,23 +182,35 @@ pub fn run(options: &Options) -> Result<ExitCode> {
     // Tells systemd that the server is ready; does nothing otherwise.
     let _ = sd_notify::notify(&[sd_notify::NotifyState::Ready]);
 
+    {
+        let sender = sender.clone();
+        session.editor_mut().set_waker(std::sync::Arc::new(move || {
+            let _ = sender.send(Event::Wake);
+        }));
+    }
     let interrupt = session.interrupt_handle();
     let mut server = Server {
         session,
         conns: HashMap::new(),
     };
     let mut last_auto_save = Instant::now();
+    let mut last_message = Instant::now();
     let mut crashed = false;
     'serve: loop {
-        let first = match events.recv_timeout(AUTO_SAVE_IDLE) {
+        let first = match events.recv_timeout(wait_time(&server.session)) {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => {
-                server.session.editor_mut().auto_save(false);
-                last_auto_save = Instant::now();
-                continue;
+                if last_message.elapsed() >= AUTO_SAVE_IDLE {
+                    save_everything(&mut server.session, false);
+                    last_auto_save = Instant::now();
+                }
+                Event::Wake
             }
             Err(RecvTimeoutError::Disconnected) => break,
         };
+        if !matches!(first, Event::Wake) {
+            last_message = Instant::now();
+        }
         // A bug that panics must not take the user's unsaved work with it.
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             let mut next = Some(first);
@@ -206,6 +222,7 @@ pub fn run(options: &Options) -> Result<ExitCode> {
                     Event::Message(id, message) => server.handle_message(id, message),
                     Event::Disconnected(id) => server.disconnect(id),
                     Event::Shutdown => return false,
+                    Event::Wake => server.session.poll(),
                 }
                 next = events.try_recv().ok();
             }
@@ -221,7 +238,7 @@ pub fn run(options: &Options) -> Result<ExitCode> {
             }
         }
         if last_auto_save.elapsed() >= AUTO_SAVE_INTERVAL {
-            server.session.editor_mut().auto_save(false);
+            save_everything(&mut server.session, false);
             last_auto_save = Instant::now();
         }
     }
@@ -230,7 +247,7 @@ pub fn run(options: &Options) -> Result<ExitCode> {
     // directory first. After a panic the editor may be in a bad state, so
     // this too is guarded.
     let saved = catch_unwind(AssertUnwindSafe(|| {
-        server.session.editor_mut().auto_save(true)
+        save_everything(&mut server.session, true)
     }));
     let message = if crashed {
         Some("amacs: the server crashed; unsaved changes were auto-saved".to_owned())

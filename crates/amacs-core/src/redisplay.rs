@@ -112,7 +112,10 @@ impl Editor {
         if let Some(col) = echo_cursor {
             cursor = Some((ECHO_PANE, 0, col));
         }
-        panes.push((pane_rect(ECHO_PANE, echo_rect), vec![echo]));
+        let mut echo_lines = vec![echo];
+        echo_lines.extend(self.echo_extra_lines());
+        echo_lines.resize(usize::from(echo_rect.h), DisplayLine::default());
+        panes.push((pane_rect(ECHO_PANE, echo_rect), echo_lines));
         panes.retain(|(rect, _)| rect.w > 0 && rect.h > 0);
 
         self.diff(panes, cursor)
@@ -333,6 +336,13 @@ impl Editor {
         let window = &self.windows[self.minibuffer_window()];
         let buffer = &self.buffers[window.buffer];
         let point = buffer.marker(window.point);
+        // With candidates, the prompt starts with which is selected of how many.
+        let counter = state.session.as_ref().map(|session| {
+            let selected = session
+                .selected()
+                .map_or("*".to_owned(), |index| (index + 1).to_string());
+            format!("{selected}/{} ", session.count())
+        });
 
         // One entry per char: what is drawn, its width and its face.
         let mut glyphs: Vec<(String, usize, FaceId)> = Vec::new();
@@ -342,11 +352,13 @@ impl Editor {
             push_glyph(&mut glyph, c, cells);
             glyphs.push((glyph, cells, face));
         };
+        let counter = counter.unwrap_or_default();
+        counter.chars().for_each(|c| add(c, faces::SHADOW));
         state
             .prompt
             .chars()
             .for_each(|c| add(c, faces::MINIBUFFER_PROMPT));
-        let prompt_len = state.prompt.chars().count();
+        let prompt_len = counter.chars().count() + state.prompt.chars().count();
         buffer
             .text()
             .chars_from(0)
@@ -371,5 +383,68 @@ impl Editor {
             }
         }
         (line, Some(cursor_cell.saturating_sub(skipped) as u16))
+    }
+
+    /// The rows under the first row of the echo area: the candidates of the
+    /// open prompt, or a key hint.
+    fn echo_extra_lines(&self) -> Vec<DisplayLine> {
+        let width = usize::from(self.frame().size.0);
+        let prompting = self.prompt_frame == Some(self.current_frame);
+        let session = self
+            .minibuffer
+            .as_ref()
+            .filter(|_| prompting)
+            .and_then(|state| state.session.as_ref());
+        let Some(session) = session else {
+            return self
+                .frame()
+                .hint
+                .iter()
+                .map(|line| DisplayLine::plain(fit(line, width), faces::DEFAULT))
+                .collect();
+        };
+
+        let visible = session.visible();
+        // Annotations line up in a column just right of the longest candidate,
+        // but never further right than the middle.
+        let longest = visible
+            .iter()
+            .map(|(_, c)| str_cells(&c.text))
+            .max()
+            .unwrap_or(0);
+        let column = (longest + 2).min(width / 2);
+        visible
+            .iter()
+            .map(|(index, candidate)| {
+                let selected = session.selected() == Some(*index);
+                let face = if selected {
+                    faces::CURRENT_CANDIDATE
+                } else {
+                    faces::DEFAULT
+                };
+                let mut line = DisplayLine {
+                    fill: face,
+                    ..DisplayLine::default()
+                };
+                let text: String = candidate
+                    .text
+                    .chars()
+                    .map(|c| if c.is_control() { ' ' } else { c })
+                    .collect();
+                let text = fit(&text, width);
+                line.push(text, face);
+                let used = str_cells(text);
+                if !candidate.annotation.is_empty() && used + 2 < width {
+                    let gap = column.saturating_sub(used).max(2);
+                    line.push(&" ".repeat(gap), face);
+                    let annotation_face = if selected { face } else { faces::SHADOW };
+                    line.push(
+                        fit(&candidate.annotation, width - used - gap),
+                        annotation_face,
+                    );
+                }
+                line
+            })
+            .collect()
     }
 }

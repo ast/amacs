@@ -9,7 +9,15 @@ use amacs_proto::{InputEvent, Key};
 use amacs_tty::Tty;
 use anyhow::{Context, Result, bail};
 
-use crate::{AUTO_SAVE_IDLE, AUTO_SAVE_INTERVAL, Options, start_session};
+use crate::{
+    AUTO_SAVE_IDLE, AUTO_SAVE_INTERVAL, Options, save_everything, start_session, wait_time,
+};
+
+enum Event {
+    Input(std::io::Result<InputEvent>),
+    /// A worker thread of the editor has results.
+    Wake,
+}
 
 pub fn run(options: &Options) -> Result<ExitCode> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
@@ -24,6 +32,12 @@ pub fn run(options: &Options) -> Result<ExitCode> {
     // that the main thread is busy running.
     let (sender, events) = mpsc::channel();
     let interrupt = session.interrupt_handle();
+    {
+        let sender = sender.clone();
+        session.editor_mut().set_waker(std::sync::Arc::new(move || {
+            let _ = sender.send(Event::Wake);
+        }));
+    }
     std::thread::spawn(move || {
         loop {
             let event = amacs_tty::read_event();
@@ -31,36 +45,45 @@ pub fn run(options: &Options) -> Result<ExitCode> {
                 interrupt.interrupt();
             }
             let failed = event.is_err();
-            if sender.send(event).is_err() || failed {
+            if sender.send(Event::Input(event)).is_err() || failed {
                 break;
             }
         }
     });
 
     let mut last_auto_save = Instant::now();
+    let mut last_input = Instant::now();
     while !session.should_exit() {
         tty.apply(&session.redisplay())?;
-        let mut next = match events.recv_timeout(AUTO_SAVE_IDLE) {
+        let mut next = match events.recv_timeout(wait_time(&session)) {
             Ok(event) => Some(event),
             Err(RecvTimeoutError::Timeout) => {
-                session.editor_mut().auto_save(false);
-                last_auto_save = Instant::now();
-                continue;
+                if last_input.elapsed() >= AUTO_SAVE_IDLE {
+                    save_everything(&mut session, false);
+                    last_auto_save = Instant::now();
+                }
+                Some(Event::Wake)
             }
             Err(RecvTimeoutError::Disconnected) => bail!("the input thread stopped"),
         };
         // Handle everything that has already arrived before drawing again.
         while let Some(event) = next {
-            let event = match event.context("cannot read from the terminal")? {
-                // Terminals report a resize once per step of a drag. Trust
-                // the current size rather than replaying each one.
-                InputEvent::Resize { .. } => {
-                    let (cols, rows) = tty.size()?;
-                    InputEvent::Resize { cols, rows }
+            match event {
+                Event::Wake => session.poll(),
+                Event::Input(event) => {
+                    last_input = Instant::now();
+                    let event = match event.context("cannot read from the terminal")? {
+                        // Terminals report a resize once per step of a drag.
+                        // Trust the current size rather than replaying each.
+                        InputEvent::Resize { .. } => {
+                            let (cols, rows) = tty.size()?;
+                            InputEvent::Resize { cols, rows }
+                        }
+                        other => other,
+                    };
+                    session.handle_event(event);
                 }
-                other => other,
-            };
-            session.handle_event(event);
+            }
             next = if session.should_exit() {
                 None
             } else {
@@ -68,9 +91,10 @@ pub fn run(options: &Options) -> Result<ExitCode> {
             };
         }
         if last_auto_save.elapsed() >= AUTO_SAVE_INTERVAL {
-            session.editor_mut().auto_save(false);
+            save_everything(&mut session, false);
             last_auto_save = Instant::now();
         }
     }
+    session.editor_mut().save_state();
     Ok(ExitCode::SUCCESS)
 }

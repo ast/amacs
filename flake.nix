@@ -22,6 +22,8 @@
           # The Wayland client reads keymaps with libxkbcommon.
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ pkgs.libxkbcommon ];
+          # Searching a project's files runs ripgrep, and so do its tests.
+          nativeCheckInputs = [ pkgs.ripgrep ];
           # The renderer's tests draw text and need a known font.
           AMACS_TEST_FONTS = "${pkgs.jetbrains-mono}/share/fonts";
           # The check phase runs the whole test suite. Some tests expand `~`.
@@ -75,6 +77,7 @@
             rust-analyzer
             cargo-deny
             cargo-insta
+            ripgrep
           ];
         };
       });

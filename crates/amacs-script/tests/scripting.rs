@@ -27,6 +27,16 @@ impl Harness {
     }
 
     fn redisplay(&mut self) {
+        // Wait for the matcher's worker threads, so that what a test sees
+        // does not depend on timing.
+        let start = Instant::now();
+        loop {
+            self.session.poll();
+            if !self.session.editor().is_matching() || start.elapsed() > Duration::from_secs(5) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
         let ops = self.session.redisplay();
         self.screen.apply(&ops);
     }
@@ -461,4 +471,29 @@ fn the_example_init_file_loads_and_its_commands_work() {
     // the next tab stop is column 28. With the default of 8 it would be 32.
     h.paste_tab();
     assert_eq!(h.screen.row(0).find('x'), Some(28));
+}
+
+#[test]
+fn scheme_commands_can_offer_candidates() {
+    let mut h = Harness::new();
+    h.eval(
+        r#"(define-command (pick-colour)
+             "Choose a colour and insert it."
+             (insert (completing-read "Colour: "
+                                      (list "red" (list "green" "like grass") "blue")
+                                      'colour)))
+           (global-set-key "C-c p" 'pick-colour)"#,
+    );
+    h.keys("C-c p");
+    // The frame has eight rows, so five are left for candidates.
+    assert_eq!(h.screen.row(2), "1/3 Colour:");
+    assert_eq!(h.screen.row(4), "green  like grass");
+    h.type_text("gr").keys("RET");
+    assert_eq!(h.text(), "green");
+    h.keys("C-c p").type_text("purple").keys("RET");
+    assert_eq!(
+        h.text(),
+        "greenpurple",
+        "text that matches nothing is returned as typed"
+    );
 }

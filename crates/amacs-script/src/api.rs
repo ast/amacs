@@ -8,7 +8,8 @@
 //! the last is the buffer's length.
 
 use amacs_core::{
-    Buffer, BufferId, CmdError, CmdResult, CommandBody, Completion, Editor, Value, expand_path,
+    Buffer, BufferId, Candidate, CmdError, CmdResult, CommandBody, Completion, Editor, Value,
+    expand_path,
 };
 use amacs_proto::parse_keys;
 
@@ -335,6 +336,31 @@ pub const API: &[ApiFn] = api! {
         |ed, args| {
             let completion = completion(args, 2)?;
             let id = ed.read_string_promise(string(args, 0)?, string(args, 1)?, completion)?;
+            Ok(Value::Int(id as i64))
+        };
+    "%completing-read" (3, Some(3)) "Start choosing among candidates: prompt, candidates, category. A candidate is a string or a list of a string and its annotation. Returns a promise." =>
+        |ed, args| {
+            let Value::List(items) = &args[1] else {
+                return Err(wrong_type(1, "a list", &args[1]));
+            };
+            let candidates = items
+                .iter()
+                .map(|item| match item {
+                    Value::Str(text) => Ok(Candidate::new(text)),
+                    Value::List(parts) => match parts.as_slice() {
+                        [Value::Str(text), Value::Str(annotation)] => {
+                            Ok(Candidate::annotated(text, annotation))
+                        }
+                        _ => Err(CmdError::msg("a candidate list must be (text annotation)")),
+                    },
+                    other => Err(wrong_type(1, "a list of strings or (text annotation) lists", other)),
+                })
+                .collect::<CmdResult<Vec<_>>>()?;
+            let completion = Completion::Items {
+                candidates,
+                category: name(args, 2)?.to_owned(),
+            };
+            let id = ed.read_string_promise(string(args, 0)?, "", completion)?;
             Ok(Value::Int(id as i64))
         };
     "%y-or-n" (1, Some(1)) "Start asking a yes-or-no question. Returns a promise." =>

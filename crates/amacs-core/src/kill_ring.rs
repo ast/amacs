@@ -50,6 +50,11 @@ impl KillRing {
         }
     }
 
+    /// All entries, newest first.
+    pub fn entries(&self) -> impl Iterator<Item = &str> {
+        self.entries.iter().map(String::as_str)
+    }
+
     /// The newest entry, without affecting what `yank-pop` does next.
     pub fn head(&self) -> Option<&str> {
         self.entries.front().map(String::as_str)

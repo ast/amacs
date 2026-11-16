@@ -89,8 +89,8 @@ fn messages_and_prompts_belong_to_one_frame() {
     assert_eq!(t.screens[0].row(5), "C-x-");
     assert_eq!(t.screens[1].row(4), "");
 
-    t.keys(0, "C-g M-x").type_text(0, "forw");
-    assert_eq!(t.screens[0].row(5), "M-x forw");
+    t.keys(0, "C-g M-g g").type_text(0, "12");
+    assert_eq!(t.screens[0].row(5), "Goto line: 12");
     assert_eq!(
         t.screens[1].row(4),
         "",

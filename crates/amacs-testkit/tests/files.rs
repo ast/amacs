@@ -92,7 +92,9 @@ fn a_missing_file_becomes_a_new_file_on_save() {
 fn directories_and_unreadable_paths_are_reported() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = harness();
-    visit(&mut h, dir.path());
+    // RET would enter the directory, so the path is submitted as typed.
+    h.keys("C-x C-f C-a C-k");
+    h.type_text(dir.path().to_str().unwrap()).keys("M-RET");
     assert!(h.echo().ends_with("is a directory"), "{}", h.echo());
     assert_eq!(h.screen.row(6), " --  *scratch*   L1 C0  (Fundamental)");
 
@@ -116,8 +118,8 @@ fn write_file_renames_the_buffer_and_asks_before_overwriting() {
     let mut h = harness();
     h.type_text("new text").keys("C-x C-s");
     assert_eq!(
-        h.echo(),
-        format!("Write file: {}/", Harness::DEFAULT_DIRECTORY)
+        h.prompt(),
+        format!("*/0 Write file: {}/", Harness::DEFAULT_DIRECTORY)
     );
     h.keys("C-a C-k")
         .type_text(existing.to_str().unwrap())
@@ -216,31 +218,112 @@ fn invalid_utf8_opens_read_only() {
 }
 
 #[test]
-fn tab_completes_file_names() {
+fn file_names_are_chosen_one_directory_at_a_time() {
     let dir = tempfile::tempdir().unwrap();
-    fs::write(dir.path().join("report-final.txt"), "").unwrap();
-    fs::write(dir.path().join("report-draft.txt"), "").unwrap();
+    fs::write(dir.path().join("report-final.txt"), "final").unwrap();
+    fs::write(dir.path().join("report-draft.txt"), "draft").unwrap();
     fs::create_dir(dir.path().join("archive")).unwrap();
+    fs::write(dir.path().join("archive/old.txt"), "old").unwrap();
     let base = dir.path().to_str().unwrap();
 
-    let mut h = Harness::new(200, 8);
-    h.keys("C-x C-f C-a C-k")
-        .type_text(&format!("{base}/rep"))
-        .keys("TAB");
+    let mut h = Harness::new(200, 16);
+    h.keys("C-x C-f C-a C-k").type_text(&format!("{base}/"));
+    assert_eq!(h.prompt(), format!("1/3 Find file: {base}/"));
     assert_eq!(
-        h.echo(),
-        format!("Find file: {base}/report- [report-draft.txt, report-final.txt]")
+        h.candidates(),
+        ["archive/", "report-draft.txt", "report-final.txt"],
+        "directories come first"
     );
-    h.type_text("f").keys("TAB");
-    assert_eq!(h.echo(), format!("Find file: {base}/report-final.txt"));
-    h.keys("C-a C-k")
-        .type_text(&format!("{base}/ar"))
-        .keys("TAB");
-    assert_eq!(h.echo(), format!("Find file: {base}/archive/"));
-    h.type_text("zzz").keys("TAB");
+
+    // Words narrow the entries of the directory, not the whole path.
+    h.type_text("txt fin");
+    assert_eq!(h.candidates(), ["report-final.txt"]);
+    h.keys("TAB");
     assert_eq!(
-        h.echo(),
-        format!("Find file: {base}/archive/zzz [No match]")
+        h.prompt(),
+        format!("1/1 Find file: {base}/report-final.txt")
+    );
+
+    // RET on a directory goes into it. DEL after a slash goes back up.
+    h.keys("C-a C-k")
+        .type_text(&format!("{base}/arch"))
+        .keys("RET");
+    assert_eq!(h.prompt(), format!("1/1 Find file: {base}/archive/"));
+    assert_eq!(h.candidates(), ["old.txt"]);
+    h.keys("DEL");
+    assert_eq!(h.prompt(), format!("1/3 Find file: {base}/"));
+    h.type_text("x").keys("DEL");
+    assert_eq!(
+        h.prompt(),
+        format!("1/3 Find file: {base}/"),
+        "elsewhere DEL deletes one character"
+    );
+
+    h.type_text("arch").keys("RET RET");
+    assert_eq!(h.buffer_text(), "old");
+    assert_eq!(h.screen.row(14), " --  old.txt   L1 C0  (Fundamental)");
+}
+
+#[test]
+fn a_new_file_name_can_be_given_even_when_it_matches_an_existing_one() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("notes-old.txt"), "old").unwrap();
+    let base = dir.path().to_str().unwrap();
+
+    let mut h = Harness::new(200, 16);
+    h.keys("C-x C-f C-a C-k")
+        .type_text(&format!("{base}/notes"));
+    assert_eq!(h.candidates(), ["notes-old.txt"]);
+    // RET would visit notes-old.txt. M-RET takes the name as typed.
+    h.keys("M-RET");
+    assert_eq!(h.echo(), "(New file)");
+    assert_eq!(h.screen.row(14), " --  notes   L1 C0  (Fundamental)");
+}
+
+#[test]
+fn recent_files_are_offered_and_survive_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    let (first, second) = (dir.path().join("first.txt"), dir.path().join("second.txt"));
+    fs::write(&first, "1").unwrap();
+    fs::write(&second, "2").unwrap();
+
+    let mut h = Harness::new(200, 16);
+    h.editor.set_state_directory(Some(state.clone()));
+    h.keys("C-x C-r");
+    assert_eq!(h.echo(), "No files have been visited yet");
+    h.editor.find_file(&first).unwrap();
+    h.editor.find_file(&second).unwrap();
+    h.keys("M-x").type_text("goto-line").keys("RET C-g");
+    h.editor.save_state();
+
+    // A new editor with the same state directory.
+    let mut h = Harness::new(200, 16);
+    h.editor.set_state_directory(Some(state));
+    h.keys("C-x C-r");
+    assert_eq!(h.prompt(), "1/2 Recent file:");
+    assert!(
+        h.candidates()[0].ends_with("second.txt"),
+        "most recent first: {:?}",
+        h.candidates()
+    );
+    h.type_text("first").keys("RET");
+    assert_eq!(h.buffer_text(), "1");
+
+    // The closed file is offered when switching buffers, too.
+    h.keys("C-x b").type_text("second");
+    assert!(
+        h.candidates()[0].ends_with("recent file"),
+        "{:?}",
+        h.candidates()
+    );
+    h.keys("RET");
+    assert_eq!(h.buffer_text(), "2");
+
+    h.keys("M-x");
+    assert!(
+        h.candidates()[0].starts_with("goto-line "),
+        "command history is kept too"
     );
 }
 
@@ -331,5 +414,67 @@ fn large_file_round_trip() {
     assert!(
         edited.as_millis() < 200,
         "editing a large file must not scan it: {edited:?}"
+    );
+}
+
+#[test]
+fn project_files_are_searched_as_the_query_is_typed() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::create_dir(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("src/a.rs"),
+        "fn alpha() {}\nfn needle_one() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("src/b.rs"),
+        "// nothing\n\n\nlet needle_two = 1;\n",
+    )
+    .unwrap();
+
+    let mut h = Harness::new(120, 16);
+    // The search covers the project, found from the current file's directory.
+    h.editor.find_file(&dir.path().join("src/a.rs")).unwrap();
+    h.keys("C-c /").type_text("needle_");
+    assert!(h.prompt().ends_with(": needle_"), "{}", h.prompt());
+    assert!(
+        h.candidates().is_empty(),
+        "the search waits for a pause in typing"
+    );
+
+    // After the pause ripgrep runs; its results arrive from another thread.
+    h.wait(std::time::Duration::from_millis(300));
+    let start = std::time::Instant::now();
+    while h.candidates().len() < 2 {
+        assert!(
+            start.elapsed().as_secs() < 10,
+            "no results: {:?}",
+            h.candidates()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.wait(std::time::Duration::ZERO);
+    }
+    let mut found = h.candidates();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            "src/a.rs:2: fn needle_one() {}",
+            "src/b.rs:4: let needle_two = 1;"
+        ]
+    );
+    assert!(h.prompt().starts_with("1/2 "), "{}", h.prompt());
+
+    let second = h.candidates()[1].clone();
+    h.keys("C-n RET");
+    let (file, line) = if second.starts_with("src/a.rs") {
+        ("a.rs", 2)
+    } else {
+        ("b.rs", 4)
+    };
+    assert_eq!(
+        h.screen.row(14),
+        format!(" --  {file}   L{line} C0  (Fundamental)")
     );
 }

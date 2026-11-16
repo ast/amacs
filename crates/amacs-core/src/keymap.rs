@@ -67,6 +67,28 @@ impl Keymap {
         }
     }
 
+    /// What can follow a prefix: each next key with the command it runs, or
+    /// `+prefix` if it leads further.
+    pub fn entries(&self, prefix: &[Key]) -> Vec<(Key, String)> {
+        let mut map = self;
+        for key in prefix {
+            match map.bindings.get(key) {
+                Some(Binding::Prefix(next)) => map = next,
+                _ => return Vec::new(),
+            }
+        }
+        map.bindings
+            .iter()
+            .map(|(key, binding)| {
+                let shown = match binding {
+                    Binding::Command(name) => name.clone(),
+                    Binding::Prefix(_) => "+prefix".to_owned(),
+                };
+                (*key, shown)
+            })
+            .collect()
+    }
+
     /// Binds a sequence written in Emacs notation, such as `"C-x C-f"`.
     ///
     /// # Panics

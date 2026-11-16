@@ -103,8 +103,15 @@
 (global-set-key "H-v" 'beginning-of-buffer)
 (global-set-key "H-o" 'find-file)
 
+;; These are bound by default the way the Emacs configuration binds them:
+;;   C-s      search-lines        (consult-line)
+;;   C-c /    search-files        (consult-ripgrep)
+;;   C-x b    switch-to-buffer    (consult-buffer)
+;;   C-x C-r  recent-file         (consult-recent-file)
+;;   M-y      yank-pop            (consult-yank-pop)
+;;   C-.      act-on-candidate    (embark-act, in the minibuffer)
+
 ;;; Not available yet. These wait for later milestones:
-;;;   consult-style buffer switching, line search and ripgrep (completion UI)
 ;;;   sexp motion, bookmarks, ibuffer, window resizing and windmove
 ;;;   scrolling without moving point (H-p, H-n)
 ;;;   LSP, tree-sitter modes, formatters, snippets, git, the file manager

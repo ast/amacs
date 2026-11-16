@@ -92,6 +92,15 @@ fn write_auto_save(path: &Path, text: &Text) -> io::Result<()> {
     write_atomically(path, text)
 }
 
+/// The top directory of the project that `dir` is in: the nearest one that
+/// holds a `.projectile` file or a `.git` entry, or `dir` itself.
+pub fn project_root(dir: &Path) -> PathBuf {
+    dir.ancestors()
+        .find(|ancestor| ancestor.join(".projectile").exists() || ancestor.join(".git").exists())
+        .unwrap_or(dir)
+        .to_owned()
+}
+
 pub fn modified_time(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }
@@ -106,7 +115,20 @@ impl Editor {
     /// Sets the directory for data that outlives the process, such as
     /// auto-save files. Without one, nothing is auto-saved.
     pub fn set_state_directory(&mut self, dir: Option<PathBuf>) {
+        if let Some(dir) = &dir {
+            self.history = crate::history::History::load(dir);
+        }
         self.state_directory = dir;
+    }
+
+    /// Writes input history and the list of recent files to the state
+    /// directory, if they have changed.
+    pub fn save_state(&mut self) {
+        if let Some(dir) = self.state_directory.clone()
+            && let Err(error) = self.history.save(&dir)
+        {
+            self.message(format!("Cannot save history: {error}"));
+        }
     }
 
     fn auto_save_path(&self, file: &Path) -> Option<PathBuf> {
@@ -233,6 +255,7 @@ impl Editor {
         };
         let mut buffer = Buffer::with_text(name, text);
         buffer.disk_mtime = modified_time(&path);
+        self.history.visit(&path);
         buffer.file = Some(path);
         buffer.read_only = lossy;
         let id = self.add_buffer(buffer);

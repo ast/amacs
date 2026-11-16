@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use amacs_proto::{InputEvent, Key, KeyCode, Mods, NamedKey};
 use amacs_text::{MarkerId, Text};
@@ -8,8 +10,10 @@ use slotmap::SlotMap;
 
 use crate::buffer::{Buffer, BufferId};
 use crate::commands;
+use crate::completion::Waker;
 use crate::error::{CmdError, CmdResult};
 use crate::frame::{Frame, FrameId};
+use crate::history::History;
 use crate::keymap::{Keymap, Lookup, lookup_in};
 use crate::kill_ring::KillRing;
 use crate::minibuffer::MinibufferState;
@@ -94,6 +98,8 @@ pub enum EditorEvent {
 }
 
 const SCRATCH: &str = "*scratch*";
+/// How long a prefix key waits before the keys that can follow are shown.
+const KEY_HINT_DELAY: Duration = Duration::from_millis(600);
 
 /// All editor state. It is driven by [`Editor::handle_event`] and observed
 /// through [`Editor::redisplay`].
@@ -138,6 +144,11 @@ pub struct Editor {
     /// Directory for auto-save files and other persistent state.
     pub(crate) state_directory: Option<PathBuf>,
     pub(crate) kill_ring: KillRing,
+    pub(crate) history: History,
+    /// Wakes the host's event loop from worker threads.
+    pub(crate) waker: Waker,
+    /// When to show the keys that can follow the pending prefix.
+    key_hint_due: Option<Instant>,
     clipboard: Option<Box<dyn Clipboard>>,
     /// The kill ring head when it and the clipboard last agreed.
     clipboard_synced: Option<String>,
@@ -181,6 +192,9 @@ impl Editor {
             default_directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
             state_directory: None,
             kill_ring: KillRing::default(),
+            history: History::default(),
+            waker: Arc::new(|| {}),
+            key_hint_due: None,
             clipboard: None,
             clipboard_synced: None,
             keep_goal: false,
@@ -304,6 +318,7 @@ impl Editor {
         }
         self.kill_ring.end_command();
         self.export_kill();
+        self.sync_minibuffer(Instant::now());
         // A command run from within another, as with M-x, has already been
         // recorded as the last command.
         if let Some(name) = self.this_command.take() {
@@ -338,9 +353,11 @@ impl Editor {
     }
 
     pub fn handle_key(&mut self, key: Key) {
-        self.relayout();
         self.frame_mut().echo = None;
+        self.frame_mut().hint.clear();
+        self.key_hint_due = None;
         self.minibuffer_hint = None;
+        self.relayout();
 
         if let Some(question) = self.key_prompt.take() {
             self.prompt_frame = None;
@@ -406,7 +423,10 @@ impl Editor {
                     self.show_pending();
                 }
             }
-            Some(None) => self.show_pending(),
+            Some(None) => {
+                self.show_pending();
+                self.key_hint_due = Some(Instant::now() + KEY_HINT_DELAY);
+            }
             None if self.pending_keys.len() == 1 && key.self_insert_char().is_some() => {
                 self.pending_keys.clear();
                 self.last_key = Some(key);
@@ -495,6 +515,64 @@ impl Editor {
         self.cancel_key_prompt();
         // Quitting is how the minibuffer reports being abandoned.
         let _ = crate::minibuffer::abort_minibuffer(self);
+    }
+
+    /// Sets how worker threads wake the host's event loop when they have
+    /// results, so that it calls [`Editor::poll`] and redraws.
+    pub fn set_waker(&mut self, waker: Waker) {
+        self.waker = waker;
+    }
+
+    /// Does the work that is due at `now` and takes in results from worker
+    /// threads. The host calls this when woken and when a deadline passes.
+    pub fn poll(&mut self, now: Instant) {
+        self.sync_minibuffer(now);
+        if self.key_hint_due.is_some_and(|due| due <= now) {
+            self.key_hint_due = None;
+            self.show_key_hint();
+        }
+    }
+
+    /// When [`Editor::poll`] next has something to do, if it does.
+    pub fn next_deadline(&self) -> Option<Instant> {
+        [self.key_hint_due, self.minibuffer_deadline()]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// Shows the keys that can follow the pending prefix, which-key style.
+    fn show_key_hint(&mut self) {
+        if self.pending_keys.is_empty() {
+            return;
+        }
+        let mut entries: Vec<(Key, String)> = Vec::new();
+        for name in self.active_keymaps() {
+            let Some(map) = self.keymaps.get(name) else {
+                continue;
+            };
+            for (key, binding) in map.entries(&self.pending_keys) {
+                // An earlier keymap's binding hides a later one's.
+                if !entries.iter().any(|(seen, _)| *seen == key) {
+                    entries.push((key, binding));
+                }
+            }
+        }
+        entries.sort_by_key(|(key, _)| key.to_string());
+        let cells: Vec<String> = entries
+            .iter()
+            .map(|(key, binding)| format!("{key} → {binding}"))
+            .collect();
+
+        // Fill columns of equal width, row by row.
+        let width = usize::from(self.frame().size.0).max(1);
+        let cell = cells.iter().map(|c| c.chars().count()).max().unwrap_or(0) + 2;
+        let per_row = (width / cell.max(1)).max(1);
+        let lines = cells
+            .chunks(per_row)
+            .map(|row| row.iter().map(|c| format!("{c:cell$}")).collect::<String>())
+            .collect();
+        self.frame_mut().hint = lines;
     }
 
     /// Marks the editor as a server whose frames belong to clients.
@@ -859,11 +937,12 @@ impl Editor {
     /// Recomputes every window's area from the layout tree and frame size.
     pub(crate) fn relayout(&mut self) {
         let (cols, rows) = self.frame().size;
+        let echo_rows = self.echo_rows().min(rows);
         let area = Rect {
             x: 0,
             y: 0,
             w: cols,
-            h: rows.saturating_sub(1),
+            h: rows - echo_rows,
         };
         let mut placed = Vec::new();
         self.frame().layout.arrange(area, false, &mut placed);
@@ -875,9 +954,9 @@ impl Editor {
         let minibuffer_window = self.minibuffer_window();
         self.windows[minibuffer_window].rect = Rect {
             x: 0,
-            y: rows.saturating_sub(1),
+            y: rows - echo_rows,
             w: cols,
-            h: rows.min(1),
+            h: echo_rows,
         };
     }
 }

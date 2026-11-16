@@ -48,6 +48,19 @@ impl Session {
         self.pump();
     }
 
+    /// Does the editor's work that is due now and takes in results from its
+    /// worker threads. The host calls this when woken and when the time
+    /// from [`Session::next_deadline`] has come.
+    pub fn poll(&mut self) {
+        self.editor.borrow_mut().poll(std::time::Instant::now());
+        self.pump();
+    }
+
+    /// When [`Session::poll`] next has something to do, if it does.
+    pub fn next_deadline(&self) -> Option<std::time::Instant> {
+        self.editor.borrow().next_deadline()
+    }
+
     pub fn redisplay(&mut self) -> Vec<DrawOp> {
         self.editor.borrow_mut().redisplay()
     }
