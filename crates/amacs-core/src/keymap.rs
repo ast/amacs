@@ -51,6 +51,22 @@ impl Keymap {
         }
     }
 
+    /// Removes the binding of a key sequence, if it has one. Prefix maps left
+    /// empty are removed too.
+    pub fn unbind(&mut self, keys: &[Key]) {
+        let Some((first, rest)) = keys.split_first() else {
+            return;
+        };
+        if rest.is_empty() {
+            self.bindings.remove(first);
+        } else if let Some(Binding::Prefix(map)) = self.bindings.get_mut(first) {
+            map.unbind(rest);
+            if map.bindings.is_empty() {
+                self.bindings.remove(first);
+            }
+        }
+    }
+
     /// Binds a sequence written in Emacs notation, such as `"C-x C-f"`.
     ///
     /// # Panics
@@ -105,6 +121,18 @@ mod tests {
         assert_eq!(map.lookup(&keys("C-x 4")), Lookup::Prefix);
         assert_eq!(map.lookup(&keys("C-x C-z")), Lookup::Unbound);
         assert_eq!(map.lookup(&keys("C-x C-f a")), Lookup::Unbound);
+    }
+
+    #[test]
+    fn unbinding_removes_empty_prefixes() {
+        let mut map = Keymap::new();
+        map.bind_str("C-c a b", "one");
+        map.bind_str("C-c x", "two");
+        map.unbind(&keys("C-c a b"));
+        assert_eq!(map.lookup(&keys("C-c a")), Lookup::Unbound);
+        assert_eq!(map.lookup(&keys("C-c")), Lookup::Prefix);
+        map.unbind(&keys("C-c x"));
+        assert_eq!(map.lookup(&keys("C-c")), Lookup::Unbound);
     }
 
     #[test]

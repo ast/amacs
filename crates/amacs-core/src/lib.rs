@@ -15,11 +15,14 @@ mod keymap;
 mod kill_ring;
 mod minibuffer;
 mod redisplay;
+mod script;
 mod window;
 
 pub use buffer::{Buffer, BufferId};
-pub use editor::{Command, Editor, Prefix};
+pub use editor::{Command, CommandBody, Editor, GLOBAL_MAP, MINIBUFFER_MAP, Prefix};
 pub use error::{CmdError, CmdResult};
+pub use files::expand_path;
 pub use keymap::{Keymap, Lookup};
 pub use minibuffer::Completion;
+pub use script::{FUNDAMENTAL_MODE, ScriptCall, ScriptFn, ScriptOutcome, ScriptTarget, Value};
 pub use window::{Rect, SplitDir, Window, WindowId};

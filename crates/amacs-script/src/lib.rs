@@ -1,5 +1,13 @@
-//! Scheme host abstraction for amacs.
+//! Scheme scripting for amacs.
 //!
-//! The editor core never names the Scheme engine directly. This crate will hold
-//! the `Value` / `ScriptHost` layer and the Steel adapter (milestone M2). For
-//! now it only carries the feasibility spike in `examples/spike.rs`.
+//! [`api`] lists the editor primitives in an engine-independent form.
+//! [`Session`] pairs an editor with the Steel engine and runs the Scheme
+//! runtime from the `runtime` directory on top of those primitives.
+
+pub mod api;
+mod runtime;
+mod session;
+mod steel;
+
+pub use session::Session;
+pub use steel::{EvalError, EvalResult, InterruptHandle};

@@ -42,6 +42,16 @@ fn restore_terminal(enhanced_keys: bool) {
     let _ = terminal::disable_raw_mode();
 }
 
+/// Blocks until the user does something the editor should know about. This
+/// may be called from a thread other than the one that draws.
+pub fn read_event() -> io::Result<InputEvent> {
+    loop {
+        if let Some(event) = input::translate(crossterm::event::read()?) {
+            return Ok(event);
+        }
+    }
+}
+
 /// The terminal in raw mode on the alternate screen. Dropping it restores
 /// the terminal.
 pub struct Tty {
@@ -95,15 +105,6 @@ impl Tty {
     /// Size of the terminal in cells, as (columns, rows).
     pub fn size(&self) -> io::Result<(u16, u16)> {
         terminal::size()
-    }
-
-    /// Blocks until the user does something the editor should know about.
-    pub fn read_event(&mut self) -> io::Result<InputEvent> {
-        loop {
-            if let Some(event) = input::translate(crossterm::event::read()?) {
-                return Ok(event);
-            }
-        }
     }
 
     /// Draws a batch of operations. Nothing reaches the terminal until the

@@ -24,22 +24,22 @@ fn visit_edit_and_save() {
     let mut h = harness();
     visit(&mut h, &path);
     assert_eq!(h.screen.row(0), "first");
-    assert_eq!(h.screen.row(6), " --  note.txt   L1 C0");
+    assert_eq!(h.screen.row(6), " --  note.txt   L1 C0  (Fundamental)");
 
     h.keys("C-x C-s");
     assert_eq!(h.echo(), "(No changes need to be saved)");
 
     h.keys("M->").type_text("third");
-    assert_eq!(h.screen.row(6), " **  note.txt   L3 C5");
+    assert_eq!(h.screen.row(6), " **  note.txt   L3 C5  (Fundamental)");
     h.keys("C-x C-s");
     assert!(h.echo().starts_with("Wrote "), "{}", h.echo());
     assert_eq!(fs::read_to_string(&path).unwrap(), "first\nsecond\nthird");
-    assert_eq!(h.screen.row(6), " --  note.txt   L3 C5");
+    assert_eq!(h.screen.row(6), " --  note.txt   L3 C5  (Fundamental)");
 
     h.keys("C-/");
     assert_eq!(
         h.screen.row(6),
-        " **  note.txt   L3 C0",
+        " **  note.txt   L3 C0  (Fundamental)",
         "undoing past the save point modifies the buffer"
     );
     let leftovers: Vec<_> = fs::read_dir(dir.path()).unwrap().collect();
@@ -58,7 +58,7 @@ fn visiting_a_file_twice_reuses_its_buffer() {
     h.keys("C-x b RET");
     visit(&mut h, &path);
     assert_eq!(h.buffer_text(), "Xcontent");
-    assert_eq!(h.screen.row(6), " **  a.txt   L1 C1");
+    assert_eq!(h.screen.row(6), " **  a.txt   L1 C1  (Fundamental)");
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn files_with_the_same_name_get_distinct_buffer_names() {
     let mut h = harness();
     visit(&mut h, &dir.path().join("x.txt"));
     visit(&mut h, &dir.path().join("sub/x.txt"));
-    assert_eq!(h.screen.row(6), " --  x.txt<2>   L1 C0");
+    assert_eq!(h.screen.row(6), " --  x.txt<2>   L1 C0  (Fundamental)");
     assert_eq!(h.buffer_text(), "two");
 }
 
@@ -94,7 +94,7 @@ fn directories_and_unreadable_paths_are_reported() {
     let mut h = harness();
     visit(&mut h, dir.path());
     assert!(h.echo().ends_with("is a directory"), "{}", h.echo());
-    assert_eq!(h.screen.row(6), " --  *scratch*   L1 C0");
+    assert_eq!(h.screen.row(6), " --  *scratch*   L1 C0  (Fundamental)");
 
     h.type_text("x").keys("C-x C-w C-a C-k");
     h.type_text(dir.path().join("missing/dir/file").to_str().unwrap())
@@ -102,7 +102,7 @@ fn directories_and_unreadable_paths_are_reported() {
     assert!(h.echo().starts_with("Cannot write "), "{}", h.echo());
     assert_eq!(
         h.screen.row(6),
-        " **  *scratch*   L1 C1",
+        " **  *scratch*   L1 C1  (Fundamental)",
         "a failed save leaves the buffer modified"
     );
 }
@@ -137,7 +137,7 @@ fn write_file_renames_the_buffer_and_asks_before_overwriting() {
         .keys("RET")
         .type_text("y");
     assert_eq!(fs::read_to_string(&existing).unwrap(), "new text");
-    assert_eq!(h.screen.row(6), " --  existing.txt   L1 C8");
+    assert_eq!(h.screen.row(6), " --  existing.txt   L1 C8  (Fundamental)");
 }
 
 #[test]
@@ -209,7 +209,7 @@ fn invalid_utf8_opens_read_only() {
     let mut h = harness();
     visit(&mut h, &path);
     assert_eq!(h.screen.row(0), "caf\u{fffd}");
-    assert_eq!(h.screen.row(6), " %%  latin1.txt   L1 C0");
+    assert_eq!(h.screen.row(6), " %%  latin1.txt   L1 C0  (Fundamental)");
     h.type_text("x");
     assert_eq!(h.echo(), "Buffer is read-only: latin1.txt");
     assert_eq!(fs::read(&path).unwrap(), b"caf\xe9\n");
@@ -276,9 +276,9 @@ fn killing_a_modified_file_buffer_asks_first() {
     h.type_text("x").keys("C-x k RET");
     assert_eq!(h.echo(), "Buffer work.txt modified; kill anyway? (y or n)");
     h.type_text("n");
-    assert_eq!(h.screen.row(6), " **  work.txt   L1 C1");
+    assert_eq!(h.screen.row(6), " **  work.txt   L1 C1  (Fundamental)");
     h.keys("C-x k RET").type_text("y");
-    assert_eq!(h.screen.row(6), " --  *scratch*   L1 C0");
+    assert_eq!(h.screen.row(6), " --  *scratch*   L1 C0  (Fundamental)");
 }
 
 /// A 100 MB file must open, edit at both ends, undo and save without delay.
@@ -311,11 +311,17 @@ fn large_file_round_trip() {
     h.type_text("bottom");
     h.keys("M-< C-v C-v M-> M-v C-l M->");
     let edited = start.elapsed();
-    assert_eq!(h.screen.row(6), format!(" **  big.txt   L{} C6", lines + 1));
+    assert_eq!(
+        h.screen.row(6),
+        format!(" **  big.txt   L{} C6  (Fundamental)", lines + 1)
+    );
 
     let start = Instant::now();
     h.keys("C-/");
-    assert_eq!(h.screen.row(6), format!(" **  big.txt   L{} C0", lines + 1));
+    assert_eq!(
+        h.screen.row(6),
+        format!(" **  big.txt   L{} C0  (Fundamental)", lines + 1)
+    );
     h.keys("C-? C-x C-s");
     let saved = start.elapsed();
 

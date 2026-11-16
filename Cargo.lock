@@ -45,7 +45,11 @@ dependencies = [
 name = "amacs-script"
 version = "0.1.0"
 dependencies = [
+ "amacs-core",
+ "amacs-proto",
+ "amacs-testkit",
  "steel-core",
+ "tempfile",
 ]
 
 [[package]]
@@ -54,6 +58,7 @@ version = "0.1.0"
 dependencies = [
  "amacs-core",
  "amacs-proto",
+ "amacs-script",
  "amacs-tty",
  "anyhow",
 ]

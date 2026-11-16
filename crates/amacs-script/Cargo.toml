@@ -1,13 +1,19 @@
 [package]
 name = "amacs-script"
-description = "Scheme host abstraction for amacs and its Steel backend"
+description = "Scheme host for amacs: the primitives exposed to Scheme and the Steel backend"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+amacs-core.workspace = true
+amacs-proto.workspace = true
 steel-core.workspace = true
+
+[dev-dependencies]
+amacs-testkit.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

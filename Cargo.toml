@@ -13,6 +13,7 @@ amacs-text = { path = "crates/amacs-text" }
 amacs-proto = { path = "crates/amacs-proto" }
 amacs-core = { path = "crates/amacs-core" }
 amacs-tty = { path = "crates/amacs-tty" }
+amacs-script = { path = "crates/amacs-script" }
 amacs-testkit = { path = "crates/amacs-testkit" }
 
 anyhow = "1"

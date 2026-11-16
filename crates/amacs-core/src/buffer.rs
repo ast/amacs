@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -6,6 +7,7 @@ use amacs_text::{Edit, MarkerId, MarkerSet, Text, Transaction, UndoTree};
 use slotmap::new_key_type;
 
 use crate::error::{CmdError, CmdResult};
+use crate::script::{FUNDAMENTAL_MODE, Value};
 
 new_key_type! {
     pub struct BufferId;
@@ -24,7 +26,13 @@ pub struct Buffer {
     /// notice changes made by other programs.
     pub disk_mtime: Option<SystemTime>,
     pub read_only: bool,
+    /// Copied from the `tab-width` option whenever options change.
     pub tab_width: usize,
+    pub major_mode: String,
+    /// Buffer-local minor modes, in the order they were enabled.
+    pub minor_modes: Vec<String>,
+    /// Buffer-local option values.
+    pub locals: HashMap<String, Value>,
     text: Text,
     markers: MarkerSet,
     undo: UndoTree,
@@ -56,6 +64,9 @@ impl Buffer {
             disk_mtime: None,
             read_only: false,
             tab_width: 8,
+            major_mode: FUNDAMENTAL_MODE.to_owned(),
+            minor_modes: Vec::new(),
+            locals: HashMap::new(),
             saved_point: markers.create(0, false),
             saved_start: markers.create(0, false),
             mark: markers.create(0, false),
@@ -188,6 +199,16 @@ impl Buffer {
         self.mark_set = false;
         self.mark_active = false;
         self.tick += 1;
+    }
+
+    /// Appends a line of text regardless of the read-only flag and without
+    /// recording undo, for buffers that the editor itself writes to.
+    pub fn append_log(&mut self, text: &str) {
+        let end = self.len();
+        self.raw_insert(end, text);
+        if !text.ends_with('\n') {
+            self.raw_insert(self.len(), "\n");
+        }
     }
 
     fn raw_insert(&mut self, pos: usize, s: &str) {

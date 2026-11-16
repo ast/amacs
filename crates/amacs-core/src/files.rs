@@ -134,6 +134,7 @@ impl Editor {
         } else if is_new {
             self.message("(New file)");
         }
+        self.run_hook("find-file-hook", Vec::new());
         Ok(())
     }
 
@@ -174,6 +175,7 @@ impl Editor {
         buffer.file = Some(path);
         buffer.mark_saved();
         self.message(format!("Wrote {shown}"));
+        self.run_hook("after-save-hook", Vec::new());
         Ok(())
     }
 }

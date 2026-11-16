@@ -298,7 +298,8 @@ impl Editor {
         };
         let line = buffer.text().line_of(point) + 1;
         let col = column_of(buffer.text(), point, buffer.tab_width);
-        let text = format!(" {flags}  {}   L{line} C{col}", buffer.name);
+        let modes = self.mode_line_modes(window.buffer);
+        let text = format!(" {flags}  {}   L{line} C{col}  ({modes})", buffer.name);
         let face = if id == self.selected {
             faces::MODE_LINE
         } else {

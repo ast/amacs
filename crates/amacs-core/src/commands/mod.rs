@@ -5,13 +5,13 @@ mod files;
 mod motion;
 mod windows;
 
-use crate::editor::{Command, Editor, Prefix};
+use crate::editor::{CommandBody, Editor, GLOBAL_MAP, MINIBUFFER_MAP, Prefix};
 use crate::error::{CmdError, CmdResult};
 use crate::minibuffer::{self, Completion};
 
 macro_rules! commands {
     ($editor:expr; $( $name:literal => $run:path, $doc:literal; )*) => {
-        $( $editor.define_command(Command { name: $name, doc: $doc, run: $run }); )*
+        $( $editor.define_command($name, $doc, CommandBody::Native($run)); )*
     };
 }
 
@@ -38,6 +38,8 @@ pub fn install(ed: &mut Editor) {
         "universal-argument" => universal_argument, "Begin a numeric argument for the following command.";
         "digit-argument" => digit_argument, "Part of the numeric argument for the next command.";
         "execute-extended-command" => execute_extended_command, "Read a command name and run it.";
+        "eval-expression" => eval_expression, "Read a Scheme expression, evaluate it and show the result.";
+        "eval-buffer" => eval_buffer, "Evaluate the current buffer as Scheme code.";
 
         "forward-char" => motion::forward_char, "Move point right one character.";
         "backward-char" => motion::backward_char, "Move point left one character.";
@@ -101,6 +103,7 @@ pub fn install(ed: &mut Editor) {
         ("C-g", "keyboard-quit"),
         ("C-u", "universal-argument"),
         ("M-x", "execute-extended-command"),
+        ("M-:", "eval-expression"),
         ("C-f", "forward-char"),
         ("<right>", "forward-char"),
         ("C-b", "backward-char"),
@@ -144,12 +147,12 @@ pub fn install(ed: &mut Editor) {
         ("C-x 1", "delete-other-windows"),
         ("C-x o", "other-window"),
     ];
+    let global = ed.keymap_mut(GLOBAL_MAP);
     for (keys, command) in GLOBAL {
-        ed.global_map.bind_str(keys, command);
+        global.bind_str(keys, command);
     }
     for digit in 0..=9 {
-        ed.global_map
-            .bind_str(&format!("M-{digit}"), "digit-argument");
+        global.bind_str(&format!("M-{digit}"), "digit-argument");
     }
 
     const MINIBUFFER: &[(&str, &str)] = &[
@@ -160,8 +163,9 @@ pub fn install(ed: &mut Editor) {
         ("TAB", "minibuffer-complete"),
         ("C-i", "minibuffer-complete"),
     ];
+    let minibuffer = ed.keymap_mut(MINIBUFFER_MAP);
     for (keys, command) in MINIBUFFER {
-        ed.minibuffer_map.bind_str(keys, command);
+        minibuffer.bind_str(keys, command);
     }
 }
 
@@ -194,6 +198,20 @@ fn digit_argument(ed: &mut Editor) -> CmdResult {
         None => Prefix::Number(digit),
     });
     Ok(())
+}
+
+fn eval_expression(ed: &mut Editor) -> CmdResult {
+    if !ed.has_script_host() {
+        return Err(CmdError::msg("Scheme is not available in this session"));
+    }
+    ed.read_string("Eval: ", "", Completion::None, |ed, source| {
+        ed.queue_eval(source, true)
+    })
+}
+
+fn eval_buffer(ed: &mut Editor) -> CmdResult {
+    let source = ed.text().to_string();
+    ed.queue_eval(source, false)
 }
 
 fn execute_extended_command(ed: &mut Editor) -> CmdResult {

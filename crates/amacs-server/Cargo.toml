@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 amacs-core.workspace = true
 amacs-proto.workspace = true
+amacs-script.workspace = true
 amacs-tty.workspace = true
 anyhow.workspace = true
 

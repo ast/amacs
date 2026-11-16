@@ -3,7 +3,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use amacs_proto::{InputEvent, Key, KeyCode, Mods, NamedKey};
-use amacs_text::Text;
+use amacs_text::{MarkerId, Text};
 use slotmap::SlotMap;
 
 use crate::buffer::{Buffer, BufferId};
@@ -13,15 +13,27 @@ use crate::keymap::{Keymap, Lookup, lookup_in};
 use crate::kill_ring::KillRing;
 use crate::minibuffer::MinibufferState;
 use crate::redisplay::RedisplayState;
+use crate::script::{ScriptCall, ScriptFn, ScriptState, ScriptTarget, Value};
 use crate::window::{Layout, Rect, Window, WindowId};
 
-/// An interactive command, run by key binding or by name with `M-x`.
-#[derive(Clone, Copy)]
-pub struct Command {
-    pub name: &'static str,
-    pub doc: &'static str,
-    pub run: fn(&mut Editor) -> CmdResult,
+/// What running a command does.
+#[derive(Clone)]
+pub enum CommandBody {
+    Native(fn(&mut Editor) -> CmdResult),
+    /// A Scheme procedure of no arguments, run by the script host.
+    Script(ScriptFn),
 }
+
+/// An interactive command, run by key binding or by name with `M-x`.
+#[derive(Clone)]
+pub struct Command {
+    pub name: String,
+    pub doc: String,
+    pub body: CommandBody,
+}
+
+pub const GLOBAL_MAP: &str = "global";
+pub const MINIBUFFER_MAP: &str = "minibuffer";
 
 /// The prefix argument given with `C-u` or `M-<digit>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,9 +86,11 @@ pub struct Editor {
     pub(crate) key_prompt: Option<(String, KeyPrompt)>,
     pub(crate) size: (u16, u16),
 
-    commands: HashMap<&'static str, Command>,
-    pub global_map: Keymap,
-    pub minibuffer_map: Keymap,
+    commands: HashMap<String, Command>,
+    /// Keymaps by name: [`GLOBAL_MAP`], [`MINIBUFFER_MAP`], and one per mode,
+    /// named after the mode.
+    keymaps: HashMap<String, Keymap>,
+    pub(crate) script: ScriptState,
     pending_keys: Vec<Key>,
     esc_pending: bool,
     /// Prefix argument for the next command.
@@ -120,8 +134,8 @@ impl Editor {
             key_prompt: None,
             size: (cols, rows),
             commands: HashMap::new(),
-            global_map: Keymap::new(),
-            minibuffer_map: Keymap::new(),
+            keymaps: HashMap::new(),
+            script: ScriptState::new(),
             pending_keys: Vec::new(),
             esc_pending: false,
             prefix_arg: None,
@@ -144,12 +158,32 @@ impl Editor {
 
     // Commands
 
-    pub fn define_command(&mut self, command: Command) {
-        self.commands.insert(command.name, command);
+    /// Defines or redefines a command. Keys bound to its name run the new
+    /// definition.
+    pub fn define_command(&mut self, name: &str, doc: &str, body: CommandBody) {
+        let command = Command {
+            name: name.to_owned(),
+            doc: doc.to_owned(),
+            body,
+        };
+        self.commands.insert(command.name.clone(), command);
     }
 
-    pub fn command_names(&self) -> impl Iterator<Item = &'static str> {
-        self.commands.keys().copied()
+    pub fn command(&self, name: &str) -> Option<&Command> {
+        self.commands.get(name)
+    }
+
+    pub fn command_names(&self) -> impl Iterator<Item = &str> {
+        self.commands.keys().map(String::as_str)
+    }
+
+    /// The keymap with the given name, created empty if it does not exist.
+    pub fn keymap_mut(&mut self, name: &str) -> &mut Keymap {
+        self.keymaps.entry(name.to_owned()).or_default()
+    }
+
+    pub fn keymap(&self, name: &str) -> Option<&Keymap> {
+        self.keymaps.get(name)
     }
 
     /// The numeric prefix argument of the running command, 1 if none was given.
@@ -169,13 +203,27 @@ impl Editor {
     /// Runs a command by name, with the bookkeeping that surrounds every
     /// command: prefix argument, undo boundaries, mark deactivation.
     pub fn execute(&mut self, name: &str) {
-        let Some(run) = self.commands.get(name).map(|c| c.run) else {
+        let Some(body) = self.commands.get(name).map(|c| c.body.clone()) else {
             self.message(format!("Unknown command: {name}"));
             return;
         };
         self.current_prefix = self.prefix_arg.take();
         self.this_command = Some(name.to_owned());
         self.keep_goal = false;
+        let run = match body {
+            CommandBody::Native(run) => run,
+            CommandBody::Script(func) => {
+                // The host runs the body and then finishes the command.
+                let queued = self.queue_script(ScriptCall {
+                    target: ScriptTarget::Func(func),
+                    args: Vec::new(),
+                    command: Some(name.to_owned()),
+                    echo_result: false,
+                });
+                self.report(queued);
+                return;
+            }
+        };
         let buffer = self.window().buffer;
         let tick = self.buffers[buffer].tick();
         let point = self.point();
@@ -183,21 +231,28 @@ impl Editor {
 
         let result = run(self);
 
-        self.finish_command(buffer, tick);
+        self.finish_command(buffer, tick, true);
         self.report(result);
     }
 
-    fn finish_command(&mut self, buffer: BufferId, tick: u64) {
+    /// The bookkeeping after a command or script call. `is_command` is false
+    /// for script callbacks, which must not count as the user's last command.
+    pub(crate) fn finish_command(&mut self, buffer: BufferId, tick: u64, is_command: bool) {
         const SELF_INSERT: &str = "self-insert-command";
         let amalgamate = self.this_command.as_deref() == Some(SELF_INSERT)
             && self.last_command.as_deref() == Some(SELF_INSERT);
         let current = self.window().buffer;
-        let point = self.point();
+        // Point in each buffer, as its undo record should remember it: that
+        // of the selected window, else of any window showing the buffer.
+        let mut points: HashMap<BufferId, MarkerId> = HashMap::new();
+        for window in self.windows.values() {
+            points.entry(window.buffer).or_insert(window.point);
+        }
+        points.insert(current, self.window().point);
         for (id, buf) in &mut self.buffers {
-            let point = if id == current {
-                point
-            } else {
-                buf.saved_point()
+            let point = match points.get(&id) {
+                Some(marker) => buf.marker(*marker),
+                None => buf.saved_point(),
             };
             buf.end_command(point, amalgamate && id == current);
         }
@@ -216,6 +271,9 @@ impl Editor {
             self.last_command = Some(name);
         }
         self.current_prefix = None;
+        if is_command {
+            self.run_hook("post-command-hook", Vec::new());
+        }
     }
 
     fn report(&mut self, result: CmdResult) {
@@ -288,11 +346,11 @@ impl Editor {
 
         self.pending_keys.push(key);
         let lookup = {
-            let mut maps = Vec::with_capacity(2);
-            if self.in_minibuffer() {
-                maps.push(&self.minibuffer_map);
-            }
-            maps.push(&self.global_map);
+            let maps: Vec<&Keymap> = self
+                .active_keymaps()
+                .into_iter()
+                .filter_map(|name| self.keymaps.get(name))
+                .collect();
             match lookup_in(&maps, &self.pending_keys) {
                 Lookup::Command(name) => Some(Some(name.to_owned())),
                 Lookup::Prefix => Some(None),
@@ -339,7 +397,7 @@ impl Editor {
         let point = self.point();
         self.buffer_mut().begin_command(point);
         let result = body(self);
-        self.finish_command(buffer, tick);
+        self.finish_command(buffer, tick, true);
         self.report(result);
     }
 
@@ -400,6 +458,33 @@ impl Editor {
     /// visit a file. It defaults to the working directory of the process.
     pub fn set_default_directory(&mut self, dir: impl Into<PathBuf>) {
         self.default_directory = dir.into();
+    }
+
+    /// Asks a yes-or-no question for Scheme code: returns a promise that
+    /// resolves to a boolean, or is rejected if the user quits.
+    pub fn ask_yes_no_promise(&mut self, prompt: impl Into<String>) -> u64 {
+        let id = self.new_promise();
+        self.ask_bool(prompt.into(), id);
+        id
+    }
+
+    fn ask_bool(&mut self, prompt: String, id: u64) {
+        self.ask_key(format!("{prompt} (y or n) "), move |ed, key| {
+            match key.code {
+                KeyCode::Char('y' | 'Y') if key.mods.is_empty() => {
+                    ed.resolve_promise(id, Value::Bool(true));
+                }
+                KeyCode::Char('n' | 'N') if key.mods.is_empty() => {
+                    ed.resolve_promise(id, Value::Bool(false));
+                }
+                KeyCode::Char('g') if key.mods == Mods::CTRL => {
+                    ed.reject_promise(id);
+                    return Err(CmdError::Quit);
+                }
+                _ => ed.ask_bool(prompt, id),
+            }
+            Ok(())
+        });
     }
 
     // Messages and exit
@@ -489,6 +574,30 @@ impl Editor {
         Ok(mark.min(point)..mark.max(point))
     }
 
+    /// Puts text on the kill ring as a new entry.
+    pub fn kill_new(&mut self, text: String) {
+        self.kill_ring.push(text);
+    }
+
+    /// The newest kill ring entry.
+    pub fn current_kill(&mut self) -> Option<String> {
+        self.kill_ring.current().map(str::to_owned)
+    }
+
+    /// The command that a key sequence runs in the current buffer, if it is
+    /// bound to one.
+    pub fn key_binding(&self, keys: &[Key]) -> Option<String> {
+        let maps: Vec<&Keymap> = self
+            .active_keymaps()
+            .into_iter()
+            .filter_map(|name| self.keymaps.get(name))
+            .collect();
+        match lookup_in(&maps, keys) {
+            Lookup::Command(name) => Some(name.to_owned()),
+            Lookup::Prefix | Lookup::Unbound => None,
+        }
+    }
+
     // Buffers
 
     pub fn buffer_ids(&self) -> impl Iterator<Item = BufferId> + '_ {
@@ -514,6 +623,7 @@ impl Editor {
         }
         let id = self.buffers.insert(buffer);
         self.buffer_order.push(id);
+        self.apply_options();
         id
     }
 

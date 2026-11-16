@@ -13,7 +13,7 @@ fn typed_text_appears_with_cursor_after_it() {
     assert_eq!(h.screen.row(0), "hello");
     assert_eq!(h.screen.row(1), "wörld");
     assert_eq!(h.screen.cursor(), Some((1, 5)));
-    assert_eq!(h.screen.row(6), " **  *scratch*   L2 C5");
+    assert_eq!(h.screen.row(6), " **  *scratch*   L2 C5  (Fundamental)");
     insta::assert_snapshot!(h.screen.text());
 }
 
@@ -29,7 +29,7 @@ fn a_typed_word_is_undone_as_a_unit_and_redone() {
     assert_eq!(h.buffer_text(), "");
     assert_eq!(
         h.screen.row(6),
-        " --  *scratch*   L1 C0",
+        " --  *scratch*   L1 C0  (Fundamental)",
         "undoing everything clears the modified flag"
     );
     h.keys("C-/");
@@ -288,10 +288,15 @@ fn windows_split_share_a_buffer_and_close() {
 
     h.keys("C-x 0");
     // The left window's point stays before the "!" typed at it in the right one.
-    let mode_line = " **  *scratch*   L1 C7";
+    let mode_line = " **  *scratch*   L1 C7  (Fundamental)";
+    // Each mode line is cut at its window's width: 31 and 30 columns.
     assert_eq!(
         h.screen.row(8),
-        format!("{:31}{mode_line}", " **  *scratch*   L1 C6")
+        format!(
+            "{}{}",
+            &" **  *scratch*   L1 C6  (Fundamental)"[..31],
+            &mode_line[..30]
+        )
     );
     assert_eq!(h.screen.row(7), format!("{:30}│", ""));
     h.keys("C-x 1");
@@ -349,7 +354,7 @@ fn buffers_switch_and_are_created_on_demand() {
     let mut h = harness();
     h.type_text("scratch text");
     h.keys("C-x b").type_text("notes").keys("RET");
-    assert_eq!(h.screen.row(6), " --  notes   L1 C0");
+    assert_eq!(h.screen.row(6), " --  notes   L1 C0  (Fundamental)");
     h.type_text("note");
     h.keys("C-x b");
     assert_eq!(h.echo(), "Switch to buffer (default *scratch*):");
@@ -366,7 +371,7 @@ fn buffers_switch_and_are_created_on_demand() {
     h.keys("C-x k RET");
     assert_eq!(
         h.screen.row(6),
-        " --  *scratch*   L1 C0",
+        " --  *scratch*   L1 C0  (Fundamental)",
         "killing the last buffer leaves a fresh scratch"
     );
 }

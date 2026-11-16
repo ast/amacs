@@ -11,6 +11,7 @@ use amacs_text::Text;
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
 use crate::files::{abbreviate_path, expand_path};
+use crate::script::Value;
 use crate::window::WindowId;
 
 /// What TAB completes in the minibuffer.
@@ -32,6 +33,8 @@ pub(crate) struct MinibufferState {
     previous: WindowId,
     /// Directory that relative file names in the input are resolved against.
     directory: PathBuf,
+    /// Promise to reject if the user quits, when Scheme code is waiting.
+    promise: Option<u64>,
 }
 
 impl Editor {
@@ -55,6 +58,7 @@ impl Editor {
             on_accept: Box::new(on_accept),
             previous: self.selected,
             directory: self.working_directory().to_owned(),
+            promise: None,
         });
         let window = self.minibuffer_window;
         let buffer = self.windows[window].buffer;
@@ -62,6 +66,25 @@ impl Editor {
         self.selected = window;
         self.set_point(usize::MAX);
         Ok(())
+    }
+
+    /// Like [`Editor::read_string`] for Scheme code: returns a promise that
+    /// resolves to the input, or is rejected if the user quits.
+    pub fn read_string_promise(
+        &mut self,
+        prompt: impl Into<String>,
+        initial: &str,
+        completion: Completion,
+    ) -> CmdResult<u64> {
+        let id = self.new_promise();
+        self.read_string(prompt, initial, completion, move |ed, input| {
+            ed.resolve_promise(id, Value::Str(input));
+            Ok(())
+        })?;
+        if let Some(state) = &mut self.minibuffer {
+            state.promise = Some(id);
+        }
+        Ok(id)
     }
 
     fn leave_minibuffer(&mut self) -> Option<MinibufferState> {
@@ -85,7 +108,11 @@ pub fn exit_minibuffer(ed: &mut Editor) -> CmdResult {
 }
 
 pub fn abort_minibuffer(ed: &mut Editor) -> CmdResult {
-    ed.leave_minibuffer();
+    if let Some(state) = ed.leave_minibuffer()
+        && let Some(id) = state.promise
+    {
+        ed.reject_promise(id);
+    }
     Err(CmdError::Quit)
 }
 

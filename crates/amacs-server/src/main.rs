@@ -4,25 +4,50 @@
 //! from. It becomes the daemon when the client/server split lands.
 
 use std::io::IsTerminal;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::mpsc;
 
-use amacs_core::Editor;
-use amacs_proto::InputEvent;
+use amacs_core::Value;
+use amacs_proto::{InputEvent, Key};
+use amacs_script::Session;
 use amacs_tty::Tty;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
-const USAGE: &str = "Usage: amacs [FILE]...
+const USAGE: &str = "Usage: amacs [OPTION]... [FILE]...
 
 Edit FILEs in the terminal. The last one given is shown first.
 
 Options:
-  -h, --help     Show this help
-  -V, --version  Show the version";
+  -q, --no-init     Do not load the init file
+      --init FILE   Load FILE instead of $XDG_CONFIG_HOME/amacs/init.scm
+  -l, --load FILE   Load a Scheme file after the init file
+      --eval EXPR   Evaluate a Scheme expression after the init file
+      --batch       Run --load and --eval without a terminal, print the
+                    values of --eval, and exit
+      --test        With --batch: run the tests defined by the loaded files
+                    and exit with status 1 if any fails
+  -h, --help        Show this help
+  -V, --version     Show the version";
+
+enum Action {
+    Load(PathBuf),
+    Eval(String),
+}
+
+#[derive(Default)]
+struct Options {
+    files: Vec<PathBuf>,
+    actions: Vec<Action>,
+    init: Option<PathBuf>,
+    no_init: bool,
+    batch: bool,
+    test: bool,
+}
 
 fn main() -> ExitCode {
     match run() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             eprintln!("amacs: {error:#}");
             ExitCode::FAILURE
@@ -30,53 +55,198 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<()> {
-    let mut files = Vec::new();
+/// Parses the command line. Returns `None` if it asked for help or the
+/// version, which has then been printed.
+fn parse_args() -> Result<Option<Options>> {
+    let mut options = Options::default();
+    let mut args = std::env::args_os().skip(1);
     let mut options_done = false;
-    for arg in std::env::args_os().skip(1) {
-        match arg.to_str() {
-            Some("-h" | "--help") if !options_done => {
+    while let Some(arg) = args.next() {
+        let Some(flag) = arg
+            .to_str()
+            .filter(|s| !options_done && s.starts_with('-') && *s != "-")
+        else {
+            options.files.push(arg.into());
+            continue;
+        };
+        let mut value = |what: &str| {
+            args.next()
+                .ok_or_else(|| anyhow!("{flag} needs {what}\n{USAGE}"))
+        };
+        match flag {
+            "-h" | "--help" => {
                 println!("{USAGE}");
-                return Ok(());
+                return Ok(None);
             }
-            Some("-V" | "--version") if !options_done => {
+            "-V" | "--version" => {
                 println!("amacs {}", env!("CARGO_PKG_VERSION"));
-                return Ok(());
+                return Ok(None);
             }
-            Some("--") if !options_done => options_done = true,
-            Some(option) if !options_done && option.starts_with('-') && option != "-" => {
-                bail!("unknown option `{option}`\n{USAGE}");
+            "--" => options_done = true,
+            "-q" | "--no-init" => options.no_init = true,
+            "--batch" => options.batch = true,
+            "--test" => options.test = true,
+            "--init" => options.init = Some(value("a file name")?.into()),
+            "-l" | "--load" => options
+                .actions
+                .push(Action::Load(value("a file name")?.into())),
+            "--eval" => {
+                let expr = value("an expression")?;
+                let expr = expr
+                    .into_string()
+                    .map_err(|_| anyhow!("--eval needs valid UTF-8"))?;
+                options.actions.push(Action::Eval(expr));
             }
-            _ => files.push(arg),
+            _ => bail!("unknown option `{flag}`\n{USAGE}"),
         }
     }
+    if options.test && !options.batch {
+        bail!("--test needs --batch");
+    }
+    Ok(Some(options))
+}
+
+/// The init file to load: the one given, else the default one if it exists.
+fn init_file(options: &Options) -> Option<PathBuf> {
+    if options.no_init {
+        return None;
+    }
+    if let Some(path) = &options.init {
+        return Some(path.clone());
+    }
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| Some(PathBuf::from(std::env::var_os("HOME")?).join(".config")))?;
+    let path = config.join("amacs/init.scm");
+    path.exists().then_some(path)
+}
+
+fn run() -> Result<ExitCode> {
+    let Some(options) = parse_args()? else {
+        return Ok(ExitCode::SUCCESS);
+    };
+    if options.batch {
+        return run_batch(&options);
+    }
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        bail!("standard input and output must be a terminal");
+        bail!("standard input and output must be a terminal (or use --batch)");
     }
 
     let mut tty = Tty::new().context("cannot set up the terminal")?;
     let (cols, rows) = tty.size().context("cannot read the terminal size")?;
-    let mut editor = Editor::new(cols, rows);
-    for file in &files {
+    let mut session = Session::new(cols, rows)
+        .map_err(|error| anyhow!("the Scheme runtime failed to load:\n{}", error.report))?;
+
+    // Problems in the user's files are shown in the echo area and logged to
+    // *Messages*; they must not keep the editor from starting.
+    if let Some(init) = init_file(&options) {
+        let _ = session.load_file(&init);
+    }
+    for action in &options.actions {
+        let _ = match action {
+            Action::Load(path) => session.load_file(path),
+            Action::Eval(expr) => session.eval(expr).map(drop),
+        };
+    }
+    for file in &options.files {
         let path = std::path::absolute(Path::new(file)).context("cannot resolve file name")?;
-        if let Err(error) = editor.find_file(&path) {
-            editor.message(error.to_string());
+        let result = session.editor_mut().find_file(&path);
+        if let Err(error) = result {
+            session.editor_mut().message(error.to_string());
         }
     }
+    // Run the hooks queued by opening the files.
+    session.handle_event(InputEvent::Resize { cols, rows });
 
-    while !editor.should_exit() {
-        tty.apply(&editor.redisplay())?;
-        let event = tty.read_event()?;
-        // Terminals report a resize once per step of a drag. Trust the
-        // current size rather than replaying each one.
-        let event = match event {
-            InputEvent::Resize { .. } => {
-                let (cols, rows) = tty.size()?;
-                InputEvent::Resize { cols, rows }
+    // Input is read on its own thread so that C-g can interrupt Scheme code
+    // that the main thread is busy running.
+    let (sender, events) = mpsc::channel();
+    let interrupt = session.interrupt_handle();
+    std::thread::spawn(move || {
+        loop {
+            let event = amacs_tty::read_event();
+            if matches!(&event, Ok(InputEvent::Key(key)) if *key == Key::ctrl('g')) {
+                interrupt.interrupt();
             }
-            other => other,
-        };
-        editor.handle_event(event);
+            let failed = event.is_err();
+            if sender.send(event).is_err() || failed {
+                break;
+            }
+        }
+    });
+
+    while !session.should_exit() {
+        tty.apply(&session.redisplay())?;
+        let mut next = Some(events.recv().context("the input thread stopped")?);
+        // Handle everything that has already arrived before drawing again.
+        while let Some(event) = next {
+            let event = match event.context("cannot read from the terminal")? {
+                // Terminals report a resize once per step of a drag. Trust
+                // the current size rather than replaying each one.
+                InputEvent::Resize { .. } => {
+                    let (cols, rows) = tty.size()?;
+                    InputEvent::Resize { cols, rows }
+                }
+                other => other,
+            };
+            session.handle_event(event);
+            next = if session.should_exit() {
+                None
+            } else {
+                events.try_recv().ok()
+            };
+        }
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Runs without a terminal: loads files, evaluates expressions and prints
+/// their values, and optionally runs the Scheme tests.
+fn run_batch(options: &Options) -> Result<ExitCode> {
+    let mut session = Session::new(80, 24)
+        .map_err(|error| anyhow!("the Scheme runtime failed to load:\n{}", error.report))?;
+    let script_error = |error: amacs_script::EvalError| anyhow!("{}", error.report.trim_end());
+
+    if let Some(init) = init_file(options) {
+        session.load_file(&init).map_err(script_error)?;
+    }
+    for action in &options.actions {
+        match action {
+            Action::Load(path) => session.load_file(path).map_err(script_error)?,
+            Action::Eval(expr) => println!("{}", session.eval(expr).map_err(script_error)?),
+        }
+    }
+    if !options.test {
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // `run-tests` returns the number of passed tests followed by a
+    // (name message) list for each failure.
+    let results = session.eval_value("(run-tests)").map_err(script_error)?;
+    let Value::List(results) = results else {
+        bail!("run-tests returned an unexpected value: {results:?}");
+    };
+    let Some((Value::Int(passed), failures)) = results.split_first() else {
+        bail!("run-tests returned an unexpected value: {results:?}");
+    };
+    for failure in failures {
+        match failure {
+            Value::List(parts) if parts.len() == 2 => {
+                let text = |value: &Value| {
+                    value
+                        .as_name()
+                        .map_or_else(|| format!("{value:?}"), str::to_owned)
+                };
+                println!("FAIL {}: {}", text(&parts[0]), text(&parts[1]));
+            }
+            other => println!("FAIL {other:?}"),
+        }
+    }
+    println!("{passed} passed, {} failed", failures.len());
+    Ok(if failures.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
