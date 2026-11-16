@@ -376,3 +376,56 @@ fn buffers_switch_and_are_created_on_demand() {
         "killing the last buffer leaves a fresh scratch"
     );
 }
+
+/// A clipboard shared with the test, standing in for the system's.
+#[derive(Clone, Default)]
+struct FakeClipboard(std::rc::Rc<std::cell::RefCell<Option<String>>>);
+
+impl amacs_core::Clipboard for FakeClipboard {
+    fn set(&mut self, text: &str) {
+        *self.0.borrow_mut() = Some(text.to_owned());
+    }
+
+    fn get(&mut self) -> Option<String> {
+        self.0.borrow().clone()
+    }
+}
+
+#[test]
+fn kills_go_to_the_clipboard_and_foreign_text_can_be_yanked() {
+    let clipboard = FakeClipboard::default();
+    let mut h = harness();
+    h.editor.set_clipboard(Box::new(clipboard.clone()));
+
+    h.type_text("one two").keys("M-DEL");
+    assert_eq!(clipboard.0.borrow().as_deref(), Some("two"));
+    h.keys("M-DEL");
+    assert_eq!(
+        clipboard.0.borrow().as_deref(),
+        Some("one two"),
+        "consecutive kills grow the entry"
+    );
+
+    h.keys("C-y C-y");
+    assert_eq!(
+        h.buffer_text(),
+        "one twoone two",
+        "yanking our own kill does not duplicate it"
+    );
+
+    // Another program copies something.
+    *clipboard.0.borrow_mut() = Some("from elsewhere".to_owned());
+    h.keys("SPC C-y");
+    assert_eq!(h.buffer_text(), "one twoone two from elsewhere");
+    h.keys("M-y");
+    assert_eq!(
+        h.buffer_text(),
+        "one twoone two one two",
+        "our kill is on the ring behind it"
+    );
+    assert_eq!(
+        clipboard.0.borrow().as_deref(),
+        Some("from elsewhere"),
+        "yanking does not copy"
+    );
+}

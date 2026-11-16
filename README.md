@@ -5,9 +5,9 @@ language. The goal is a daemon with thin terminal and Wayland frontends.
 
 ## Status
 
-Milestones M0 to M3 of the plan are done: the editor runs in a terminal, alone
-or as a server with any number of terminal clients, edits files, and is
-extended in Scheme.
+Milestones M0 to M4 of the plan are done: the editor runs in a terminal or a
+Wayland window, alone or as a server with any number of clients, edits files,
+and is extended in Scheme.
 
 Working now:
 
@@ -24,13 +24,15 @@ Working now:
 
 - A server (`amacs --daemon`) with `amacsclient` for frames, files and
   `--eval`; auto-save with recovery after a crash
+- A Wayland window (`amacs-gui`, or `amacsclient -c`) with shaped text,
+  ligatures, colour emoji, fractional scaling and the system clipboard
 
-Not yet: the Wayland frontend, syntax highlighting, LSP, and
+Not yet: syntax highlighting, LSP, and
 everything else in the later milestones.
 
 ## Building and running
 
-    nix develop          # or any Rust 1.95 toolchain
+    nix develop          # Rust, libxkbcommon and pkg-config
     cargo build --release
     target/release/amacs FILE...
 
@@ -43,6 +45,7 @@ quits, `M-x` runs a command by name, `M-:` evaluates a Scheme expression.
 and starts it if it is not running:
 
     amacsclient -t [FILE]...       # open a frame in this terminal
+    amacsclient -c [FILE]...       # open a frame in a new window
     amacsclient FILE               # visit FILE and wait until C-x # finishes it
     amacsclient -n FILE            # visit FILE and return at once
     amacsclient +12:4 FILE         # go to line 12, column 4
@@ -62,6 +65,35 @@ Modified buffers that visit files are auto-saved to
 seconds while busy, and when the server is asked to stop or crashes. Visiting
 a file that has auto-save data says so; `M-x recover-this-file` restores it.
 The visited file itself is only ever written by saving.
+
+## The Wayland window
+
+`amacsclient -c` (or `amacs-gui` directly) opens a window on the server. With
+`-n` it returns at once and the window stays; without, it lasts until the
+files are finished or the window is closed.
+
+The font comes from two options, for example in `init.scm`:
+
+```scheme
+(set-option! 'font-family "JetBrainsMono Nerd Font Mono")
+(set-option! 'font-size 16)   ; pixels, before the output's scale
+```
+
+`--font` and `--font-size` override them for one window. The default family,
+`monospace`, is whatever fontconfig says it is. The options are read when a
+window opens; changing them does not affect windows that are already open.
+
+The window draws on the CPU into shared memory, repainting only the rows that
+changed. Text is shaped per run, so programming ligatures form, and then
+placed on the cell grid. Colours are those of modus-operandi-tinted until
+themes arrive.
+
+The server reaches the system clipboard through `wl-copy` and `wl-paste`, for
+terminal frames too: a kill is copied, and `C-y` yanks what another program
+copied last. This needs `WAYLAND_DISPLAY` in the server's environment.
+
+Not there yet: the mouse, input methods and compose sequences, and a native
+clipboard without the helper programs.
 
 ## Scheme
 
@@ -121,7 +153,8 @@ End-to-end tests drive the editor through a headless frontend
 | `amacs-core` | Editor state, commands, keymaps, redisplay |
 | `amacs-tty` | Terminal frontend |
 | `amacs-server` | The `amacs` binary: standalone editor, server, batch mode |
-| `amacs-client` | The `amacsclient` binary |
+| `amacs-client` | The `amacsclient` binary and the connection code |
+| `amacs-gui` | The `amacs-gui` binary: the Wayland window and its renderer |
 | `amacs-script` | Editor primitives for Scheme and the Steel backend |
 | `amacs-testkit` | Headless frontend for tests |
 

@@ -50,6 +50,11 @@ impl KillRing {
         }
     }
 
+    /// The newest entry, without affecting what `yank-pop` does next.
+    pub fn head(&self) -> Option<&str> {
+        self.entries.front().map(String::as_str)
+    }
+
     /// The newest entry, for `yank`.
     pub fn current(&mut self) -> Option<&str> {
         self.yank_index = 0;

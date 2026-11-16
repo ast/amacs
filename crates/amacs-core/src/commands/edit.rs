@@ -106,6 +106,7 @@ pub fn kill_ring_save(ed: &mut Editor) -> CmdResult {
 }
 
 pub fn yank(ed: &mut Editor) -> CmdResult {
+    ed.import_clipboard();
     let Some(text) = ed.kill_ring.current().map(str::to_owned) else {
         return Err(CmdError::msg("Kill ring is empty"));
     };

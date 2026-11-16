@@ -165,6 +165,8 @@ pub(crate) struct ScriptState {
 
 pub const FUNDAMENTAL_MODE: &str = "fundamental-mode";
 const TAB_WIDTH: &str = "tab-width";
+const FONT_FAMILY: &str = "font-family";
+const FONT_SIZE: &str = "font-size";
 const MESSAGES: &str = "*Messages*";
 
 impl ScriptState {
@@ -182,6 +184,20 @@ impl ScriptState {
             OptionDef {
                 default: Value::Int(8),
                 doc: "Distance between tab stops, in columns.".to_owned(),
+            },
+        );
+        state.options.insert(
+            FONT_FAMILY.to_owned(),
+            OptionDef {
+                default: Value::str("monospace"),
+                doc: "Font family for graphical frames.".to_owned(),
+            },
+        );
+        state.options.insert(
+            FONT_SIZE.to_owned(),
+            OptionDef {
+                default: Value::Int(13),
+                doc: "Font size for graphical frames, in pixels.".to_owned(),
             },
         );
         state
@@ -338,6 +354,12 @@ impl Editor {
         if name == TAB_WIDTH && !matches!(value, Value::Int(1..=64)) {
             return Err(CmdError::msg("tab-width must be an integer from 1 to 64"));
         }
+        if name == FONT_SIZE && !matches!(value, Value::Int(4..=200)) {
+            return Err(CmdError::msg("font-size must be an integer from 4 to 200"));
+        }
+        if name == FONT_FAMILY && !matches!(value, Value::Str(_)) {
+            return Err(CmdError::msg("font-family must be a string"));
+        }
         Ok(())
     }
 
@@ -355,6 +377,19 @@ impl Editor {
         self.buffer_mut().locals.insert(name.to_owned(), value);
         self.apply_options();
         Ok(())
+    }
+
+    /// The configured font for graphical frames: family, and size in pixels.
+    pub fn frame_font(&self) -> (String, u16) {
+        let family = match self.script.option_values.get(FONT_FAMILY) {
+            Some(Value::Str(family)) => family.clone(),
+            _ => "monospace".to_owned(),
+        };
+        let size = match self.script.option_values.get(FONT_SIZE) {
+            Some(Value::Int(size)) => *size as u16,
+            _ => 13,
+        };
+        (family, size)
     }
 
     /// Copies the options that the core itself uses into the buffers.

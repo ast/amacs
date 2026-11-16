@@ -1,0 +1,26 @@
+[package]
+name = "amacs-gui"
+description = "Wayland frontend for amacs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+amacs-client.workspace = true
+amacs-proto.workspace = true
+anyhow.workspace = true
+cosmic-text.workspace = true
+smithay-client-toolkit.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+amacs-core.workspace = true
+png.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "amacs-gui"
+path = "src/main.rs"

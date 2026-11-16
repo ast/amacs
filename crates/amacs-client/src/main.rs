@@ -2,17 +2,13 @@
 //! Scheme, or open a frame in this terminal. Starts the server if needed.
 
 use std::ffi::OsString;
-use std::io::{BufReader, BufWriter, ErrorKind, IsTerminal};
-use std::os::unix::net::UnixStream;
+use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
-use std::time::{Duration, Instant};
 
-use amacs_proto::{
-    ClientMsg, FileSpec, FrameRequest, PROTOCOL_VERSION, ServerMsg, read_msg, socket_path,
-    write_msg,
-};
+use amacs_client::{Connection, parse_position, sibling_binary};
+use amacs_proto::{ClientMsg, FileSpec, FrameRequest, ServerMsg, read_msg, socket_path, write_msg};
 use amacs_tty::Tty;
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -23,6 +19,7 @@ The server is started if it is not running.
 
 Options:
   -t, --tty               Open a frame in this terminal
+  -c, --create-frame      Open a frame in a new window
   -n, --no-wait           Return at once instead of waiting for the files
   -e, --eval EXPR         Evaluate a Scheme expression and print its value
   -s, --socket-name PATH  Use this socket instead of the default
@@ -31,14 +28,12 @@ Options:
 
 Without -t, a frame is opened in this terminal only if no client has one.";
 
-/// How long to wait for a server that was just started.
-const START_TIMEOUT: Duration = Duration::from_secs(10);
-
 #[derive(Default)]
 struct Options {
     files: Vec<FileSpec>,
     evals: Vec<String>,
     tty: bool,
+    create_frame: bool,
     no_wait: bool,
     socket: Option<PathBuf>,
 }
@@ -50,14 +45,6 @@ fn main() -> ExitCode {
             eprintln!("amacsclient: {error:#}");
             ExitCode::FAILURE
         }
-    }
-}
-
-/// Parses `LINE` or `LINE:COLUMN`.
-fn parse_position(text: &str) -> Option<(u32, Option<u32>)> {
-    match text.split_once(':') {
-        Some((line, column)) => Some((line.parse().ok()?, Some(column.parse().ok()?))),
-        None => Some((text.parse().ok()?, None)),
     }
 }
 
@@ -101,6 +88,7 @@ fn parse_args() -> Result<Option<Options>> {
             }
             "--" => options_done = true,
             "-t" | "--tty" => options.tty = true,
+            "-c" | "--create-frame" => options.create_frame = true,
             "-n" | "--no-wait" => options.no_wait = true,
             "-s" | "--socket-name" => options.socket = Some(value("a path")?.into()),
             "-e" | "--eval" => {
@@ -112,94 +100,14 @@ fn parse_args() -> Result<Option<Options>> {
             _ => bail!("unknown option `{flag}`\n{USAGE}"),
         }
     }
-    if options.files.is_empty() && options.evals.is_empty() && !options.tty {
-        bail!("nothing to do: give a file, --eval or --tty\n{USAGE}");
+    if options.tty && options.create_frame {
+        bail!("--tty and --create-frame cannot be combined");
+    }
+    let wants_frame = options.tty || options.create_frame;
+    if options.files.is_empty() && options.evals.is_empty() && !wants_frame {
+        bail!("nothing to do: give a file, --eval, --tty or --create-frame\n{USAGE}");
     }
     Ok(Some(options))
-}
-
-/// The `amacs` binary to start: the one installed beside this program, or
-/// else whichever is on the path.
-fn server_binary() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.join("amacs")))
-        .filter(|path| path.exists())
-        .unwrap_or_else(|| PathBuf::from("amacs"))
-}
-
-/// Connects to the server, starting one first if none is listening.
-fn connect(socket: &Path) -> Result<UnixStream> {
-    let refused = |error: &std::io::Error| {
-        matches!(
-            error.kind(),
-            ErrorKind::NotFound | ErrorKind::ConnectionRefused
-        )
-    };
-    match UnixStream::connect(socket) {
-        Ok(stream) => return Ok(stream),
-        Err(error) if refused(&error) => {}
-        Err(error) => {
-            return Err(error).with_context(|| format!("cannot connect to {}", socket.display()));
-        }
-    }
-
-    let binary = server_binary();
-    Command::new(&binary)
-        .arg("--daemon")
-        .env("AMACS_SOCKET", socket)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        // Its own process group, so that C-c in this terminal does not
-        // reach the server.
-        .process_group(0)
-        .spawn()
-        .with_context(|| format!("cannot start the server ({})", binary.display()))?;
-
-    let started = Instant::now();
-    loop {
-        match UnixStream::connect(socket) {
-            Ok(stream) => return Ok(stream),
-            Err(error) if refused(&error) && started.elapsed() < START_TIMEOUT => {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("the server did not start listening on {}", socket.display())
-                });
-            }
-        }
-    }
-}
-
-struct Connection {
-    reader: BufReader<UnixStream>,
-    writer: BufWriter<UnixStream>,
-}
-
-impl Connection {
-    fn open(socket: &Path) -> Result<Self> {
-        let stream = connect(socket)?;
-        let mut connection = Self {
-            reader: BufReader::new(stream.try_clone()?),
-            writer: BufWriter::new(stream),
-        };
-        connection.send(&ClientMsg::Hello {
-            version: PROTOCOL_VERSION,
-        })?;
-        Ok(connection)
-    }
-
-    fn send(&mut self, message: &ClientMsg) -> Result<()> {
-        write_msg(&mut self.writer, message).context("cannot write to the server")
-    }
-
-    fn receive(&mut self) -> Result<ServerMsg> {
-        read_msg(&mut self.reader)
-            .context("cannot read from the server")?
-            .ok_or_else(|| anyhow!("lost the connection to the server"))
-    }
 }
 
 /// Prints what the server said on exit and turns its status into ours.
@@ -231,6 +139,9 @@ fn run() -> Result<ExitCode> {
             other => bail!("unexpected reply from the server: {other:?}"),
         }
     }
+    if options.create_frame {
+        return open_window(&options, &socket);
+    }
     if options.files.is_empty() && !options.tty {
         return Ok(ExitCode::SUCCESS);
     }
@@ -243,9 +154,9 @@ fn run() -> Result<ExitCode> {
             let (cols, rows) =
                 amacs_tty::terminal_size().context("cannot read the terminal size")?;
             if tty {
-                FrameRequest::Tty { cols, rows }
+                FrameRequest::New { cols, rows }
             } else {
-                FrameRequest::TtyIfNone { cols, rows }
+                FrameRequest::NewIfNone { cols, rows }
             }
         }
     };
@@ -256,7 +167,7 @@ fn run() -> Result<ExitCode> {
     })?;
 
     match connection.receive()? {
-        ServerMsg::Attached => run_frame(connection),
+        ServerMsg::Attached { .. } => run_frame(connection),
         ServerMsg::Opened => loop {
             // Nothing to show: wait to be told that the files are finished.
             if let ServerMsg::Exit { message, status } = connection.receive()? {
@@ -266,6 +177,39 @@ fn run() -> Result<ExitCode> {
         ServerMsg::Exit { message, status } => Ok(exit(message, status)),
         other => bail!("unexpected reply from the server: {other:?}"),
     }
+}
+
+/// Hands over to the graphical client, which opens a window for the files.
+/// With `--no-wait` it runs on its own and this program returns at once.
+fn open_window(options: &Options, socket: &Path) -> Result<ExitCode> {
+    let binary = sibling_binary("amacs-gui");
+    let mut command = Command::new(&binary);
+    command.arg("--socket-name").arg(socket);
+    if options.no_wait {
+        command.arg("--no-wait");
+    }
+    for file in &options.files {
+        if let Some(line) = file.line {
+            let column = file
+                .column
+                .map(|column| format!(":{column}"))
+                .unwrap_or_default();
+            command.arg(format!("+{line}{column}"));
+        }
+        command.arg(&file.path);
+    }
+    if options.no_wait {
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .with_context(|| format!("cannot start {}", binary.display()))?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    // Only returns if the program could not be started.
+    Err(command.exec()).with_context(|| format!("cannot start {}", binary.display()))
 }
 
 /// Shows the server's frame in this terminal until the server ends it.
@@ -300,19 +244,5 @@ fn run_frame(connection: Connection) -> Result<ExitCode> {
                 bail!("lost the connection to the server");
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_position;
-
-    #[test]
-    fn positions_are_a_line_and_an_optional_column() {
-        assert_eq!(parse_position("12"), Some((12, None)));
-        assert_eq!(parse_position("12:4"), Some((12, Some(4))));
-        assert_eq!(parse_position("x"), None);
-        assert_eq!(parse_position("12:"), None);
-        assert_eq!(parse_position(""), None);
     }
 }

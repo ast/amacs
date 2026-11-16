@@ -36,6 +36,8 @@ impl Server {
             .env("XDG_STATE_HOME", dir.join("state"))
             .env("XDG_CONFIG_HOME", dir.join("config"))
             .env("HOME", dir)
+            // The server must not reach the clipboard of whoever runs the tests.
+            .env_remove("WAYLAND_DISPLAY")
             .stdin(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
@@ -153,8 +155,8 @@ impl Client {
     /// Opens a frame of the given size, as `amacsclient -t` does.
     fn attach(server: &Server, cols: u16, rows: u16, files: &[&Path], wait: bool) -> Self {
         let mut client = Self::connect(server);
-        let reply = client.edit(files, wait, FrameRequest::Tty { cols, rows });
-        assert_eq!(reply, ServerMsg::Attached);
+        let reply = client.edit(files, wait, FrameRequest::New { cols, rows });
+        assert!(matches!(reply, ServerMsg::Attached { .. }), "{reply:?}");
         client.sync();
         client
     }
@@ -258,7 +260,7 @@ fn a_waiting_client_returns_when_its_file_is_finished() {
     let reply = waiter.edit(
         &[&commit],
         true,
-        FrameRequest::TtyIfNone { cols: 80, rows: 24 },
+        FrameRequest::NewIfNone { cols: 80, rows: 24 },
     );
     assert_eq!(
         reply,

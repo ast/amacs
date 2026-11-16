@@ -20,7 +20,9 @@ mod script;
 mod window;
 
 pub use buffer::{Buffer, BufferId};
-pub use editor::{Command, CommandBody, Editor, EditorEvent, GLOBAL_MAP, MINIBUFFER_MAP, Prefix};
+pub use editor::{
+    Clipboard, Command, CommandBody, Editor, EditorEvent, GLOBAL_MAP, MINIBUFFER_MAP, Prefix,
+};
 pub use error::{CmdError, CmdResult};
 pub use files::expand_path;
 pub use frame::FrameId;

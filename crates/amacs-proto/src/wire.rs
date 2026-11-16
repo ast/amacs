@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{DrawOp, InputEvent};
 
 /// Changes whenever a message changes shape. Client and server must agree.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Larger messages are refused, so that a corrupt length cannot make the
 /// reader allocate without bound.
@@ -30,15 +30,16 @@ pub struct FileSpec {
     pub column: Option<u32>,
 }
 
-/// Whether an edit request comes with a terminal to show a frame in.
+/// Whether an edit request comes with somewhere to show a frame: a terminal
+/// or a window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrameRequest {
     /// Use whatever frame is current. The client shows nothing.
     None,
-    /// Open a frame in the client's terminal, of this size.
-    Tty { cols: u16, rows: u16 },
-    /// Open a frame in the client's terminal only if no client has one.
-    TtyIfNone { cols: u16, rows: u16 },
+    /// Open a frame for the client, of this size in character cells.
+    New { cols: u16, rows: u16 },
+    /// Open a frame for the client only if no client has one.
+    NewIfNone { cols: u16, rows: u16 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,7 +63,12 @@ pub enum ClientMsg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerMsg {
     /// The client has a frame: it must send input and apply draw operations.
-    Attached,
+    /// The font is what the user configured, for clients that draw text
+    /// themselves. The size is in pixels.
+    Attached {
+        font_family: String,
+        font_size: u16,
+    },
     /// The files were opened in an existing frame.
     Opened,
     Draw(Vec<DrawOp>),
@@ -165,7 +171,7 @@ mod tests {
                 column: None,
             }],
             wait: true,
-            frame: FrameRequest::TtyIfNone { cols: 80, rows: 24 },
+            frame: FrameRequest::NewIfNone { cols: 80, rows: 24 },
         });
         round_trip(&ServerMsg::Draw(vec![
             DrawOp::Lines {

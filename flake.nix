@@ -19,6 +19,11 @@
           version = "0.1.0";
           src = self;
           cargoLock.lockFile = ./Cargo.lock;
+          # The Wayland client reads keymaps with libxkbcommon.
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.libxkbcommon ];
+          # The renderer's tests draw text and need a known font.
+          AMACS_TEST_FONTS = "${pkgs.jetbrains-mono}/share/fonts";
           # The check phase runs the whole test suite. Some tests expand `~`.
           preCheck = "export HOME=$TMPDIR";
           # User units for running the server under systemd, with or without
@@ -63,6 +68,7 @@
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
           inputsFrom = [ self.packages.${pkgs.stdenv.hostPlatform.system}.amacs ];
+          AMACS_TEST_FONTS = "${pkgs.jetbrains-mono}/share/fonts";
           packages = with pkgs; [
             clippy
             rustfmt

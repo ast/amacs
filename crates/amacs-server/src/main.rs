@@ -1,6 +1,7 @@
 //! The `amacs` binary: the editor as a single process in a terminal, as a
 //! server for `amacsclient` (`--daemon`), or without any display (`--batch`).
 
+mod clipboard;
 mod daemon;
 mod standalone;
 
@@ -150,6 +151,9 @@ fn start_session(options: &Options, cols: u16, rows: u16) -> Result<Session> {
     let mut session = Session::new(cols, rows)
         .map_err(|error| anyhow!("the Scheme runtime failed to load:\n{}", error.report))?;
     session.editor_mut().set_state_directory(state_directory());
+    if let Some(clipboard) = clipboard::WaylandClipboard::detect() {
+        session.editor_mut().set_clipboard(Box::new(clipboard));
+    }
     if let Some(init) = init_file(options) {
         let _ = session.load_file(&init);
     }

@@ -75,6 +75,14 @@ pub(crate) struct KeyPrompt {
     promise: Option<u64>,
 }
 
+/// The system clipboard, as far as the kill ring is concerned. Kills are
+/// copied to it, and text that another program put there can be yanked.
+pub trait Clipboard {
+    fn set(&mut self, text: &str);
+    /// The clipboard's text, or `None` if it has none or cannot be read.
+    fn get(&mut self) -> Option<String>;
+}
+
 /// Something the editor did that its host has to act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorEvent {
@@ -130,6 +138,9 @@ pub struct Editor {
     /// Directory for auto-save files and other persistent state.
     pub(crate) state_directory: Option<PathBuf>,
     pub(crate) kill_ring: KillRing,
+    clipboard: Option<Box<dyn Clipboard>>,
+    /// The kill ring head when it and the clipboard last agreed.
+    clipboard_synced: Option<String>,
     /// Set by vertical motion commands to keep the goal column.
     pub(crate) keep_goal: bool,
     exit: bool,
@@ -170,6 +181,8 @@ impl Editor {
             default_directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
             state_directory: None,
             kill_ring: KillRing::default(),
+            clipboard: None,
+            clipboard_synced: None,
             keep_goal: false,
             exit: false,
             next_serial: 1,
@@ -290,6 +303,7 @@ impl Editor {
             self.window_mut().goal_col = None;
         }
         self.kill_ring.end_command();
+        self.export_kill();
         // A command run from within another, as with M-x, has already been
         // recorded as the last command.
         if let Some(name) = self.this_command.take() {
@@ -641,6 +655,40 @@ impl Editor {
         Ok(mark.min(point)..mark.max(point))
     }
 
+    /// Connects the kill ring to the system clipboard.
+    pub fn set_clipboard(&mut self, clipboard: Box<dyn Clipboard>) {
+        self.clipboard = Some(clipboard);
+    }
+
+    /// Copies the newest kill to the clipboard if it is new since the last
+    /// time the two agreed.
+    fn export_kill(&mut self) {
+        let Some(clipboard) = &mut self.clipboard else {
+            return;
+        };
+        let head = self.kill_ring.head();
+        if head.is_some() && head != self.clipboard_synced.as_deref() {
+            clipboard.set(head.unwrap_or_default());
+            self.clipboard_synced = head.map(str::to_owned);
+        }
+    }
+
+    /// Puts the clipboard's text on the kill ring if another program put it
+    /// there, so that the next yank inserts it.
+    pub(crate) fn import_clipboard(&mut self) {
+        let Some(text) = self
+            .clipboard
+            .as_mut()
+            .and_then(|clipboard| clipboard.get())
+        else {
+            return;
+        };
+        if !text.is_empty() && self.kill_ring.head() != Some(text.as_str()) {
+            self.kill_ring.push(text.clone());
+        }
+        self.clipboard_synced = Some(text);
+    }
+
     /// Puts text on the kill ring as a new entry.
     pub fn kill_new(&mut self, text: String) {
         self.kill_ring.push(text);
@@ -648,6 +696,7 @@ impl Editor {
 
     /// The newest kill ring entry.
     pub fn current_kill(&mut self) -> Option<String> {
+        self.import_clipboard();
         self.kill_ring.current().map(str::to_owned)
     }
 

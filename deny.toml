@@ -12,6 +12,9 @@ ignore = [
     { id = "RUSTSEC-2026-0247", reason = "bitmaps, via steel-core (im-rc)" },
     { id = "RUSTSEC-2026-0250", reason = "im-rc, via steel-core" },
     { id = "RUSTSEC-2026-0251", reason = "sized-chunks, via steel-core (im-rc)" },
+    # Unmaintained, no known vulnerability. Used by cosmic-text's font database
+    # to read font files. Revisit when cosmic-text is upgraded.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser, via cosmic-text (fontdb)" },
 ]
 
 [licenses]

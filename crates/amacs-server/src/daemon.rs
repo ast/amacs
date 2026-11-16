@@ -353,9 +353,9 @@ impl Server {
     fn edit(&mut self, id: ConnId, files: &[FileSpec], wait: bool, request: FrameRequest) {
         let has_client_frame = self.conns.values().any(|conn| conn.frame.is_some());
         let size = match request {
-            FrameRequest::Tty { cols, rows } => Some((cols, rows)),
-            FrameRequest::TtyIfNone { cols, rows } if !has_client_frame => Some((cols, rows)),
-            FrameRequest::TtyIfNone { .. } | FrameRequest::None => None,
+            FrameRequest::New { cols, rows } => Some((cols, rows)),
+            FrameRequest::NewIfNone { cols, rows } if !has_client_frame => Some((cols, rows)),
+            FrameRequest::NewIfNone { .. } | FrameRequest::None => None,
         };
         let frame = size.map(|(cols, rows)| {
             let mut editor = self.session.editor_mut();
@@ -363,14 +363,16 @@ impl Server {
             editor.select_frame(frame);
             frame
         });
-        self.send(
-            id,
-            if frame.is_some() {
-                ServerMsg::Attached
-            } else {
-                ServerMsg::Opened
-            },
-        );
+        let reply = if frame.is_some() {
+            let (font_family, font_size) = self.session.editor().frame_font();
+            ServerMsg::Attached {
+                font_family,
+                font_size,
+            }
+        } else {
+            ServerMsg::Opened
+        };
+        self.send(id, reply);
 
         let mut waiting = 0;
         {
