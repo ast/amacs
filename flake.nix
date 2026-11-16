@@ -21,6 +21,13 @@
           cargoLock.lockFile = ./Cargo.lock;
           # The check phase runs the whole test suite. Some tests expand `~`.
           preCheck = "export HOME=$TMPDIR";
+          # User units for running the server under systemd, with or without
+          # socket activation.
+          postInstall = ''
+            install -Dm644 -t $out/lib/systemd/user contrib/systemd/amacs.socket
+            substitute contrib/systemd/amacs.service $out/lib/systemd/user/amacs.service \
+              --replace-fail @bindir@ $out/bin
+          '';
           meta.mainProgram = "amacs";
         };
         default = amacs;

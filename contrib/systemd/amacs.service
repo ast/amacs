@@ -1,0 +1,12 @@
+[Unit]
+Description=amacs editor server
+# The server needs no display: frames belong to the clients that attach.
+
+[Service]
+Type=notify
+ExecStart=@bindir@/amacs --daemon
+# SIGTERM makes the server auto-save unsaved buffers and exit cleanly.
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

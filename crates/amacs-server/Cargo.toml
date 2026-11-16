@@ -12,6 +12,13 @@ amacs-proto.workspace = true
 amacs-script.workspace = true
 amacs-tty.workspace = true
 anyhow.workspace = true
+listenfd.workspace = true
+sd-notify.workspace = true
+signal-hook.workspace = true
+
+[dev-dependencies]
+amacs-testkit.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

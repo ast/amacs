@@ -25,6 +25,10 @@ pub struct Buffer {
     /// Modification time of `file` when it was last read or written, to
     /// notice changes made by other programs.
     pub disk_mtime: Option<SystemTime>,
+    /// Tokens of the clients waiting for this buffer to be finished.
+    pub waiters: Vec<u64>,
+    /// The text's tick when it was last auto-saved, if it has been.
+    pub auto_saved_tick: Option<u64>,
     pub read_only: bool,
     /// Copied from the `tab-width` option whenever options change.
     pub tab_width: usize,
@@ -62,6 +66,8 @@ impl Buffer {
             name: name.into(),
             file: None,
             disk_mtime: None,
+            waiters: Vec::new(),
+            auto_saved_tick: None,
             read_only: false,
             tab_width: 8,
             major_mode: FUNDAMENTAL_MODE.to_owned(),

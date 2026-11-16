@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 amacs-text = { path = "crates/amacs-text" }
 amacs-proto = { path = "crates/amacs-proto" }
+amacs-client = { path = "crates/amacs-client" }
 amacs-core = { path = "crates/amacs-core" }
 amacs-tty = { path = "crates/amacs-tty" }
 amacs-script = { path = "crates/amacs-script" }
@@ -20,10 +21,14 @@ anyhow = "1"
 bitflags = { version = "2", features = ["serde"] }
 crossterm = "0.29"
 insta = "1"
+listenfd = "1"
+postcard = { version = "1.1", default-features = false, features = ["use-std"] }
 proptest = "1"
 # Line breaks are LF only, as in Emacs: no default `unicode_lines`/`cr_lines`.
 ropey = { version = "1.6", default-features = false, features = ["simd"] }
+sd-notify = "0.5"
 serde = { version = "1", features = ["derive"] }
+signal-hook = "0.4"
 slotmap = "1"
 steel-core = "0.8.3"
 tempfile = "3"

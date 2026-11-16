@@ -1,17 +1,15 @@
-//! The `amacs` binary.
-//!
-//! For now this is a single process that edits in the terminal it was started
-//! from. It becomes the daemon when the client/server split lands.
+//! The `amacs` binary: the editor as a single process in a terminal, as a
+//! server for `amacsclient` (`--daemon`), or without any display (`--batch`).
 
-use std::io::IsTerminal;
+mod daemon;
+mod standalone;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::mpsc;
+use std::time::Duration;
 
 use amacs_core::Value;
-use amacs_proto::{InputEvent, Key};
 use amacs_script::Session;
-use amacs_tty::Tty;
 use anyhow::{Context, Result, anyhow, bail};
 
 const USAGE: &str = "Usage: amacs [OPTION]... [FILE]...
@@ -19,6 +17,7 @@ const USAGE: &str = "Usage: amacs [OPTION]... [FILE]...
 Edit FILEs in the terminal. The last one given is shown first.
 
 Options:
+      --daemon      Run as a server for amacsclient, without a terminal
   -q, --no-init     Do not load the init file
       --init FILE   Load FILE instead of $XDG_CONFIG_HOME/amacs/init.scm
   -l, --load FILE   Load a Scheme file after the init file
@@ -41,6 +40,7 @@ struct Options {
     actions: Vec<Action>,
     init: Option<PathBuf>,
     no_init: bool,
+    daemon: bool,
     batch: bool,
     test: bool,
 }
@@ -85,6 +85,7 @@ fn parse_args() -> Result<Option<Options>> {
             "--" => options_done = true,
             "-q" | "--no-init" => options.no_init = true,
             "--batch" => options.batch = true,
+            "--daemon" => options.daemon = true,
             "--test" => options.test = true,
             "--init" => options.init = Some(value("a file name")?.into()),
             "-l" | "--load" => options
@@ -102,6 +103,9 @@ fn parse_args() -> Result<Option<Options>> {
     }
     if options.test && !options.batch {
         bail!("--test needs --batch");
+    }
+    if options.daemon && options.batch {
+        bail!("--daemon and --batch cannot be combined");
     }
     Ok(Some(options))
 }
@@ -122,25 +126,31 @@ fn init_file(options: &Options) -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
-fn run() -> Result<ExitCode> {
-    let Some(options) = parse_args()? else {
-        return Ok(ExitCode::SUCCESS);
-    };
-    if options.batch {
-        return run_batch(&options);
-    }
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        bail!("standard input and output must be a terminal (or use --batch)");
-    }
+/// How long the editor must be idle before unsaved changes are auto-saved.
+const AUTO_SAVE_IDLE: Duration = Duration::from_secs(5);
+/// Unsaved changes are auto-saved at least this often while the editor is busy.
+const AUTO_SAVE_INTERVAL: Duration = Duration::from_secs(30);
 
-    let mut tty = Tty::new().context("cannot set up the terminal")?;
-    let (cols, rows) = tty.size().context("cannot read the terminal size")?;
+/// Where auto-save files and other persistent state go:
+/// `$XDG_STATE_HOME/amacs`, or `~/.local/state/amacs`.
+fn state_directory() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| Some(PathBuf::from(std::env::var_os("HOME")?).join(".local/state")))?;
+    Some(base.join("amacs"))
+}
+
+/// Creates the session and runs what the command line asks for before any
+/// input: the init file, `--load` and `--eval`, and the files to visit.
+///
+/// Problems in the user's files are shown in the echo area and logged to
+/// `*Messages*`. They must not keep the editor from starting.
+fn start_session(options: &Options, cols: u16, rows: u16) -> Result<Session> {
     let mut session = Session::new(cols, rows)
         .map_err(|error| anyhow!("the Scheme runtime failed to load:\n{}", error.report))?;
-
-    // Problems in the user's files are shown in the echo area and logged to
-    // *Messages*; they must not keep the editor from starting.
-    if let Some(init) = init_file(&options) {
+    session.editor_mut().set_state_directory(state_directory());
+    if let Some(init) = init_file(options) {
         let _ = session.load_file(&init);
     }
     for action in &options.actions {
@@ -157,48 +167,21 @@ fn run() -> Result<ExitCode> {
         }
     }
     // Run the hooks queued by opening the files.
-    session.handle_event(InputEvent::Resize { cols, rows });
+    session.run_pending();
+    Ok(session)
+}
 
-    // Input is read on its own thread so that C-g can interrupt Scheme code
-    // that the main thread is busy running.
-    let (sender, events) = mpsc::channel();
-    let interrupt = session.interrupt_handle();
-    std::thread::spawn(move || {
-        loop {
-            let event = amacs_tty::read_event();
-            if matches!(&event, Ok(InputEvent::Key(key)) if *key == Key::ctrl('g')) {
-                interrupt.interrupt();
-            }
-            let failed = event.is_err();
-            if sender.send(event).is_err() || failed {
-                break;
-            }
-        }
-    });
-
-    while !session.should_exit() {
-        tty.apply(&session.redisplay())?;
-        let mut next = Some(events.recv().context("the input thread stopped")?);
-        // Handle everything that has already arrived before drawing again.
-        while let Some(event) = next {
-            let event = match event.context("cannot read from the terminal")? {
-                // Terminals report a resize once per step of a drag. Trust
-                // the current size rather than replaying each one.
-                InputEvent::Resize { .. } => {
-                    let (cols, rows) = tty.size()?;
-                    InputEvent::Resize { cols, rows }
-                }
-                other => other,
-            };
-            session.handle_event(event);
-            next = if session.should_exit() {
-                None
-            } else {
-                events.try_recv().ok()
-            };
-        }
+fn run() -> Result<ExitCode> {
+    let Some(options) = parse_args()? else {
+        return Ok(ExitCode::SUCCESS);
+    };
+    if options.batch {
+        run_batch(&options)
+    } else if options.daemon {
+        daemon::run(&options)
+    } else {
+        standalone::run(&options)
     }
-    Ok(ExitCode::SUCCESS)
 }
 
 /// Runs without a terminal: loads files, evaluates expressions and prints

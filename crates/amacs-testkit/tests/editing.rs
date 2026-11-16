@@ -249,7 +249,8 @@ fn m_x_runs_a_command_by_name_with_completion() {
 
     h.keys("M-x").type_text("kill-").keys("TAB");
     assert!(
-        h.echo().starts_with("M-x kill- [kill-buffer, kill-line, "),
+        h.echo()
+            .starts_with("M-x kill- [kill-buffer, kill-editor, "),
         "{}",
         h.echo()
     );

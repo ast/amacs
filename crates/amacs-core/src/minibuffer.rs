@@ -56,14 +56,15 @@ impl Editor {
             prompt: prompt.into(),
             completion,
             on_accept: Box::new(on_accept),
-            previous: self.selected,
+            previous: self.selected(),
             directory: self.working_directory().to_owned(),
             promise: None,
         });
-        let window = self.minibuffer_window;
+        self.prompt_frame = Some(self.current_frame);
+        let window = self.minibuffer_window();
         let buffer = self.windows[window].buffer;
         self.buffers[buffer].reset(Text::from(initial));
-        self.selected = window;
+        self.frame_mut().selected = window;
         self.set_point(usize::MAX);
         Ok(())
     }
@@ -89,17 +90,18 @@ impl Editor {
 
     fn leave_minibuffer(&mut self) -> Option<MinibufferState> {
         let state = self.minibuffer.take()?;
-        self.selected = if self.windows.contains_key(state.previous) {
+        self.prompt_frame = None;
+        self.frame_mut().selected = if self.windows.contains_key(state.previous) {
             state.previous
         } else {
-            self.layout.leaves()[0]
+            self.frame().layout.leaves()[0]
         };
         Some(state)
     }
 }
 
 pub fn exit_minibuffer(ed: &mut Editor) -> CmdResult {
-    let buffer = ed.windows[ed.minibuffer_window].buffer;
+    let buffer = ed.windows[ed.minibuffer_window()].buffer;
     let input = ed.buffers[buffer].text().to_string();
     match ed.leave_minibuffer() {
         Some(state) => (state.on_accept)(ed, input),

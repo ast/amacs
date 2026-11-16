@@ -52,6 +52,12 @@ pub fn read_event() -> io::Result<InputEvent> {
     }
 }
 
+/// Size of the terminal in cells, as (columns, rows). Works before and
+/// after the terminal is taken over.
+pub fn terminal_size() -> io::Result<(u16, u16)> {
+    terminal::size()
+}
+
 /// The terminal in raw mode on the alternate screen. Dropping it restores
 /// the terminal.
 pub struct Tty {

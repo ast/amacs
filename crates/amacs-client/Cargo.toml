@@ -1,0 +1,19 @@
+[package]
+name = "amacs-client"
+description = "amacsclient: talks to a running amacs server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+amacs-proto.workspace = true
+amacs-tty.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "amacsclient"
+path = "src/main.rs"

@@ -22,7 +22,8 @@ fn split(ed: &mut Editor, dir: SplitDir) -> CmdResult {
     let buffer = ed.window().buffer;
     ed.buffers[buffer].save_view(point, start);
     let new = ed.make_window(buffer);
-    ed.layout.split(ed.selected, dir, new);
+    let selected = ed.selected();
+    ed.frame_mut().layout.split(selected, dir, new);
     ed.relayout();
     Ok(())
 }
@@ -37,29 +38,29 @@ pub fn split_right(ed: &mut Editor) -> CmdResult {
 
 pub fn delete_window(ed: &mut Editor) -> CmdResult {
     ed.forbid_in_minibuffer()?;
-    let leaves = ed.layout.leaves();
+    let leaves = ed.frame().layout.leaves();
     if leaves.len() == 1 {
         return Err(CmdError::msg("Attempt to delete sole window"));
     }
     let index = leaves
         .iter()
-        .position(|id| *id == ed.selected)
+        .position(|id| *id == ed.selected())
         .expect("the selected window is in the layout");
-    let target = ed.selected;
-    ed.layout.remove(target);
+    let target = ed.selected();
+    ed.frame_mut().layout.remove(target);
     ed.remove_window(target);
-    let remaining = ed.layout.leaves();
-    ed.selected = remaining[index.min(remaining.len() - 1)];
+    let remaining = ed.frame().layout.leaves();
+    ed.frame_mut().selected = remaining[index.min(remaining.len() - 1)];
     ed.relayout();
     Ok(())
 }
 
 pub fn delete_other_windows(ed: &mut Editor) -> CmdResult {
     ed.forbid_in_minibuffer()?;
-    let keep = ed.selected;
-    for id in ed.layout.leaves() {
+    let keep = ed.selected();
+    for id in ed.frame().layout.leaves() {
         if id != keep {
-            ed.layout.remove(id);
+            ed.frame_mut().layout.remove(id);
             ed.remove_window(id);
         }
     }
@@ -69,13 +70,13 @@ pub fn delete_other_windows(ed: &mut Editor) -> CmdResult {
 
 pub fn other_window(ed: &mut Editor) -> CmdResult {
     ed.forbid_in_minibuffer()?;
-    let leaves = ed.layout.leaves();
+    let leaves = ed.frame().layout.leaves();
     let index = leaves
         .iter()
-        .position(|id| *id == ed.selected)
+        .position(|id| *id == ed.selected())
         .expect("the selected window is in the layout");
     let count = leaves.len() as i64;
     let next = (index as i64 + ed.arg()).rem_euclid(count);
-    ed.selected = leaves[next as usize];
+    ed.frame_mut().selected = leaves[next as usize];
     Ok(())
 }

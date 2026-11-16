@@ -62,7 +62,12 @@ pub fn install(ed: &mut Editor) {
         "write-file" => files::write_file, "Write the current buffer to a file and visit that file.";
         "switch-to-buffer" => files::switch_to_buffer, "Show another buffer in the selected window.";
         "kill-buffer" => files::kill_buffer, "Kill a buffer.";
-        "save-buffers-kill-terminal" => files::save_buffers_kill_terminal, "Exit the editor.";
+        "save-buffers-kill-terminal" => files::save_buffers_kill_terminal, "Leave the editor from this terminal: close a client's frame, or exit.";
+        "kill-editor" => files::kill_editor, "Exit the editor and close every frame.";
+        "delete-frame" => files::delete_frame, "Close the current frame.";
+        "server-edit" => files::server_edit, "Finish editing the buffer for the client that is waiting for it.";
+        "recover-this-file" => files::recover_this_file, "Replace the buffer's text with its auto-save data.";
+        "goto-line" => files::goto_line, "Read a line number and move to that line.";
 
         "split-window-below" => windows::split_below, "Split the selected window into two, one above the other.";
         "split-window-right" => windows::split_right, "Split the selected window into two side-by-side windows.";
@@ -141,6 +146,10 @@ pub fn install(ed: &mut Editor) {
         ("C-x b", "switch-to-buffer"),
         ("C-x k", "kill-buffer"),
         ("C-x C-c", "save-buffers-kill-terminal"),
+        ("C-x 5 0", "delete-frame"),
+        ("C-x #", "server-edit"),
+        ("M-g g", "goto-line"),
+        ("M-g M-g", "goto-line"),
         ("C-x 2", "split-window-below"),
         ("C-x 3", "split-window-right"),
         ("C-x 0", "delete-window"),

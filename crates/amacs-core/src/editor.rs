@@ -9,12 +9,12 @@ use slotmap::SlotMap;
 use crate::buffer::{Buffer, BufferId};
 use crate::commands;
 use crate::error::{CmdError, CmdResult};
+use crate::frame::{Frame, FrameId};
 use crate::keymap::{Keymap, Lookup, lookup_in};
 use crate::kill_ring::KillRing;
 use crate::minibuffer::MinibufferState;
-use crate::redisplay::RedisplayState;
 use crate::script::{ScriptCall, ScriptFn, ScriptState, ScriptTarget, Value};
-use crate::window::{Layout, Rect, Window, WindowId};
+use crate::window::{Rect, Window, WindowId};
 
 /// What running a command does.
 #[derive(Clone)]
@@ -65,7 +65,25 @@ impl Prefix {
     }
 }
 
-type KeyPrompt = Box<dyn FnOnce(&mut Editor, Key) -> CmdResult>;
+type KeyAnswer = Box<dyn FnOnce(&mut Editor, Key) -> CmdResult>;
+
+/// A question waiting for a single key.
+pub(crate) struct KeyPrompt {
+    pub prompt: String,
+    answer: KeyAnswer,
+    /// Promise to reject if the question is abandoned, when Scheme waits.
+    promise: Option<u64>,
+}
+
+/// Something the editor did that its host has to act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorEvent {
+    /// A client waiting for a buffer to be finished can stop waiting. The
+    /// number is the token the waiter was registered with.
+    WaiterReleased(u64),
+    /// A frame was closed by a command, so its frontend should go away.
+    FrameClosed(FrameId),
+}
 
 const SCRATCH: &str = "*scratch*";
 
@@ -76,15 +94,21 @@ pub struct Editor {
     /// Buffers in most-recently-selected order.
     pub(crate) buffer_order: Vec<BufferId>,
     pub(crate) windows: SlotMap<WindowId, Window>,
-    pub(crate) layout: Layout,
-    pub(crate) selected: WindowId,
-    pub(crate) minibuffer_window: WindowId,
+    pub(crate) frames: SlotMap<FrameId, Frame>,
+    pub(crate) current_frame: FrameId,
+    pub(crate) base_frame: FrameId,
+    /// The buffer that every frame's minibuffer window shows.
+    pub(crate) minibuffer_buffer: BufferId,
+    /// The frame whose echo area shows the active prompt, if there is one.
+    pub(crate) prompt_frame: Option<FrameId>,
     pub(crate) minibuffer: Option<MinibufferState>,
     /// Text shown after the minibuffer input until the next key.
     pub(crate) minibuffer_hint: Option<String>,
-    /// A question waiting for a single key, with its prompt.
-    pub(crate) key_prompt: Option<(String, KeyPrompt)>,
-    pub(crate) size: (u16, u16),
+    pub(crate) key_prompt: Option<KeyPrompt>,
+    /// Whether frames belong to clients of a long-running server. Closing
+    /// the terminal then closes a frame instead of exiting the editor.
+    pub(crate) daemon: bool,
+    events: Vec<EditorEvent>,
 
     commands: HashMap<String, Command>,
     /// Keymaps by name: [`GLOBAL_MAP`], [`MINIBUFFER_MAP`], and one per mode,
@@ -103,13 +127,13 @@ pub struct Editor {
 
     /// Directory that file prompts start in for buffers without a file.
     pub(crate) default_directory: PathBuf,
+    /// Directory for auto-save files and other persistent state.
+    pub(crate) state_directory: Option<PathBuf>,
     pub(crate) kill_ring: KillRing,
-    pub(crate) echo: Option<String>,
     /// Set by vertical motion commands to keep the goal column.
     pub(crate) keep_goal: bool,
     exit: bool,
     next_serial: u32,
-    pub(crate) redisplay: RedisplayState,
 }
 
 impl Editor {
@@ -118,21 +142,21 @@ impl Editor {
         let mut buffers = SlotMap::with_key();
         let scratch = buffers.insert(Buffer::new(SCRATCH));
         let minibuffer = buffers.insert(Buffer::new(" *Minibuf*"));
-        let mut windows = SlotMap::with_key();
-        let selected = windows.insert(new_window(&mut buffers[scratch], scratch, 1));
-        let minibuffer_window = windows.insert(new_window(&mut buffers[minibuffer], minibuffer, 0));
 
         let mut editor = Self {
             buffers,
             buffer_order: vec![scratch],
-            windows,
-            layout: Layout::Leaf(selected),
-            selected,
-            minibuffer_window,
+            windows: SlotMap::with_key(),
+            frames: SlotMap::with_key(),
+            current_frame: FrameId::default(),
+            base_frame: FrameId::default(),
+            minibuffer_buffer: minibuffer,
+            prompt_frame: None,
             minibuffer: None,
             minibuffer_hint: None,
             key_prompt: None,
-            size: (cols, rows),
+            daemon: false,
+            events: Vec::new(),
             commands: HashMap::new(),
             keymaps: HashMap::new(),
             script: ScriptState::new(),
@@ -144,13 +168,14 @@ impl Editor {
             this_command: None,
             last_command: None,
             default_directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+            state_directory: None,
             kill_ring: KillRing::default(),
-            echo: None,
             keep_goal: false,
             exit: false,
-            next_serial: 2,
-            redisplay: RedisplayState::default(),
+            next_serial: 1,
         };
+        editor.base_frame = editor.new_frame(scratch, cols, rows);
+        editor.current_frame = editor.base_frame;
         commands::install(&mut editor);
         editor.relayout();
         editor
@@ -293,18 +318,19 @@ impl Editor {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
-        self.size = (cols, rows);
+        self.frame_mut().size = (cols, rows);
         self.relayout();
-        self.redisplay.invalidate();
+        self.frame_mut().redisplay.invalidate();
     }
 
     pub fn handle_key(&mut self, key: Key) {
         self.relayout();
-        self.echo = None;
+        self.frame_mut().echo = None;
         self.minibuffer_hint = None;
 
-        if let Some((_, answer)) = self.key_prompt.take() {
-            let result = answer(self, key);
+        if let Some(question) = self.key_prompt.take() {
+            self.prompt_frame = None;
+            let result = (question.answer)(self, key);
             self.report(result);
             return;
         }
@@ -362,7 +388,7 @@ impl Editor {
                 self.pending_keys.clear();
                 self.last_key = Some(key);
                 self.execute(&name);
-                if self.prefix_arg.is_some() && self.echo.is_none() {
+                if self.prefix_arg.is_some() && self.frame().echo.is_none() {
                     self.show_pending();
                 }
             }
@@ -382,10 +408,10 @@ impl Editor {
 
     fn handle_paste(&mut self, text: &str) {
         self.relayout();
-        self.echo = None;
+        self.frame_mut().echo = None;
         self.minibuffer_hint = None;
         self.cancel_pending();
-        self.key_prompt = None;
+        self.cancel_key_prompt();
         self.execute_with("yank", |ed| ed.insert(text));
     }
 
@@ -422,7 +448,7 @@ impl Editor {
         if self.esc_pending {
             parts.push("ESC".to_owned());
         }
-        self.echo = Some(format!("{}-", parts.join(" ")));
+        self.frame_mut().echo = Some(format!("{}-", parts.join(" ")));
     }
 
     /// Asks a question that is answered with a single key.
@@ -431,7 +457,44 @@ impl Editor {
         prompt: impl Into<String>,
         answer: impl FnOnce(&mut Editor, Key) -> CmdResult + 'static,
     ) {
-        self.key_prompt = Some((prompt.into(), Box::new(answer)));
+        self.key_prompt = Some(KeyPrompt {
+            prompt: prompt.into(),
+            answer: Box::new(answer),
+            promise: None,
+        });
+        self.prompt_frame = Some(self.current_frame);
+    }
+
+    fn cancel_key_prompt(&mut self) {
+        if let Some(question) = self.key_prompt.take() {
+            self.prompt_frame = None;
+            if let Some(id) = question.promise {
+                self.reject_promise(id);
+            }
+        }
+    }
+
+    /// Abandons all input in progress: a key sequence, a prefix argument, a
+    /// single-key question, the minibuffer.
+    pub(crate) fn cancel_input(&mut self) {
+        self.cancel_pending();
+        self.cancel_key_prompt();
+        // Quitting is how the minibuffer reports being abandoned.
+        let _ = crate::minibuffer::abort_minibuffer(self);
+    }
+
+    /// Marks the editor as a server whose frames belong to clients.
+    pub fn set_daemon(&mut self, daemon: bool) {
+        self.daemon = daemon;
+    }
+
+    pub(crate) fn emit(&mut self, event: EditorEvent) {
+        self.events.push(event);
+    }
+
+    /// The events since the last call, for the host to act on.
+    pub fn take_events(&mut self) -> Vec<EditorEvent> {
+        std::mem::take(&mut self.events)
     }
 
     /// Asks a yes-or-no question and runs `on_yes` if the answer is `y`.
@@ -485,16 +548,19 @@ impl Editor {
             }
             Ok(())
         });
+        if let Some(question) = &mut self.key_prompt {
+            question.promise = Some(id);
+        }
     }
 
     // Messages and exit
 
     pub fn message(&mut self, text: impl Into<String>) {
-        self.echo = Some(text.into());
+        self.frame_mut().echo = Some(text.into());
     }
 
     pub fn echo(&self) -> Option<&str> {
-        self.echo.as_deref()
+        self.frame().echo.as_deref()
     }
 
     pub fn request_exit(&mut self) {
@@ -508,7 +574,7 @@ impl Editor {
     // Current window and buffer
 
     pub fn in_minibuffer(&self) -> bool {
-        self.selected == self.minibuffer_window
+        self.selected() == self.minibuffer_window()
     }
 
     /// Fails for commands that make no sense while the minibuffer is selected.
@@ -521,11 +587,12 @@ impl Editor {
     }
 
     pub fn window(&self) -> &Window {
-        &self.windows[self.selected]
+        &self.windows[self.selected()]
     }
 
     pub fn window_mut(&mut self) -> &mut Window {
-        &mut self.windows[self.selected]
+        let selected = self.selected();
+        &mut self.windows[selected]
     }
 
     pub fn buffer(&self) -> &Buffer {
@@ -629,7 +696,7 @@ impl Editor {
 
     /// Shows a buffer in the selected window.
     pub fn switch_to_buffer(&mut self, id: BufferId) {
-        self.set_window_buffer(self.selected, id);
+        self.set_window_buffer(self.selected(), id);
         self.buffer_order.retain(|other| *other != id);
         self.buffer_order.insert(0, id);
     }
@@ -656,7 +723,48 @@ impl Editor {
         for window in showing {
             self.set_window_buffer(window, replacement);
         }
-        self.buffers.remove(id);
+        if let Some(buffer) = self.buffers.remove(id) {
+            for token in buffer.waiters {
+                self.emit(EditorEvent::WaiterReleased(token));
+            }
+            // The user chose to discard the buffer, so its auto-save data
+            // is not wanted either.
+            if let Some(file) = &buffer.file {
+                self.remove_auto_save(file);
+            }
+        }
+    }
+
+    /// Registers a client that waits for a buffer to be finished with
+    /// `server-edit` or killed. `token` comes back in
+    /// [`EditorEvent::WaiterReleased`].
+    pub fn add_waiter(&mut self, buffer: BufferId, token: u64) {
+        if let Some(buffer) = self.buffers.get_mut(buffer) {
+            buffer.waiters.push(token);
+        }
+    }
+
+    /// Forgets a client's waiters without notifying it, as when it has gone.
+    pub fn remove_waiters(&mut self, token: u64) {
+        for buffer in self.buffers.values_mut() {
+            buffer.waiters.retain(|waiter| *waiter != token);
+        }
+    }
+
+    /// Closes a frame at the user's request and tells the host.
+    pub(crate) fn close_frame(&mut self, id: FrameId) -> CmdResult {
+        self.delete_frame(id)?;
+        self.emit(EditorEvent::FrameClosed(id));
+        Ok(())
+    }
+
+    /// Moves point to the start of a line, counting from 1, and optionally
+    /// to a column on it, counting from 0.
+    pub fn goto_line(&mut self, line: usize, column: usize) {
+        let text = self.text();
+        let line = line.clamp(1, text.len_lines()) - 1;
+        let pos = (text.line_start(line) + column).min(text.line_end(line));
+        self.set_point(pos);
     }
 
     // Windows
@@ -701,7 +809,7 @@ impl Editor {
 
     /// Recomputes every window's area from the layout tree and frame size.
     pub(crate) fn relayout(&mut self) {
-        let (cols, rows) = self.size;
+        let (cols, rows) = self.frame().size;
         let area = Rect {
             x: 0,
             y: 0,
@@ -709,13 +817,14 @@ impl Editor {
             h: rows.saturating_sub(1),
         };
         let mut placed = Vec::new();
-        self.layout.arrange(area, false, &mut placed);
+        self.frame().layout.arrange(area, false, &mut placed);
         for placement in placed {
             let window = &mut self.windows[placement.window];
             window.rect = placement.rect;
             window.border = placement.border;
         }
-        self.windows[self.minibuffer_window].rect = Rect {
+        let minibuffer_window = self.minibuffer_window();
+        self.windows[minibuffer_window].rect = Rect {
             x: 0,
             y: rows.saturating_sub(1),
             w: cols,

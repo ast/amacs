@@ -2,7 +2,7 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::path::Path;
 use std::rc::Rc;
 
-use amacs_core::{Editor, ScriptCall, ScriptOutcome, ScriptTarget, Value};
+use amacs_core::{Editor, FrameId, ScriptCall, ScriptOutcome, ScriptTarget, Value};
 use amacs_proto::{DrawOp, InputEvent};
 
 use crate::steel::{EvalError, EvalResult, InterruptHandle, SteelHost};
@@ -50,6 +50,40 @@ impl Session {
 
     pub fn redisplay(&mut self) -> Vec<DrawOp> {
         self.editor.borrow_mut().redisplay()
+    }
+
+    /// Handles input from one of several frames.
+    pub fn handle_frame_event(&mut self, frame: FrameId, event: InputEvent) {
+        self.editor.borrow_mut().handle_frame_event(frame, event);
+        self.pump();
+    }
+
+    pub fn redisplay_frame(&mut self, frame: FrameId) -> Vec<DrawOp> {
+        self.editor.borrow_mut().redisplay_frame(frame)
+    }
+
+    /// Runs the Scheme calls queued by work done directly on the editor,
+    /// such as the hooks of a file opened through [`Session::editor_mut`].
+    pub fn run_pending(&mut self) {
+        self.pump();
+    }
+
+    /// Evaluates Scheme source for a program rather than for the user: the
+    /// result or error is returned and nothing is shown in the echo area.
+    pub fn eval_quietly(&mut self, source: &str) -> EvalResult {
+        self.editor.borrow_mut().begin_script();
+        let result = self.host.eval(&self.editor, source, None);
+        let call = ScriptCall {
+            target: ScriptTarget::Eval(String::new()),
+            args: Vec::new(),
+            command: None,
+            echo_result: false,
+        };
+        self.editor
+            .borrow_mut()
+            .end_script(&call, ScriptOutcome::Returned(String::new()));
+        self.pump();
+        result
     }
 
     pub fn should_exit(&self) -> bool {

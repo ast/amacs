@@ -60,7 +60,7 @@ impl Editor {
     /// nothing changed.
     pub fn redisplay(&mut self) -> Vec<DrawOp> {
         self.relayout();
-        let leaves = self.layout.leaves();
+        let leaves = self.frame().layout.leaves();
         for id in &leaves {
             self.scroll_to_point(*id);
         }
@@ -79,7 +79,7 @@ impl Editor {
                 ..rect
             };
             let (lines, window_cursor) = self.window_lines(*id);
-            if *id == self.selected
+            if *id == self.selected()
                 && let Some((row, col)) = window_cursor
             {
                 cursor = Some((text_pane, row, col));
@@ -107,7 +107,7 @@ impl Editor {
                 ));
             }
         }
-        let echo_rect = self.windows[self.minibuffer_window].rect;
+        let echo_rect = self.windows[self.minibuffer_window()].rect;
         let (echo, echo_cursor) = self.echo_line();
         if let Some(col) = echo_cursor {
             cursor = Some((ECHO_PANE, 0, col));
@@ -123,8 +123,8 @@ impl Editor {
         panes: Vec<(PaneRect, Vec<DisplayLine>)>,
         cursor: Option<(PaneId, u16, u16)>,
     ) -> Vec<DrawOp> {
-        let size = self.size;
-        let state = &mut self.redisplay;
+        let size = self.frame().size;
+        let state = &mut self.frames[self.current_frame].redisplay;
         let mut ops = Vec::new();
         if !state.faces_sent {
             ops.push(DrawOp::DefineFaces(faces::table()));
@@ -231,7 +231,7 @@ impl Editor {
         let (text, tab) = (buffer.text(), buffer.tab_width);
         let point = buffer.marker(window.point);
         let region = match buffer.mark() {
-            Some(mark) if buffer.mark_active && id == self.selected => {
+            Some(mark) if buffer.mark_active && id == self.selected() => {
                 mark.min(point)..mark.max(point)
             }
             _ => 0..0,
@@ -300,7 +300,7 @@ impl Editor {
         let col = column_of(buffer.text(), point, buffer.tab_width);
         let modes = self.mode_line_modes(window.buffer);
         let text = format!(" {flags}  {}   L{line} C{col}  ({modes})", buffer.name);
-        let face = if id == self.selected {
+        let face = if id == self.selected() {
             faces::MODE_LINE
         } else {
             faces::MODE_LINE_INACTIVE
@@ -312,14 +312,17 @@ impl Editor {
     /// The echo area: a pending question, the minibuffer, or the last
     /// message. Also returns the cursor column if the cursor belongs there.
     fn echo_line(&self) -> (DisplayLine, Option<u16>) {
-        let width = usize::from(self.size.0);
-        if let Some((prompt, _)) = &self.key_prompt {
+        let width = usize::from(self.frame().size.0);
+        // A prompt is drawn only in the frame that is asking.
+        let prompting = self.prompt_frame == Some(self.current_frame);
+        if let Some(question) = self.key_prompt.as_ref().filter(|_| prompting) {
+            let prompt = &question.prompt;
             let shown = fit(prompt, width.saturating_sub(1));
             let line = DisplayLine::plain(shown, faces::DEFAULT);
             return (line, Some(str_cells(shown) as u16));
         }
-        let Some(state) = &self.minibuffer else {
-            let message = self.echo.as_deref().unwrap_or("");
+        let Some(state) = self.minibuffer.as_ref().filter(|_| prompting) else {
+            let message = self.frame().echo.as_deref().unwrap_or("");
             let first_line = message.lines().next().unwrap_or("");
             return (
                 DisplayLine::plain(fit(first_line, width), faces::DEFAULT),
@@ -327,7 +330,7 @@ impl Editor {
             );
         };
 
-        let window = &self.windows[self.minibuffer_window];
+        let window = &self.windows[self.minibuffer_window()];
         let buffer = &self.buffers[window.buffer];
         let point = buffer.marker(window.point);
 

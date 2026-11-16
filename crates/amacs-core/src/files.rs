@@ -79,11 +79,119 @@ fn write_atomically(path: &Path, text: &Text) -> io::Result<()> {
     result
 }
 
+/// Writes auto-save data, creating the directory for the user only.
+fn write_auto_save(path: &Path, text: &Text) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    if let Some(dir) = path.parent() {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)?;
+    }
+    write_atomically(path, text)
+}
+
 pub fn modified_time(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }
 
+/// File name under the auto-save directory for a visited file: the path
+/// with `/` written as `!`, and `!` doubled so that the mapping is unique.
+fn auto_save_name(file: &Path) -> String {
+    file.to_string_lossy().replace('!', "!!").replace('/', "!")
+}
+
 impl Editor {
+    /// Sets the directory for data that outlives the process, such as
+    /// auto-save files. Without one, nothing is auto-saved.
+    pub fn set_state_directory(&mut self, dir: Option<PathBuf>) {
+        self.state_directory = dir;
+    }
+
+    fn auto_save_path(&self, file: &Path) -> Option<PathBuf> {
+        let dir = self.state_directory.as_ref()?;
+        Some(dir.join("auto-save").join(auto_save_name(file)))
+    }
+
+    pub(crate) fn remove_auto_save(&self, file: &Path) {
+        if let Some(path) = self.auto_save_path(file) {
+            // It usually does not exist.
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    /// Writes the modified file-visiting buffers that have changed since
+    /// their last auto-save to the auto-save directory, and removes the
+    /// auto-save files of buffers that are no longer modified. With `force`,
+    /// writes every modified buffer. Returns the number of files written.
+    ///
+    /// The visited files themselves are never touched.
+    pub fn auto_save(&mut self, force: bool) -> usize {
+        let ids: Vec<BufferId> = self.buffers.keys().collect();
+        let mut written = 0;
+        let mut failure = None;
+        for id in ids {
+            let buffer = &self.buffers[id];
+            let Some(path) = buffer
+                .file
+                .as_deref()
+                .and_then(|file| self.auto_save_path(file))
+            else {
+                continue;
+            };
+            let tick = buffer.tick();
+            if !buffer.is_modified() {
+                if buffer.auto_saved_tick.is_some() {
+                    let _ = fs::remove_file(&path);
+                    self.buffers[id].auto_saved_tick = None;
+                }
+                continue;
+            }
+            if !force && buffer.auto_saved_tick == Some(tick) {
+                continue;
+            }
+            match write_auto_save(&path, buffer.text()) {
+                Ok(()) => {
+                    self.buffers[id].auto_saved_tick = Some(tick);
+                    written += 1;
+                }
+                Err(error) => failure = Some(format!("Auto-save failed: {error}")),
+            }
+        }
+        if let Some(message) = failure {
+            self.message(message);
+        }
+        written
+    }
+
+    /// The auto-save file for the current buffer, if it exists and is not
+    /// older than the visited file.
+    fn newer_auto_save(&self) -> Option<PathBuf> {
+        let file = self.buffer().file.as_deref()?;
+        let path = self.auto_save_path(file)?;
+        let saved = modified_time(&path)?;
+        // Timestamps are coarse, so data written just after the file can
+        // carry the same time. It is removed on save, so it is still wanted.
+        let current = modified_time(file).is_none_or(|on_disk| saved >= on_disk);
+        current.then_some(path)
+    }
+
+    /// Replaces the current buffer's text with its auto-save data. The
+    /// change can be undone, and nothing is written to the visited file.
+    pub fn recover_this_file(&mut self) -> CmdResult {
+        let path = self
+            .newer_auto_save()
+            .ok_or_else(|| CmdError::msg("No auto-save data for this buffer"))?;
+        let (text, _) = read_text(&path)?;
+        let len = self.buffer().len();
+        self.delete(0..len)?;
+        self.buffer_mut().insert(0, &text.to_string())?;
+        self.set_point(0);
+        self.message("Recovered from auto-save data; save the buffer to keep it");
+        Ok(())
+    }
+
     /// The directory that file names typed by the user are relative to: the
     /// current buffer's directory, or the editor's default directory.
     pub fn working_directory(&self) -> &Path {
@@ -134,6 +242,12 @@ impl Editor {
         } else if is_new {
             self.message("(New file)");
         }
+        if self.newer_auto_save().is_some() {
+            self.message(format!(
+                "{} has auto-save data; use M-x recover-this-file",
+                self.buffer().name
+            ));
+        }
         self.run_hook("find-file-hook", Vec::new());
         Ok(())
     }
@@ -170,9 +284,11 @@ impl Editor {
                 .expect("an unused name exists");
             self.buffer_mut().name = unique;
         }
+        self.remove_auto_save(&path);
         let buffer = self.buffer_mut();
         buffer.disk_mtime = modified_time(&path);
         buffer.file = Some(path);
+        buffer.auto_saved_tick = None;
         buffer.mark_saved();
         self.message(format!("Wrote {shown}"));
         self.run_hook("after-save-hook", Vec::new());
