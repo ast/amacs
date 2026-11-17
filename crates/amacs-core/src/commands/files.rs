@@ -75,6 +75,24 @@ pub fn save_some_buffers(ed: &mut Editor) -> CmdResult {
     Ok(())
 }
 
+/// Replaces the buffer's text with what its file holds now.
+pub fn revert_buffer(ed: &mut Editor) -> CmdResult {
+    ed.forbid_in_minibuffer()?;
+    let id = ed.window().buffer;
+    if !ed.buffer().is_modified() {
+        ed.revert_buffer(id)?;
+        ed.message("Reverted");
+        return Ok(());
+    }
+    let name = ed.buffer().name.clone();
+    ed.ask_yes_no(format!("Discard the changes to {name}?"), move |ed| {
+        ed.revert_buffer(id)?;
+        ed.message("Reverted");
+        Ok(())
+    });
+    Ok(())
+}
+
 pub fn write_file(ed: &mut Editor) -> CmdResult {
     ed.forbid_in_minibuffer()?;
     let dir = default_directory(ed);

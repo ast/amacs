@@ -102,6 +102,8 @@ pub struct Buffer {
     mark: MarkerId,
     mark_set: bool,
     pub mark_active: bool,
+    /// The active region is the rectangle whose corners are point and mark.
+    pub rectangle_mark: bool,
     /// Incremented on every change to the text.
     tick: u64,
 }
@@ -137,6 +139,7 @@ impl Buffer {
             mark: markers.create(0, false),
             mark_set: false,
             mark_active: false,
+            rectangle_mark: false,
             text,
             markers,
             undo: UndoTree::new(),
@@ -462,6 +465,31 @@ impl Buffer {
         self.tick += 1;
         self.amalgamated = 0;
         Ok(Some(txn.point_before))
+    }
+
+    /// The history of the text.
+    pub fn undo_tree(&self) -> &UndoTree {
+        &self.undo
+    }
+
+    /// Takes the text to any state of its history, undoing and redoing as
+    /// needed. Returns where point should go, if anything changed.
+    pub fn undo_goto(&mut self, state: usize) -> CmdResult<Option<usize>> {
+        let path = self.undo.path_to(state);
+        let mut point = None;
+        // Back to where the way to the state branches off.
+        while !path.contains(&self.undo.current()) {
+            point = self.undo()?;
+        }
+        let reached = path
+            .iter()
+            .position(|on_path| *on_path == self.undo.current())
+            .unwrap_or(0);
+        for next in &path[reached + 1..] {
+            self.undo.choose_branch(*next);
+            point = self.redo()?;
+        }
+        Ok(point)
     }
 
     /// Redoes one transaction. Returns where point should go.

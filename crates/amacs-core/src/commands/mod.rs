@@ -3,7 +3,10 @@
 mod edit;
 mod files;
 pub(crate) mod indent;
+mod jump;
+mod misc;
 mod motion;
+mod rect;
 mod search;
 mod sexp;
 mod windows;
@@ -12,7 +15,7 @@ use crate::completion::Completion;
 use crate::editor::{CommandBody, Editor, GLOBAL_MAP, MINIBUFFER_MAP, Prefix};
 use crate::error::{CmdError, CmdResult};
 use crate::minibuffer;
-use crate::{complete, diagnostics, format, snippet};
+use crate::{complete, decorate, diagnostics, format, project, snippet, undo_view};
 
 pub(crate) use edit::delete_backward_char;
 
@@ -99,6 +102,70 @@ pub fn install(ed: &mut Editor) {
         "lsp-document-symbols" => Editor::lsp_document_symbols, "Go to a symbol of this buffer.";
         "lsp-workspace-symbols" => Editor::lsp_workspace_symbols, "Find a symbol of the project by name.";
         "direnv-reload" => direnv_reload, "Read the project environments from direnv again.";
+
+        "avy-goto-char" => jump::goto_char, "Jump to a char on screen: type it, then the label that appears on the one you mean.";
+        "avy-goto-char-2" => jump::goto_char_2, "Jump to a pair of chars on screen.";
+        "avy-goto-word" => jump::goto_word, "Jump to a word on screen by its first char.";
+        "avy-goto-line" => jump::goto_line, "Jump to a line on screen.";
+        "zap-to-char" => jump::zap_to_char, "Kill from point through a char picked on screen.";
+        "zap-up-to-char" => jump::zap_up_to_char, "Kill from point up to a char picked on screen.";
+        "ace-window" => jump::ace_window, "Select another window, by label if there are several.";
+        "windmove-left" => windows::windmove_left, "Select the window to the left.";
+        "windmove-right" => windows::windmove_right, "Select the window to the right.";
+        "windmove-up" => windows::windmove_up, "Select the window above.";
+        "windmove-down" => windows::windmove_down, "Select the window below.";
+        "enlarge-window" => windows::enlarge_window, "Make the selected window a row taller.";
+        "shrink-window" => windows::shrink_window, "Make the selected window a row shorter.";
+        "enlarge-window-horizontally" => windows::enlarge_window_horizontally, "Make the selected window a column wider.";
+        "shrink-window-horizontally" => windows::shrink_window_horizontally, "Make the selected window a column narrower.";
+        "balance-windows" => windows::balance_windows, "Give all windows the same share of the frame.";
+        "find-file-other-window" => misc::find_file_other_window, "Visit a file in another window.";
+        "switch-to-buffer-other-window" => misc::switch_to_buffer_other_window, "Show a buffer in another window.";
+        "project-find-file" => project::project_find_file, "Visit a file of the current project.";
+        "project-switch-project" => project::project_switch_project, "Pick a project visited before, then a file in it.";
+        "project-switch-to-buffer" => project::project_switch_to_buffer, "Show one of the current project's buffers.";
+        "project-kill-buffers" => project::project_kill_buffers, "Kill the buffers of the current project.";
+        "undo-tree-visualize" => undo_view::visualize, "Show the undo history as a tree to move about in.";
+        "undo-tree-backward" => undo_view::backward, "Go to the state before this one.";
+        "undo-tree-forward" => undo_view::forward, "Go to the next state on this branch.";
+        "undo-tree-next-branch" => undo_view::next_branch, "Go to the branch below.";
+        "undo-tree-previous-branch" => undo_view::previous_branch, "Go to the branch above.";
+        "undo-tree-quit" => undo_view::quit, "Leave the undo tree, keeping the text as it is.";
+        "undo-tree-abort" => undo_view::abort, "Leave the undo tree and go back to where it was opened.";
+        "kill-rectangle" => rect::kill_rectangle, "Kill the rectangle whose corners are point and mark.";
+        "copy-rectangle-as-kill" => rect::copy_rectangle, "Save the rectangle as if killed.";
+        "delete-rectangle" => rect::delete_rectangle, "Delete the rectangle whose corners are point and mark.";
+        "yank-rectangle" => rect::yank_rectangle, "Insert the last killed rectangle with its corner at point.";
+        "open-rectangle" => rect::open_rectangle, "Fill the rectangle with spaces, pushing its text right.";
+        "string-rectangle" => rect::string_rectangle, "Replace the rectangle's text on each line with a string.";
+        "rectangle-mark-mode" => rect::rectangle_mark_mode, "Mark a rectangle: the region is the columns between point and mark.";
+        "scroll-up-line" => misc::scroll_up_line, "Scroll the text up a line.";
+        "scroll-down-line" => misc::scroll_down_line, "Scroll the text down a line.";
+        "comment-or-uncomment-region" => misc::comment_or_uncomment, "Comment out the lines of the region or of point, or uncomment them.";
+        "move-text-up" => misc::move_text_up, "Move the line, or the lines of the region, up a line.";
+        "move-text-down" => misc::move_text_down, "Move the line, or the lines of the region, down a line.";
+        "back-to-indentation" => misc::back_to_indentation, "Move to the first char of the line that is not blank.";
+        "delete-horizontal-space" => misc::delete_horizontal_space, "Delete the spaces and tabs around point.";
+        "just-one-space" => misc::just_one_space, "Leave one space where there are spaces and tabs around point.";
+        "delete-indentation" => misc::delete_indentation, "Join this line to the one above.";
+        "upcase-region" => misc::upcase_region, "Make the region upper case.";
+        "downcase-region" => misc::downcase_region, "Make the region lower case.";
+        "upcase-word" => misc::upcase_word, "Make the rest of the word upper case.";
+        "downcase-word" => misc::downcase_word, "Make the rest of the word lower case.";
+        "capitalize-word" => misc::capitalize_word, "Capitalise the rest of the word.";
+        "read-only-mode" => misc::read_only_mode, "Make the buffer read-only, or editable again.";
+        "query-replace" => misc::query_replace, "Replace some occurrences of a text after point, asking at each.";
+        "symbol-next" => misc::symbol_next, "Go to the next occurrence of the symbol at point.";
+        "symbol-previous" => misc::symbol_previous, "Go to the previous occurrence of the symbol at point.";
+        "symbol-rename" => misc::symbol_rename, "Rename the symbol at point everywhere in the buffer.";
+        "bookmark-set" => misc::bookmark_set, "Remember this place in this file under a name.";
+        "bookmark-jump" => misc::bookmark_jump, "Go to a bookmark.";
+        "bookmark-delete" => misc::bookmark_delete, "Forget a bookmark.";
+        "shell-command" => misc::shell_command, "Run a shell command and show what it writes.";
+        "shell-command-on-region" => misc::shell_command_on_region, "Run a shell command on the region; with a prefix argument, replace the region with what it writes.";
+        "describe-key" => misc::describe_key, "Say which command a key sequence runs.";
+        "describe-command" => misc::describe_command, "Show what a command does and its keys.";
+        "revert-buffer" => files::revert_buffer, "Replace the buffer's text with what its file holds now.";
 
         "forward-char" => motion::forward_char, "Move point right one character.";
         "backward-char" => motion::backward_char, "Move point left one character.";
@@ -192,6 +259,55 @@ pub fn install(ed: &mut Editor) {
         ("C-M-d", "down-list"),
         ("C-M-<down>", "down-list"),
         ("C-g", "keyboard-quit"),
+        ("M-g c", "avy-goto-char"),
+        ("M-g w", "avy-goto-word"),
+        ("M-g l", "avy-goto-line"),
+        ("M-z", "zap-to-char"),
+        ("M-Z", "zap-up-to-char"),
+        ("M-o", "ace-window"),
+        ("S-<left>", "windmove-left"),
+        ("S-<right>", "windmove-right"),
+        ("S-<up>", "windmove-up"),
+        ("S-<down>", "windmove-down"),
+        ("C-x ^", "enlarge-window"),
+        ("C-x }", "enlarge-window-horizontally"),
+        ("C-x {", "shrink-window-horizontally"),
+        ("C-x +", "balance-windows"),
+        ("C-x 4 f", "find-file-other-window"),
+        ("C-x 4 b", "switch-to-buffer-other-window"),
+        ("C-x C-b", "switch-to-buffer"),
+        ("C-c p f", "project-find-file"),
+        ("C-c p p", "project-switch-project"),
+        ("C-c p b", "project-switch-to-buffer"),
+        ("C-c p k", "project-kill-buffers"),
+        ("C-c p s", "search-files"),
+        ("C-x r k", "kill-rectangle"),
+        ("C-x r M-w", "copy-rectangle-as-kill"),
+        ("C-x r d", "delete-rectangle"),
+        ("C-x r y", "yank-rectangle"),
+        ("C-x r o", "open-rectangle"),
+        ("C-x r t", "string-rectangle"),
+        ("C-x SPC", "rectangle-mark-mode"),
+        ("C-x r m", "bookmark-set"),
+        ("C-x r b", "bookmark-jump"),
+        ("M-;", "comment-or-uncomment-region"),
+        ("C-x C-;", "comment-or-uncomment-region"),
+        ("M-m", "back-to-indentation"),
+        ("M-\\", "delete-horizontal-space"),
+        ("M-SPC", "just-one-space"),
+        ("M-^", "delete-indentation"),
+        ("C-x C-u", "upcase-region"),
+        ("C-x C-l", "downcase-region"),
+        ("M-u", "upcase-word"),
+        ("M-l", "downcase-word"),
+        ("M-c", "capitalize-word"),
+        ("C-x C-q", "read-only-mode"),
+        ("M-%", "query-replace"),
+        ("M-!", "shell-command"),
+        ("M-|", "shell-command-on-region"),
+        ("C-h k", "describe-key"),
+        ("C-h f", "describe-command"),
+        ("C-h x", "describe-command"),
         ("C-M-i", "completion-at-point"),
         ("M-TAB", "completion-at-point"),
         ("M-+", "snippet-complete"),
@@ -336,6 +452,35 @@ pub fn install(ed: &mut Editor) {
     for (keys, command) in POPUP {
         popup.bind_str(keys, command);
     }
+    const UNDO_TREE: &[(&str, &str)] = &[
+        ("b", "undo-tree-backward"),
+        ("C-b", "undo-tree-backward"),
+        ("<left>", "undo-tree-backward"),
+        ("f", "undo-tree-forward"),
+        ("C-f", "undo-tree-forward"),
+        ("<right>", "undo-tree-forward"),
+        ("n", "undo-tree-next-branch"),
+        ("C-n", "undo-tree-next-branch"),
+        ("<down>", "undo-tree-next-branch"),
+        ("p", "undo-tree-previous-branch"),
+        ("C-p", "undo-tree-previous-branch"),
+        ("<up>", "undo-tree-previous-branch"),
+        ("q", "undo-tree-quit"),
+        ("RET", "undo-tree-quit"),
+        ("C-g", "undo-tree-abort"),
+    ];
+    let tree = ed.keymap_mut(undo_view::UNDO_MAP);
+    for (keys, command) in UNDO_TREE {
+        tree.bind_str(keys, command);
+    }
+    for mode in [
+        decorate::HL_LINE_MODE,
+        decorate::SYMBOL_HIGHLIGHT_MODE,
+        decorate::HL_TODO_MODE,
+        decorate::WHITESPACE_MODE,
+    ] {
+        ed.define_mode(mode, None, "");
+    }
     let fields = ed.keymap_mut(snippet::SNIPPET_MAP);
     for keys in ["TAB", "C-i"] {
         fields.bind_str(keys, "snippet-next-field");
@@ -345,6 +490,13 @@ pub fn install(ed: &mut Editor) {
     let minibuffer = ed.keymap_mut(MINIBUFFER_MAP);
     for (keys, command) in MINIBUFFER {
         minibuffer.bind_str(keys, command);
+    }
+}
+
+impl Editor {
+    /// Scrolls the selected window by a number of lines, forward if positive.
+    pub fn scroll_lines(&mut self, lines: i64) -> CmdResult {
+        misc::scroll_rows(self, lines)
     }
 }
 
@@ -420,7 +572,10 @@ fn eval_buffer(ed: &mut Editor) -> CmdResult {
 }
 
 fn execute_extended_command(ed: &mut Editor) -> CmdResult {
-    ed.read_string("M-x ", "", Completion::Command, |ed, name| {
+    // A prefix argument is for the command that is named.
+    let prefix = ed.raw_prefix();
+    ed.read_string("M-x ", "", Completion::Command, move |ed, name| {
+        ed.prefix_arg = prefix;
         ed.execute(name.trim());
         Ok(())
     })

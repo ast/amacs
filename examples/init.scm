@@ -29,9 +29,22 @@
 
 (set-option! 'tab-width 4)
 
-;; Relative line numbers in programming modes only.
+;; In programming modes: relative line numbers, the current line marked,
+;; the other occurrences of the symbol at point marked, TODO and its kin
+;; standing out, and trailing whitespace and text past column 80 shown.
 (add-hook! 'prog-mode-hook
-  (lambda () (set-local! 'line-numbers 'relative)))
+  (lambda ()
+    (set-local! 'line-numbers 'relative)
+    (enable-mode! 'hl-line-mode)
+    (enable-mode! 'symbol-highlight-mode)
+    (enable-mode! 'hl-todo-mode)
+    (enable-mode! 'whitespace-mode)))
+(add-hook! 'text-mode-hook (lambda () (enable-mode! 'hl-line-mode)))
+
+;; A project starts at the nearest of these, so that a crate or a Go module
+;; inside a larger repository is a project of its own, with its own
+;; language server.
+(set-option! 'project-root-markers '(".git" ".projectile" "Cargo.toml" "go.mod"))
 
 ;; Brackets and quotes come in pairs. In Lisp modes paredit takes over and
 ;; keeps them balanced.
@@ -155,6 +168,14 @@
   "Insert today's date as YYYY-MM-DD."
   (insert (format-current-time "%Y-%m-%d")))
 
+(define-command (scroll-up-some)
+  "Scroll the text up four lines."
+  (scroll-lines 4))
+
+(define-command (scroll-down-some)
+  "Scroll the text down four lines."
+  (scroll-lines -4))
+
 (define-command (show-file-name)
   "Show the full path of the current buffer's file."
   (message (or (buffer-file-name) "This buffer is not visiting a file")))
@@ -215,8 +236,49 @@
 (global-set-key "H-a" 'backward-paragraph)
 (global-set-key "H-e" 'forward-paragraph)
 (global-set-key "H-v" 'beginning-of-buffer)
-(global-set-key "H-o" 'find-file)
+(global-set-key "H-o" 'find-file-other-window)
 (global-set-key "H-y" 'toggle-theme)
+(global-set-key "H-f" 'forward-sexp)
+(global-set-key "H-b" 'backward-sexp)
+(global-set-key "H-u" 'backward-up-list)
+(global-set-key "H-d" 'down-list)
+(global-set-key "H-k" 'kill-sexp)
+(global-set-key "H-j" 'bookmark-jump)
+(global-set-key "H-m" 'bookmark-set)
+(global-set-key "H-!" 'shell-command-on-region)
+(global-set-key "H-r" 'read-only-mode)
+(global-set-key "H-p" 'scroll-down-some)
+(global-set-key "H-n" 'scroll-up-some)
+(global-set-key "H-<left>" 'shrink-window-horizontally)
+(global-set-key "H-<right>" 'enlarge-window-horizontally)
+(global-set-key "H-<down>" 'shrink-window)
+(global-set-key "H-<up>" 'enlarge-window)
+
+(global-set-key "C-c -" 'comment-or-uncomment-region)
+(global-set-key "C-c h k" 'describe-key)
+(global-set-key "C-c h f" 'describe-command)
+(global-set-key "C-c h x" 'describe-command)
+
+;; Windows: move between them with Ctrl and an arrow, or M-o.
+(global-set-key "C-<left>" 'windmove-left)
+(global-set-key "C-<right>" 'windmove-right)
+(global-set-key "C-<up>" 'windmove-up)
+(global-set-key "C-<down>" 'windmove-down)
+
+;; Jumping: type the key, then a char, then the label on the place meant.
+(global-set-key "C-ö" 'avy-goto-char)
+(global-set-key "M-ö" 'avy-goto-char)
+(global-set-key "C-ä" 'avy-goto-char-2)
+(global-set-key "M-ä" 'avy-goto-char-2)
+(global-set-key "C-å" 'avy-goto-line)
+(global-set-key "M-å" 'avy-goto-line)
+
+(global-set-key "C-x u" 'undo-tree-visualize)
+(global-set-key "C-S-p" 'move-text-up)
+(global-set-key "C-S-n" 'move-text-down)
+(global-set-key "C-c s n" 'symbol-next)
+(global-set-key "C-c s p" 'symbol-previous)
+(global-set-key "C-c s r" 'symbol-rename)
 
 (global-set-key "C-x C-." 'xref-find-definitions)
 (global-set-key "C-x C-," 'xref-go-back)
@@ -243,10 +305,16 @@
 ;;   M-.  M-,  M-?  definitions, back, references
 ;;   C-M-i    completion-at-point; completions also pop up as you type
 ;;   C-c C-f  format-buffer         C-x s  save-some-buffers
+;; Projects, as with projectile:
+;;   C-c p f  a file of the project   C-c p p  another project
+;;   C-c p b  a buffer of the project C-c p k  kill its buffers
+;;   C-c p s  search-files
+;; Also: M-o ace-window, M-z and M-Z zap, M-g w a word by its first char,
+;; C-x SPC and C-x r k, y, d, t, o for rectangles, M-% query-replace,
+;; M-; comments, M-! and M-| shell commands, C-x r m and C-x r b bookmarks.
 
 ;;; Not available yet. These wait for later milestones:
-;;;   bookmarks, ibuffer, window resizing and windmove
-;;;   scrolling without moving point (H-p, H-n)
+;;;   ibuffer, repeat (H-z), help beyond describe-key and describe-command
 ;;;   rainbow delimiters, matching-bracket highlight
 ;;;   the breadcrumb header line, the debugger, Copilot
 ;;;   git, the file manager

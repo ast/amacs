@@ -274,41 +274,36 @@ fn m_x_narrows_commands_as_words_are_typed() {
 fn the_selection_moves_through_the_candidates_and_onto_the_input() {
     let mut h = Harness::new(70, 16);
     h.keys("M-x").type_text("kill-");
-    assert_eq!(h.prompt(), "1/10 M-x kill-");
-    let mut names: Vec<String> = h
-        .candidates()
-        .iter()
-        .map(|row| row.split_whitespace().next().unwrap().to_owned())
+    // Every command with the word in its name, wherever it is.
+    let mut expected: Vec<String> = h
+        .editor
+        .command_names()
+        .filter(|name| name.contains("kill-"))
+        .map(str::to_owned)
         .collect();
-    names.sort();
-    assert_eq!(
-        names,
-        [
-            "backward-kill-sexp",
-            "backward-kill-word",
-            "kill-buffer",
-            "kill-editor",
-            "kill-line",
-            "kill-region",
-            "kill-ring-save",
-            "kill-sexp",
-            "kill-word",
-            "save-buffers-kill-terminal"
-        ],
-        "a word matches anywhere in a name"
-    );
+    expected.sort();
+    let count = expected.len();
+    assert!(count > 10, "more than fit on screen");
+    assert!(expected.contains(&"save-buffers-kill-terminal".to_owned()));
+    assert_eq!(h.prompt(), format!("1/{count} M-x kill-"));
+    let shown = h.candidates();
+    assert_eq!(shown.len(), 10, "ten at a time");
+    for row in &shown {
+        let name = row.split_whitespace().next().unwrap().to_owned();
+        assert!(expected.contains(&name), "{name}");
+    }
     // The selected candidate has the highlight.
     assert_ne!(h.screen.face_at(6, 0).bg, h.screen.face_at(7, 0).bg);
 
     h.keys("C-n C-n");
-    assert_eq!(h.prompt(), "3/10 M-x kill-");
+    assert_eq!(h.prompt(), format!("3/{count} M-x kill-"));
     assert_ne!(h.screen.face_at(8, 0).bg, h.screen.face_at(7, 0).bg);
     h.keys("M->");
-    assert_eq!(h.prompt(), "10/10 M-x kill-");
+    assert_eq!(h.prompt(), format!("{count}/{count} M-x kill-"));
     h.keys("M-< C-p");
     assert_eq!(
         h.prompt(),
-        "*/10 M-x kill-",
+        format!("*/{count} M-x kill-"),
         "above the first candidate, the input is selected"
     );
     h.keys("RET");

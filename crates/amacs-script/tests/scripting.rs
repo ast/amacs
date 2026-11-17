@@ -509,7 +509,7 @@ fn the_scheme_test_suite_passes() {
         .load_file(std::path::Path::new(tests))
         .unwrap_or_else(|e| panic!("{}", e.report));
     let result = h.eval("(run-tests)");
-    assert_eq!(result, "(25)", "failures are listed after the pass count");
+    assert_eq!(result, "(27)", "failures are listed after the pass count");
     assert_eq!(h.mode_line(), " --  *scratch*   L1 C0  (Fundamental)");
 }
 

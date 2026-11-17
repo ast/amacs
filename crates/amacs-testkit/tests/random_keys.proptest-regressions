@@ -8,3 +8,4 @@ cc c6b20da558d504b9fd1d1ea8ab8bc6ef911c4db826d633b1793a524497cf8161 # shrinks to
 cc 80aebb5a3096ff419fbeb60644e73d29cbd1c830dd21d3d2eeb3c3e3b68bb5cf # shrinks to keys = ["日", "a", "a", "a", "a", "a", "a", "a", "a", "a"], cols = 2, rows = 4
 cc c321d6372cc7fcf3a7b46938280d42ff2d83fc482d838e11b8d3b80baa4a7c31 # shrinks to keys = ["ESC", "C-x C-x", "C-f", "b", "RET"]
 cc 22b14dfa1f17495d94253cb64c03516285bfa1b969b37d0a82275f894b7562fd # shrinks to keys = ["C-x h", "]", "/", "]", "[", "DEL", "[", ")", "x", ";", ";", "/", ";", ";", ";", "{"], language = "bash", paredit = false
+cc cb07bee558d568cabde5051c7d3d245f0a4c47a82363eb39492b933d01ae14da # shrinks to keys = ["C-SPC", "a", "M-DEL", "M-y", "M-g l"]

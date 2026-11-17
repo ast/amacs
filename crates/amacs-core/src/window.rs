@@ -138,6 +138,105 @@ impl Layout {
         true
     }
 
+    fn contains(&self, target: WindowId) -> bool {
+        match self {
+            Layout::Leaf(id) => *id == target,
+            Layout::Split { children, .. } => {
+                children.iter().any(|(_, child)| child.contains(target))
+            }
+        }
+    }
+
+    /// The rows or columns this part of the layout takes up, going by the
+    /// areas its windows have now.
+    fn extent(&self, dir: SplitDir, rect_of: &dyn Fn(WindowId) -> Rect) -> f32 {
+        match self {
+            Layout::Leaf(id) => {
+                let rect = rect_of(*id);
+                f32::from(match dir {
+                    SplitDir::Below => rect.h,
+                    SplitDir::Right => rect.w,
+                })
+            }
+            Layout::Split {
+                dir: own_dir,
+                children,
+            } => {
+                let extents = children.iter().map(|(_, child)| child.extent(dir, rect_of));
+                if *own_dir == dir {
+                    extents.sum()
+                } else {
+                    extents.fold(0.0, f32::max)
+                }
+            }
+        }
+    }
+
+    /// Grows `target` by `delta` cells in the direction of `dir`, at the
+    /// cost of the window after it, or before it for the last one.
+    /// `rect_of` gives the area each window has now. Returns false if no
+    /// split in that direction holds the window, or a window would get too
+    /// small.
+    pub fn resize(
+        &mut self,
+        target: WindowId,
+        dir: SplitDir,
+        delta: i64,
+        rect_of: &dyn Fn(WindowId) -> Rect,
+    ) -> bool {
+        /// Rows or columns a window keeps at least.
+        const MINIMUM: f32 = 3.0;
+        let Layout::Split {
+            dir: own_dir,
+            children,
+        } = self
+        else {
+            return false;
+        };
+        let Some(index) = children
+            .iter()
+            .position(|(_, child)| child.contains(target))
+        else {
+            return false;
+        };
+        // A split nearer the window takes the change, if there is one.
+        if children[index].1.resize(target, dir, delta, rect_of) {
+            return true;
+        }
+        if *own_dir != dir || children.len() < 2 {
+            return false;
+        }
+        let other = if index + 1 < children.len() {
+            index + 1
+        } else {
+            index - 1
+        };
+        // The shares become the sizes the children have, with the change.
+        let mut sizes: Vec<f32> = children
+            .iter()
+            .map(|(_, child)| child.extent(dir, rect_of))
+            .collect();
+        sizes[index] += delta as f32;
+        sizes[other] -= delta as f32;
+        if sizes[index] < MINIMUM || sizes[other] < MINIMUM {
+            return false;
+        }
+        for ((weight, _), size) in children.iter_mut().zip(sizes) {
+            *weight = size;
+        }
+        true
+    }
+
+    /// Gives the children of every split equal shares.
+    pub fn balance(&mut self) {
+        if let Layout::Split { children, .. } = self {
+            for (weight, child) in children {
+                *weight = 1.0;
+                child.balance();
+            }
+        }
+    }
+
     /// Assigns each window its area within `rect`. With `border`, the last
     /// column of `rect` is a divider that belongs to the windows along its
     /// right edge, and is not part of their own areas.

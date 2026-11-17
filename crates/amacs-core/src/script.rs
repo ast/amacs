@@ -245,6 +245,21 @@ impl ScriptState {
                 "Whether saving a buffer formats it first.",
             ),
             (
+                "project-root-markers",
+                Value::List(vec![Value::str(".git"), Value::str(".projectile")]),
+                "Names of the files and directories that mark the root of a project. The nearest one above a file decides.",
+            ),
+            (
+                "auto-revert",
+                Value::Bool(true),
+                "Whether a buffer without changes is read again when its file changes on disk.",
+            ),
+            (
+                "whitespace-line-column",
+                Value::Int(80),
+                "The column that whitespace-mode marks text beyond.",
+            ),
+            (
                 "lsp-idle-delay",
                 Value::Int(300),
                 "Milliseconds point rests before what is under it is described; negative for never.",
@@ -419,6 +434,11 @@ impl Editor {
             .ok_or_else(|| CmdError::msg(format!("Unknown option: {name}")))
     }
 
+    /// The value of an option in a given buffer.
+    pub(crate) fn option_for(&self, buffer: BufferId, name: &str) -> Option<Value> {
+        self.option_in(buffer, name)
+    }
+
     fn option_in(&self, buffer: BufferId, name: &str) -> Option<Value> {
         let def = self.script.options.get(name)?;
         let value = self.buffers[buffer]
@@ -580,6 +600,9 @@ impl Editor {
         }
         if self.snippet_active() {
             names.push(crate::snippet::SNIPPET_MAP);
+        }
+        if self.undo_view_active() {
+            names.push(crate::undo_view::UNDO_MAP);
         }
         names.extend(buffer.minor_modes.iter().rev().map(String::as_str));
         names.extend(

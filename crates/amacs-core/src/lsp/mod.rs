@@ -23,7 +23,7 @@ use crate::editor::Editor;
 use crate::env::EnvState;
 use crate::error::{CmdError, CmdResult};
 use crate::faces::Severity;
-use crate::files::{abbreviate_path, project_root};
+use crate::files::abbreviate_path;
 use crate::script::Value;
 
 pub(crate) use edits::char_range;
@@ -325,7 +325,7 @@ impl Editor {
             return Ok(());
         };
         let directory = file.parent().unwrap_or(Path::new("/")).to_owned();
-        let root = project_root(&directory);
+        let root = self.project_root(&directory);
 
         let existing = self
             .lsp

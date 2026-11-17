@@ -92,15 +92,6 @@ fn write_auto_save(path: &Path, text: &Text) -> io::Result<()> {
     write_atomically(path, text)
 }
 
-/// The top directory of the project that `dir` is in: the nearest one that
-/// holds a `.projectile` file or a `.git` entry, or `dir` itself.
-pub fn project_root(dir: &Path) -> PathBuf {
-    dir.ancestors()
-        .find(|ancestor| ancestor.join(".projectile").exists() || ancestor.join(".git").exists())
-        .unwrap_or(dir)
-        .to_owned()
-}
-
 pub fn modified_time(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }
@@ -214,6 +205,81 @@ impl Editor {
         Ok(())
     }
 
+    /// Reads a buffer's file again, replacing the text and forgetting its
+    /// undo history. Windows keep their place by line and column.
+    pub fn revert_buffer(&mut self, id: BufferId) -> CmdResult {
+        let file = self.buffers[id]
+            .file
+            .clone()
+            .ok_or_else(|| CmdError::msg("This buffer does not visit a file"))?;
+        let (text, lossy) = read_text(&file).map_err(|error| {
+            CmdError::msg(format!("Cannot read {}: {error}", abbreviate_path(&file)))
+        })?;
+        // Where each window showing the buffer is, as lines and a column.
+        let places: Vec<(crate::window::WindowId, usize, usize, usize)> = self
+            .windows
+            .iter()
+            .filter(|(_, window)| window.buffer == id)
+            .map(|(window_id, window)| {
+                let buffer = &self.buffers[id];
+                let old = buffer.text();
+                let point = buffer.marker(window.point);
+                let line = old.line_of(point);
+                let start_line = old.line_of(buffer.marker(window.start));
+                (window_id, line, point - old.line_start(line), start_line)
+            })
+            .collect();
+        let buffer = &mut self.buffers[id];
+        buffer.reset(text);
+        buffer.read_only = lossy;
+        buffer.disk_mtime = modified_time(&file);
+        buffer.auto_saved_tick = None;
+        let place = |text: &Text, line: usize, column: usize| {
+            let line = line.min(text.len_lines() - 1);
+            (text.line_start(line) + column).min(text.line_end(line))
+        };
+        for (window_id, line, column, start_line) in places {
+            let window = &self.windows[window_id];
+            let (point, start) = (window.point, window.start);
+            let buffer = &mut self.buffers[id];
+            let pos = place(buffer.text(), line, column);
+            buffer.set_marker(point, pos);
+            let pos = place(buffer.text(), start_line, 0);
+            buffer.set_marker(start, pos);
+        }
+        Ok(())
+    }
+
+    /// Reads again the files that another program has changed, for buffers
+    /// that have no changes of their own to lose.
+    pub(crate) fn auto_revert(&mut self) {
+        if !matches!(
+            self.option("auto-revert"),
+            Ok(value) if value != crate::script::Value::Bool(false)
+        ) {
+            return;
+        }
+        let changed: Vec<BufferId> = self
+            .buffers
+            .iter()
+            .filter(|(_, buffer)| {
+                let Some(file) = buffer.file.as_deref() else {
+                    return false;
+                };
+                let on_disk = modified_time(file);
+                !buffer.is_modified() && on_disk.is_some() && on_disk != buffer.disk_mtime
+            })
+            .map(|(id, _)| id)
+            .collect();
+        for id in changed {
+            let name = self.buffers[id].name.clone();
+            match self.revert_buffer(id) {
+                Ok(()) => self.message(format!("Reverted {name}: its file changed on disk")),
+                Err(error) => self.message(error.to_string()),
+            }
+        }
+    }
+
     /// The directory that file names typed by the user are relative to: the
     /// current buffer's directory, or the editor's default directory.
     pub fn working_directory(&self) -> &Path {
@@ -277,6 +343,7 @@ impl Editor {
         let mut buffer = Buffer::with_text(name, text);
         buffer.disk_mtime = modified_time(&path);
         self.history.visit(&path);
+        self.note_project(&path);
         buffer.file = Some(path);
         buffer.read_only = lossy;
         buffer.needs_file_hook = true;

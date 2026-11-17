@@ -351,6 +351,9 @@ impl Editor {
         } else {
             self.frame().layout.leaves()[0]
         };
+        // The windows get back the rows the candidates took, before what
+        // was asked for is done with them.
+        self.relayout();
         Some(state)
     }
 

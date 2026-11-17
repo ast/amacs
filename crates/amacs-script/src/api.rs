@@ -587,6 +587,17 @@ pub const API: &[ApiFn] = api! {
             Ok(Value::List(names.into_iter().map(|(name, _)| Value::from(name)).collect()))
         };
 
+    "scroll-lines" (1, Some(1)) "Scroll the selected window by a number of lines, forward if positive. Point moves only to stay in view." =>
+        |ed, args| {
+            ed.scroll_lines(int(args, 0)?)?;
+            Ok(Value::Void)
+        };
+    "project-root" (0, Some(0)) "Root directory of the current buffer's project, or #f if it is in none." =>
+        |ed, _| {
+            let root = ed.project_of(ed.working_directory());
+            Ok(root.map(|root| root.display().to_string()).into())
+        };
+
     // The editor itself
 
     "press-keys" (1, Some(1)) "Feed a key sequence to the editor as if typed. Built-in commands run at once; commands defined in Scheme run after the caller returns." =>

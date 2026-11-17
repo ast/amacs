@@ -10,7 +10,7 @@ use crate::buffer::Buffer;
 use crate::completion::{Candidate, Completion, parse_search_value};
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
-use crate::files::{abbreviate_path, expand_path, project_root};
+use crate::files::{abbreviate_path, expand_path};
 use crate::minibuffer::{Accepted, dismiss_minibuffer};
 
 /// Picks a line of the buffer by its text and goes to it. The window follows
@@ -98,7 +98,7 @@ pub fn search_files(ed: &mut Editor) -> CmdResult {
             "Searching files needs ripgrep (rg), which is not installed",
         ));
     }
-    let directory = project_root(ed.working_directory());
+    let directory = ed.project_root(ed.working_directory());
     let prompt = format!("Search {}: ", abbreviate_path(&directory));
     let completion = Completion::Grep { directory };
     ed.read_candidate(prompt, "", completion, |ed, accepted| {

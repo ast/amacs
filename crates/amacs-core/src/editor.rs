@@ -12,6 +12,7 @@ use crate::buffer::{Buffer, BufferId};
 use crate::commands;
 use crate::complete::CompletionState;
 use crate::completion::Waker;
+use crate::decorate::Labels;
 use crate::env::{EnvState, Environments};
 use crate::error::{CmdError, CmdResult};
 use crate::faces::Faces;
@@ -24,6 +25,7 @@ use crate::lsp::LspState;
 use crate::minibuffer::MinibufferState;
 use crate::script::{ScriptCall, ScriptFn, ScriptState, ScriptTarget, Value};
 use crate::snippet::ActiveSnippet;
+use crate::undo_view::UndoView;
 use crate::window::{Rect, Window, WindowId};
 
 /// What running a command does.
@@ -76,6 +78,18 @@ impl Prefix {
 }
 
 type KeyAnswer = Box<dyn FnOnce(&mut Editor, Key) -> CmdResult>;
+
+/// What a key sequence does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyMeaning {
+    Command(String),
+    /// It is the start of longer sequences.
+    Prefix,
+    Unbound,
+}
+
+/// How often files are checked for changes made by other programs.
+const AUTO_REVERT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A question waiting for a single key.
 pub(crate) struct KeyPrompt {
@@ -143,6 +157,16 @@ pub struct Editor {
     /// Snippets by the mode they belong to, each a name and its template.
     pub(crate) snippets: HashMap<String, Vec<(String, Vec<Value>)>>,
     pub(crate) formatters: HashMap<String, Formatter>,
+    /// Labels of places to jump to, while the user picks one.
+    pub(crate) labels: Option<Labels>,
+    /// The undo history being shown as a tree.
+    pub(crate) undo_view: Option<UndoView>,
+    /// The rectangle last killed or copied, a string per line.
+    pub(crate) killed_rectangle: Vec<String>,
+    /// Set by commands that edit and want the region to stay active.
+    pub(crate) keep_mark: bool,
+    /// When to look again for files that changed on disk.
+    auto_revert_due: Option<Instant>,
     pending_keys: Vec<Key>,
     esc_pending: bool,
     /// Prefix argument for the next command.
@@ -203,6 +227,11 @@ impl Editor {
             snippet: None,
             snippets: HashMap::new(),
             formatters: HashMap::new(),
+            labels: None,
+            undo_view: None,
+            killed_rectangle: Vec::new(),
+            keep_mark: false,
+            auto_revert_due: None,
             pending_keys: Vec::new(),
             esc_pending: false,
             prefix_arg: None,
@@ -283,6 +312,7 @@ impl Editor {
         self.current_prefix = self.prefix_arg.take();
         self.this_command = Some(name.to_owned());
         self.keep_goal = false;
+        self.keep_mark = false;
         let run = match body {
             CommandBody::Native(run) => run,
             CommandBody::Script(func) => {
@@ -315,10 +345,14 @@ impl Editor {
         let amalgamate = self.this_command.as_deref() == Some(SELF_INSERT)
             && self.last_command.as_deref() == Some(SELF_INSERT);
         self.end_undo_step(amalgamate);
-        if let Some(buf) = self.buffers.get_mut(buffer)
-            && buf.tick() != tick
-        {
-            buf.mark_active = false;
+        let keep_mark = std::mem::take(&mut self.keep_mark);
+        if let Some(buf) = self.buffers.get_mut(buffer) {
+            if buf.tick() != tick && !keep_mark {
+                buf.mark_active = false;
+            }
+            if !buf.mark_active {
+                buf.rectangle_mark = false;
+            }
         }
         if !self.keep_goal {
             self.window_mut().goal_col = None;
@@ -330,6 +364,7 @@ impl Editor {
         // recorded as the last command.
         let command = self.this_command.take();
         if is_command {
+            self.undo_view_after_command(command.as_deref());
             self.snippet_after_command(command.as_deref());
             self.completion_after_command(command.as_deref());
         }
@@ -439,8 +474,9 @@ impl Editor {
 
         if let Some(question) = self.key_prompt.take() {
             self.prompt_frame = None;
-            let result = (question.answer)(self, key);
-            self.report(result);
+            // What the answer does is a command like any other: an undo
+            // step of its own, and the servers told of its edits.
+            self.execute_with("answer-question", |ed| (question.answer)(ed, key));
             return;
         }
 
@@ -584,6 +620,8 @@ impl Editor {
                 self.reject_promise(id);
             }
         }
+        // Labels are only there for a question about them.
+        self.labels = None;
     }
 
     /// Abandons all input in progress: a key sequence, a prefix argument, a
@@ -608,6 +646,10 @@ impl Editor {
         self.environment_poll();
         self.lsp_poll(now);
         self.completion_poll(now);
+        if self.auto_revert_due.is_none_or(|due| due <= now) {
+            self.auto_revert_due = Some(now + AUTO_REVERT_INTERVAL);
+            self.auto_revert();
+        }
         if self.key_hint_due.is_some_and(|due| due <= now) {
             self.key_hint_due = None;
             self.show_key_hint();
@@ -621,6 +663,7 @@ impl Editor {
             self.minibuffer_deadline(),
             self.completion.due,
             self.lsp.idle_due,
+            self.auto_revert_due,
         ]
         .into_iter()
         .flatten()
@@ -893,6 +936,50 @@ impl Editor {
     pub fn current_kill(&mut self) -> Option<String> {
         self.import_clipboard();
         self.kill_ring.current().map(str::to_owned)
+    }
+
+    /// What a key sequence does in the current buffer.
+    pub fn key_lookup(&self, keys: &[Key]) -> KeyMeaning {
+        let maps: Vec<&Keymap> = self
+            .active_keymaps()
+            .into_iter()
+            .filter_map(|name| self.keymaps.get(name))
+            .collect();
+        match lookup_in(&maps, keys) {
+            Lookup::Command(name) => KeyMeaning::Command(name.to_owned()),
+            Lookup::Prefix => KeyMeaning::Prefix,
+            Lookup::Unbound => KeyMeaning::Unbound,
+        }
+    }
+
+    /// The key sequences that run a command in the current buffer.
+    pub fn keys_for(&self, command: &str) -> Vec<String> {
+        fn collect(map: &Keymap, prefix: &mut Vec<Key>, command: &str, out: &mut Vec<Vec<Key>>) {
+            for (key, shown) in map.entries(prefix) {
+                prefix.push(key);
+                if shown == command {
+                    out.push(prefix.clone());
+                } else if shown == "+prefix" {
+                    collect(map, prefix, command, out);
+                }
+                prefix.pop();
+            }
+        }
+        let mut found = Vec::new();
+        for name in self.active_keymaps() {
+            if let Some(map) = self.keymaps.get(name) {
+                collect(map, &mut Vec::new(), command, &mut found);
+            }
+        }
+        // Only those that an earlier keymap does not give another meaning.
+        let mut keys: Vec<String> = found
+            .into_iter()
+            .filter(|keys| self.key_lookup(keys) == KeyMeaning::Command(command.to_owned()))
+            .map(|keys| describe_keys(&keys))
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys
     }
 
     /// The command that a key sequence runs in the current buffer, if it is

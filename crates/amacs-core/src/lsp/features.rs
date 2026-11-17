@@ -325,18 +325,23 @@ impl Editor {
 
     /// Shows text in the help buffer, in another window.
     fn show_help(&mut self, text: &str) {
-        let id = match self.find_buffer(HELP_BUFFER) {
+        let shown = self.show_text(HELP_BUFFER, text);
+        self.report(shown);
+    }
+
+    /// Shows text in a read-only buffer of the given name, in another window.
+    pub(crate) fn show_text(&mut self, name: &str, text: &str) -> CmdResult {
+        let id = match self.find_buffer(name) {
             Some(id) => id,
             None => {
-                let mut buffer = Buffer::new(HELP_BUFFER);
+                let mut buffer = Buffer::new(name);
                 buffer.read_only = true;
                 self.add_buffer(buffer)
             }
         };
         self.buffers[id].reset(amacs_text::Text::from(text));
         self.buffers[id].save_view(0, 0);
-        let shown = self.show_in_other_window(id);
-        self.report(shown);
+        self.show_in_other_window(id)
     }
 
     // Rename

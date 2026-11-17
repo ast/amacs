@@ -73,6 +73,15 @@ impl History {
         self.dirty = true;
     }
 
+    /// Forgets the inputs of one kind that `matches` holds for.
+    pub fn remove(&mut self, kind: &str, matches: impl Fn(&str) -> bool) {
+        if let Some(entries) = self.inputs.get_mut(kind) {
+            let before = entries.len();
+            entries.retain(|entry| !matches(entry));
+            self.dirty |= entries.len() != before;
+        }
+    }
+
     /// Recently visited files, most recent first.
     pub fn recent_files(&self) -> &[PathBuf] {
         &self.recent_files

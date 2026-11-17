@@ -5,7 +5,7 @@ language. The goal is a daemon with thin terminal and Wayland frontends.
 
 ## Status
 
-Milestones M0 to M7 of the plan are done: the editor runs in a terminal or a
+Milestones M0 to M8 of the plan are done: the editor runs in a terminal or a
 Wayland window, alone or as a server with any number of clients, edits files
 with syntax highlighting, indentation and language servers, and is extended
 in Scheme.
@@ -27,6 +27,8 @@ Working now:
   line numbers, paired delimiters and paredit (below)
 - Language servers: diagnostics, completion, definitions and references,
   rename, code actions, symbols; snippets; formatting on save; direnv (below)
+- Projects, jumping by label, the undo history as a tree, rectangles,
+  marks over the text, files re-read when they change on disk (below)
 - A server (`amacs --daemon`) with `amacsclient` for frames, files and
   `--eval`; auto-save with recovery after a crash
 - A Wayland window (`amacs-gui`, or `amacsclient -c`) with shaped text,
@@ -207,6 +209,67 @@ editor's own environment does not change. The first file of a project waits
 for direnv before its server starts, and the mode line says so. A blocked
 `.envrc` is reported; run `direnv allow` and then `M-x direnv-reload` and
 `M-x lsp-restart`. Set the option `use-direnv` to `#f` to do without.
+
+## Getting about
+
+**Jumping by label**, as avy does: `M-g c` and a char puts a label on every
+place on screen with that char; pressing the label goes there. The nearest
+places get one key, the rest two. `M-g w` takes the first char of a word,
+`M-g l` labels the lines, and `avy-goto-char-2` takes two chars. `M-z` and
+`M-Z` kill from point through, or up to, a char picked the same way.
+
+**Windows**: `M-o` selects another window, by label when there are more than
+two. `S-<arrow>` selects the window in that direction. `C-x ^`, `C-x }` and
+`C-x {` resize, `C-x +` evens out, and `C-x 4 f` and `C-x 4 b` open a file
+or buffer in another window.
+
+**Projects**, with the keys of projectile: `C-c p f` picks a file of the
+project, `C-c p p` another project visited before, `C-c p b` one of the
+project's buffers, `C-c p k` kills them, and `C-c p s` searches. A project
+starts at the nearest directory above a file that holds one of the names in
+the `project-root-markers` option (`.git` and `.projectile` unless changed);
+language servers start there too. Listing files uses ripgrep, so ignored
+files are left out.
+
+**The undo tree**: `M-x undo-tree-visualize` shows the history under the echo
+area. Undoing and then editing starts a new branch and keeps the old one.
+`b` and `f` step back and forward, `p` and `n` cross to another branch, `q`
+keeps the text as it is, and `C-g` returns to where you started.
+
+**Rectangles**: `C-x SPC` marks one, shown as the columns between point and
+mark; `C-w` and `M-w` then kill and copy it. With an ordinary region,
+`C-x r k`, `C-x r M-w`, `C-x r d`, `C-x r o` and `C-x r t` kill, copy,
+delete, open and fill the rectangle between point and mark, and `C-x r y`
+yanks the last one.
+
+**Bookmarks**: `C-x r m` names a place in a file and `C-x r b` returns to
+one. They are kept across sessions.
+
+## Smaller things
+
+Four minor modes lay marks over the text. Turn them on in a mode hook with
+`(enable-mode! 'hl-line-mode)` and so on:
+
+| Mode | Marks |
+|---|---|
+| `hl-line-mode` | The line point is on |
+| `symbol-highlight-mode` | The other occurrences of the symbol at point |
+| `hl-todo-mode` | TODO, FIXME, NOTE and their kin, in comments |
+| `whitespace-mode` | Trailing whitespace and text past `whitespace-line-column` |
+
+`symbol-next` and `symbol-previous` step through the occurrences of the
+symbol at point, and `symbol-rename` renames it throughout the buffer.
+
+A buffer without changes is read again when another program changes its
+file, within five seconds; the echo area says so. Set the `auto-revert`
+option to `#f` to stop that. `M-x revert-buffer` does it on demand.
+
+Editing: `M-%` query-replace, `M-;` comment or uncomment the region or line,
+`move-text-up` and `move-text-down`, `M-u`, `M-l` and `M-c` for letter case,
+`C-x C-u` and `C-x C-l` for the region, `M-m`, `M-^`, `M-\` and `M-SPC`,
+`C-x C-q` read-only, `M-!` and `M-|` for shell commands (with `C-u`, the
+output replaces the region), and `scroll-up-line` and `scroll-down-line`.
+`C-h k` says what a key runs and `C-h f` what a command does.
 
 ## Themes
 

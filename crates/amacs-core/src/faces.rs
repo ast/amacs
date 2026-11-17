@@ -5,6 +5,7 @@
 //! face. The four Modus themes are built in; more can be defined from
 //! Scheme.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use amacs_proto::{Color, FaceAttrs, FaceId};
@@ -33,7 +34,19 @@ pub const POPUP_ANNOTATION: FaceId = FaceId(13);
 /// How text with an error, a warning or a note is marked. These are laid
 /// over the face the text has anyway; see [`Faces::diagnostic`].
 pub const DIAGNOSTIC_ERROR: FaceId = FaceId(14);
-const FIRST_SYNTAX: u32 = 17;
+/// The line that point is on.
+pub const HL_LINE: FaceId = FaceId(17);
+/// Other occurrences of the symbol at point.
+pub const SYMBOL_HIGHLIGHT: FaceId = FaceId(18);
+pub const TRAILING_WHITESPACE: FaceId = FaceId(19);
+/// Text beyond the column where lines are meant to end.
+pub const LONG_LINE: FaceId = FaceId(20);
+/// Words such as TODO in comments.
+pub const TODO: FaceId = FaceId(21);
+/// The keys to press to jump somewhere, and the text they are shown over.
+pub const JUMP_LABEL: FaceId = FaceId(22);
+pub const JUMP_BACKGROUND: FaceId = FaceId(23);
+const FIRST_SYNTAX: u32 = 24;
 
 /// How serious a diagnostic is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -163,6 +176,16 @@ fn built_in_faces() -> Vec<(String, FaceSpec)> {
             "diagnostic-note",
             face("", "").underlined_in("underline-note"),
         ),
+        ("hl-line", face("", "bg-hl-line")),
+        ("symbol-highlight", face("", "bg-cyan-subtle")),
+        ("trailing-whitespace", face("", "bg-space-err")),
+        ("long-line", face("warning", "bg-yellow-nuanced")),
+        ("todo", face("err", "").bold()),
+        (
+            "jump-label",
+            face("fg-search-current", "bg-search-current").bold(),
+        ),
+        ("jump-background", face("fg-dim", "")),
     ];
     for highlight in Highlight::ALL {
         let spec = match highlight {
@@ -227,8 +250,19 @@ pub struct Faces {
     current: usize,
     /// Palette entries that replace those of whichever theme is loaded.
     overrides: HashMap<String, String>,
-    /// Changes whenever the face table does.
+    /// Changes whenever a face or the theme does.
     version: u64,
+    cache: RefCell<Cache>,
+}
+
+/// The resolved faces, and those made by laying faces over one another.
+#[derive(Default)]
+struct Cache {
+    /// The version the cache was built for.
+    version: u64,
+    /// The faces themselves and then the combinations, by [`FaceId`].
+    table: Vec<FaceAttrs>,
+    combined: HashMap<(FaceId, Vec<FaceId>), FaceId>,
 }
 
 impl Default for Faces {
@@ -250,6 +284,7 @@ impl Default for Faces {
             current,
             overrides: HashMap::new(),
             version: 1,
+            cache: RefCell::default(),
         }
     }
 }
@@ -349,53 +384,108 @@ impl Faces {
         None
     }
 
+    /// The attributes of one face as its spec gives them: `None` where the
+    /// spec leaves a colour open.
+    fn resolved(&self, spec: &FaceSpec) -> FaceAttrs {
+        let resolve = |name: &Option<String>| name.as_deref().and_then(|name| self.color(name));
+        FaceAttrs {
+            fg: resolve(&spec.fg),
+            bg: resolve(&spec.bg),
+            bold: spec.bold,
+            italic: spec.italic,
+            underline: spec.underline,
+            inverse: false,
+            underline_color: resolve(&spec.underline_color),
+            box_color: resolve(&spec.box_color),
+        }
+    }
+
+    /// Runs `f` on the cache, rebuilt first if a face or the theme changed.
+    fn with_cache<T>(&self, f: impl FnOnce(&mut Cache) -> T) -> T {
+        let mut cache = self.cache.borrow_mut();
+        if cache.version != self.version {
+            let default = self.resolved(&self.faces[0].1);
+            // A face without a colour of its own has the default face's.
+            cache.table = self
+                .faces
+                .iter()
+                .map(|(_, spec)| {
+                    let attrs = self.resolved(spec);
+                    FaceAttrs {
+                        fg: attrs.fg.or(default.fg),
+                        bg: attrs.bg.or(default.bg),
+                        ..attrs
+                    }
+                })
+                .collect();
+            cache.combined.clear();
+            cache.version = self.version;
+        }
+        f(&mut cache)
+    }
+
+    /// The face for text in face `base` with the faces in `over` laid over
+    /// it, first to last: each replaces the colours it has and adds its
+    /// weight, slant and underline. Combinations are faces of their own,
+    /// made as they are first asked for.
+    pub fn overlay(&self, base: FaceId, over: &[FaceId]) -> FaceId {
+        if over.is_empty() {
+            return base;
+        }
+        self.with_cache(|cache| {
+            let key = (base, over.to_vec());
+            if let Some(id) = cache.combined.get(&key) {
+                return *id;
+            }
+            let mut attrs = cache
+                .table
+                .get(base.0 as usize)
+                .copied()
+                .unwrap_or_default();
+            for id in over {
+                let Some((_, spec)) = self.faces.get(id.0 as usize) else {
+                    continue;
+                };
+                let top = self.resolved(spec);
+                attrs = FaceAttrs {
+                    fg: top.fg.or(attrs.fg),
+                    bg: top.bg.or(attrs.bg),
+                    bold: attrs.bold || top.bold,
+                    italic: attrs.italic || top.italic,
+                    underline: attrs.underline || top.underline,
+                    inverse: false,
+                    underline_color: top.underline_color.or(attrs.underline_color),
+                    box_color: top.box_color.or(attrs.box_color),
+                };
+            }
+            // The same look reached another way is the same face.
+            let id = match cache.table.iter().position(|existing| *existing == attrs) {
+                Some(index) => FaceId(index as u32),
+                None => {
+                    cache.table.push(attrs);
+                    FaceId(cache.table.len() as u32 - 1)
+                }
+            };
+            cache.combined.insert(key, id);
+            id
+        })
+    }
+
     /// The face for text in face `base` that has a diagnostic on it: the
     /// same, with the diagnostic's underline.
     pub fn diagnostic(&self, base: FaceId, severity: Severity) -> FaceId {
-        let block = severity as u32 + 1;
-        FaceId(block * self.faces.len() as u32 + base.0)
+        self.overlay(base, &[FaceId(DIAGNOSTIC_ERROR.0 + severity as u32)])
     }
 
-    /// The face table for a frontend, indexed by [`FaceId`]. A face without
-    /// a colour of its own has that of the default face. After the faces
-    /// themselves come three copies of them, one for each severity of
-    /// diagnostic, with that diagnostic's face laid over each.
+    /// The face table for a frontend, indexed by [`FaceId`]: the faces
+    /// themselves, and then the combinations made so far.
     pub fn table(&self) -> Vec<FaceAttrs> {
-        let resolve = |name: &Option<String>| name.as_deref().and_then(|name| self.color(name));
-        let default = &self.faces[0].1;
-        let (fg, bg) = (resolve(&default.fg), resolve(&default.bg));
-        let mut table: Vec<FaceAttrs> = self
-            .faces
-            .iter()
-            .map(|(_, spec)| FaceAttrs {
-                fg: resolve(&spec.fg).or(fg),
-                bg: resolve(&spec.bg).or(bg),
-                bold: spec.bold,
-                italic: spec.italic,
-                underline: spec.underline,
-                inverse: false,
-                underline_color: resolve(&spec.underline_color),
-                box_color: resolve(&spec.box_color),
-            })
-            .collect();
-        let count = table.len();
-        for severity in 0..3 {
-            let over = &self.faces[DIAGNOSTIC_ERROR.0 as usize + severity].1;
-            for index in 0..count {
-                let base = table[index];
-                table.push(FaceAttrs {
-                    fg: resolve(&over.fg).or(base.fg),
-                    bg: resolve(&over.bg).or(base.bg),
-                    bold: base.bold || over.bold,
-                    italic: base.italic || over.italic,
-                    underline: base.underline || over.underline,
-                    inverse: false,
-                    underline_color: resolve(&over.underline_color).or(base.underline_color),
-                    box_color: base.box_color,
-                });
-            }
-        }
-        table
+        self.with_cache(|cache| cache.table.clone())
+    }
+
+    /// Number of faces in the table, which grows as combinations are made.
+    pub fn table_len(&self) -> usize {
+        self.with_cache(|cache| cache.table.len())
     }
 }
 
@@ -410,6 +500,8 @@ mod tests {
         assert_eq!(faces.face_id("shadow"), Some(SHADOW));
         assert_eq!(faces.face_id("popup-annotation"), Some(POPUP_ANNOTATION));
         assert_eq!(faces.face_id("diagnostic-error"), Some(DIAGNOSTIC_ERROR));
+        assert_eq!(faces.face_id("hl-line"), Some(HL_LINE));
+        assert_eq!(faces.face_id("jump-background"), Some(JUMP_BACKGROUND));
         assert_eq!(
             faces.face_id("line-number-current"),
             Some(LINE_NUMBER_CURRENT)
@@ -463,16 +555,38 @@ mod tests {
 
     #[test]
     fn diagnostics_are_laid_over_any_face() {
-        let faces = Faces::default();
-        let table = faces.table();
+        let mut faces = Faces::default();
         let keyword = syntax(Highlight::Keyword);
+        let before = faces.table_len();
         let marked = faces.diagnostic(keyword, Severity::Warning);
+        let error = faces.diagnostic(DEFAULT, Severity::Error);
+        assert_eq!(faces.table_len(), before + 1, "a combination is a new face");
+        assert_eq!(
+            error, DIAGNOSTIC_ERROR,
+            "unless a face already looks like it"
+        );
+        assert_eq!(faces.diagnostic(keyword, Severity::Warning), marked);
+        assert_eq!(faces.table_len(), before + 1, "made once");
+        let table = faces.table();
         let (plain, marked) = (table[keyword.0 as usize], table[marked.0 as usize]);
         assert!(marked.underline && !plain.underline);
         assert_eq!(marked.underline_color, faces.color("underline-warning"));
         assert_eq!((marked.fg, marked.bold), (plain.fg, plain.bold));
-        let error = table[faces.diagnostic(DEFAULT, Severity::Error).0 as usize];
-        assert_eq!(error.underline_color, faces.color("underline-err"));
+        assert_eq!(
+            table[error.0 as usize].underline_color,
+            faces.color("underline-err")
+        );
+
+        // Several faces over one another, the later winning where both say.
+        let both = faces.overlay(keyword, &[HL_LINE, SYMBOL_HIGHLIGHT]);
+        let both = faces.table()[both.0 as usize];
+        assert_eq!(both.bg, faces.color("bg-cyan-subtle"));
+        assert_eq!(both.fg, plain.fg);
+        assert_eq!(faces.overlay(keyword, &[]), keyword);
+
+        // A new theme starts the combinations afresh.
+        faces.load_theme("modus-vivendi").unwrap();
+        assert_eq!(faces.table_len(), before);
     }
 
     #[test]

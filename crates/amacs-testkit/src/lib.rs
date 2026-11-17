@@ -277,6 +277,18 @@ impl Harness {
         self.screen.row(self.screen.size().1 - 1)
     }
 
+    /// The rows of the echo area: the message or prompt and what is listed
+    /// under it, without trailing empty rows.
+    pub fn echo_lines(&self) -> Vec<String> {
+        let mut rows: Vec<String> = (self.prompt_row()..self.screen.size().1)
+            .map(|row| self.screen.row(row))
+            .collect();
+        while rows.len() > 1 && rows.last().is_some_and(String::is_empty) {
+            rows.pop();
+        }
+        rows
+    }
+
     /// The row with the minibuffer prompt. Candidates are listed below it.
     pub fn prompt(&self) -> String {
         self.screen.row(self.prompt_row())

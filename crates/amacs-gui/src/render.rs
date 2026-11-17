@@ -226,9 +226,13 @@ impl Renderer {
         for op in ops {
             match op {
                 DrawOp::DefineFaces(faces) => {
+                    // A table that only adds faces changes nothing drawn.
+                    let grown = faces.starts_with(&self.faces);
                     self.faces.clone_from(faces);
-                    self.shaped.clear();
-                    self.stale = true;
+                    if !grown {
+                        self.shaped.clear();
+                        self.stale = true;
+                    }
                 }
                 DrawOp::Layout { panes, .. } => {
                     self.panes = panes

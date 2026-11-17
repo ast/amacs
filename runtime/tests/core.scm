@@ -260,3 +260,22 @@
   (lsp-ensure)
   (check-false (lsp-busy?))
   (check-equal? (buffer-diagnostics) '()))
+
+(deftest decorations-are-minor-modes
+  (for-each
+   (lambda (mode)
+     (check-false (minor-mode-enabled? mode))
+     (enable-mode! mode)
+     (check-true (minor-mode-enabled? mode))
+     (disable-mode! mode))
+   '(hl-line-mode symbol-highlight-mode hl-todo-mode whitespace-mode))
+  (check-equal? (option 'whitespace-line-column) 80))
+
+(deftest scrolling-and-projects
+  (insert "a\nb\nc\nd\n")
+  (scroll-lines 1)
+  (scroll-lines -1)
+  (check-error (lambda () (scroll-lines "far")))
+  ;; The test buffer visits no file, so it is in no project.
+  (check-false (project-root))
+  (check-true (list? (option 'project-root-markers))))

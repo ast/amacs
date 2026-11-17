@@ -11,7 +11,9 @@ const KEYS: &[&str] = &[
     "M-w", "C-y", "M-y", "C-/", "C-/", "C-?", "C-SPC", "C-x C-x", "C-x h", "C-g", "C-f", "C-b",
     "C-n", "C-p", "C-a", "C-e", "M-f", "M-b", "M-}", "M-{", "M-<", "M->", "C-v", "M-v", "C-l",
     "C-u", "C-u 3", "M-2", "C-x 2", "C-x 3", "C-x 0", "C-x 1", "C-x o", "C-u -", "C-M-i", "M-+",
-    "S-TAB",
+    "S-TAB", "M-o", "S-<left>", "S-<down>", "C-x ^", "C-x }", "C-x +", "C-x SPC", "C-x r k",
+    "C-x r y", "C-x r o", "C-x r d", "M-;", "M-^", "M-u", "M-c", "M-m", "M-\\", "M-SPC", "M-g c",
+    "M-g l", "M-g w", "M-z",
 ];
 // ESC is deliberately absent: it would turn the first key of the next entry
 // into a Meta key and leave the rest as a `C-x` prefix, which reaches
@@ -84,6 +86,12 @@ proptest! {
     ) {
         let mut h = Harness::new(cols, rows);
         define_snippets(&mut h);
+        for mode in ["hl-line-mode", "symbol-highlight-mode", "hl-todo-mode", "whitespace-mode"] {
+            h.editor.set_minor_mode(mode, true, true).unwrap();
+        }
+        h.editor
+            .set_option("line-numbers", amacs_core::Value::sym("relative"))
+            .unwrap();
         for key in &keys {
             h.keys(key);
             let (width, height) = h.screen.size();

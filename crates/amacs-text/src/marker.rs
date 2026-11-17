@@ -47,7 +47,7 @@ impl MarkerSet {
     /// # Panics
     /// If the marker has been removed.
     pub fn set(&mut self, id: MarkerId, pos: usize) {
-        self.markers[id].pos = pos;
+        self.markers[id].pos = pos
     }
 
     pub fn len(&self) -> usize {

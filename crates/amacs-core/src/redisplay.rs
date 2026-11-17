@@ -8,8 +8,10 @@ use std::collections::HashMap;
 use amacs_proto::{CursorShape, DisplayLine, DrawOp, FaceId, PaneId, PaneRect};
 
 use crate::buffer::{Buffer, LineNumbers};
+use crate::decorate::RowContext;
 use crate::display::{
-    char_cells, column_of, push_glyph, row_containing, rows_back, str_cells, walk_row,
+    char_cells, column_of, overlay_cells, push_glyph, row_containing, rows_back, str_cells,
+    walk_row,
 };
 use crate::editor::Editor;
 use crate::faces;
@@ -20,8 +22,8 @@ const ECHO_PANE: PaneId = PaneId(0);
 /// What the frontend currently shows.
 #[derive(Default)]
 pub(crate) struct RedisplayState {
-    /// Version of the face table that the frontend has.
-    faces: u64,
+    /// Version and length of the face table that the frontend has.
+    faces: (u64, usize),
     size: (u16, u16),
     layout: Vec<PaneRect>,
     lines: HashMap<PaneId, Vec<DisplayLine>>,
@@ -189,10 +191,13 @@ impl Editor {
         let mut ops = Vec::new();
         // New faces change the look of what is already drawn, so everything
         // is drawn again.
-        let new_faces = state.faces != self.faces.version();
-        if new_faces {
+        let faces = (self.faces.version(), self.faces.table_len());
+        let new_faces = state.faces.0 != faces.0;
+        if state.faces != faces {
+            // More faces of the same version are combinations made since:
+            // the table grew, and what is drawn still looks right.
             ops.push(DrawOp::DefineFaces(self.faces.table()));
-            state.faces = self.faces.version();
+            state.faces = faces;
         }
         let layout: Vec<PaneRect> = panes.iter().map(|(rect, _)| *rect).collect();
         if layout != state.layout || size != state.size || new_faces {
@@ -297,34 +302,18 @@ impl Editor {
         let point = buffer.marker(window.point);
         let point_line = text.line_of(point);
         let window_start = buffer.marker(window.start);
-        // Highlights for what the window can show at most: a char per cell.
-        let highlights = {
-            let end = (window_start + rows * width).min(text.len());
-            buffer.highlights(text.char_to_byte(window_start)..text.char_to_byte(end))
-        };
-        let region = match buffer.mark() {
-            Some(mark) if buffer.mark_active && id == self.selected() => {
-                mark.min(point)..mark.max(point)
-            }
-            _ => 0..0,
-        };
-        // The diagnostics that can be seen, each covering at least a char.
-        let visible_end = (window_start + rows * width).min(text.len());
-        let diagnostics: Vec<_> = buffer
-            .diagnostics()
-            .map(|(range, diagnostic)| {
-                (
-                    range.start..range.end.max(range.start + 1),
-                    diagnostic.severity,
-                )
-            })
-            .filter(|(range, _)| range.start <= visible_end && range.end > window_start)
-            .collect();
+        // What the window can show at most: a char per cell.
+        let shown = window_start..(window_start + rows * width).min(text.len());
+        let highlights =
+            buffer.highlights(text.char_to_byte(shown.start)..text.char_to_byte(shown.end));
+        let mut decorations = self.decorations(id, shown, highlights.as_ref());
 
         let mut lines = Vec::with_capacity(rows);
         let mut cursor = None;
         let mut pos = Some(window_start);
         let mut glyph = String::new();
+        // Labels to draw on the row: column and keys.
+        let mut labels: Vec<(usize, &str)> = Vec::new();
         for row_index in 0..rows {
             let Some(start) = pos else {
                 lines.push(DisplayLine::default());
@@ -335,27 +324,28 @@ impl Editor {
                 let (number, face) = line_number(buffer, start, point_line, gutter);
                 line.push(&number, face);
             }
+            let line_index = text.line_of(start);
+            let line_end = text.line_end(line_index);
+            let trailing = text
+                .chars_before(line_end)
+                .take(line_end - text.line_start(line_index))
+                .take_while(|c| matches!(c, ' ' | '\t'))
+                .count();
+            let context = RowContext {
+                line: line_index,
+                base_column: column_of(text, start, tab),
+                trailing_from: line_end - trailing,
+                line_end,
+            };
             let mut end_col = 0;
             let mut point_col = None;
             let mut byte = text.char_to_byte(start);
+            labels.clear();
             let row = walk_row(text, start, width, tab, |pos, c, col, cells| {
                 let highlight = highlights.as_ref().and_then(|found| found.get(byte));
                 byte += c.len_utf8();
-                let face = if region.contains(&pos) {
-                    faces::REGION
-                } else {
-                    let face = highlight.map_or(faces::DEFAULT, faces::syntax);
-                    // The most serious diagnostic on a char is the one shown.
-                    let severity = diagnostics
-                        .iter()
-                        .filter(|(range, _)| range.contains(&pos))
-                        .map(|(_, severity)| *severity)
-                        .min();
-                    match severity {
-                        Some(severity) => self.faces.diagnostic(face, severity),
-                        None => face,
-                    }
-                };
+                let base = highlight.map_or(faces::DEFAULT, faces::syntax);
+                let face = decorations.face(base, pos, &context, col);
                 // In a pane one or two cells wide, a wide char may not fit in
                 // the columns left of the continuation marker.
                 if col + cells <= width.saturating_sub(1).max(1) {
@@ -366,19 +356,55 @@ impl Editor {
                 if pos == point {
                     point_col = Some(col);
                 }
+                for (label_pos, keys) in &decorations.labels {
+                    if *label_pos == Some(pos) {
+                        labels.push((col, keys));
+                    }
+                }
                 end_col = col + cells;
             });
             if row.contains(point) {
                 let col = point_col.unwrap_or(end_col).min(width - 1);
                 cursor = Some((row_index as u16, (gutter + col) as u16));
             }
+            let fill = decorations.fill(line_index);
             if row.continued && width >= 2 {
                 let padding = (width - 1).saturating_sub(end_col.min(width));
-                line.push(&" ".repeat(padding), faces::DEFAULT);
-                line.push("\\", faces::DEFAULT);
-            } else if row.next.is_some() && region.contains(&row.end) {
+                line.push(&" ".repeat(padding), fill);
+                line.push("\\", fill);
+            } else if row.next.is_some()
+                && decorations.rectangle.is_none()
+                && decorations.region.contains(&row.end)
+            {
                 // The newline is selected: highlight to the window's edge.
                 line.fill = faces::REGION;
+            } else {
+                line.fill = fill;
+            }
+            // Labels at the end of the line, as on an empty one, and the
+            // label of the window itself in its corner.
+            if !row.continued {
+                for (label_pos, keys) in &decorations.labels {
+                    if *label_pos == Some(row.end) {
+                        labels.push((end_col, keys));
+                    }
+                }
+            }
+            if row_index == 0 {
+                for (label_pos, keys) in &decorations.labels {
+                    if label_pos.is_none() {
+                        labels.push((0, keys));
+                    }
+                }
+            }
+            for (col, keys) in &labels {
+                let cells: Vec<(char, FaceId)> =
+                    keys.chars().map(|c| (c, faces::JUMP_LABEL)).collect();
+                let room = (gutter + width).saturating_sub(gutter + col);
+                let wanted = cells.len().min(room);
+                if wanted > 0 {
+                    overlay_cells(&mut line, gutter + col, wanted, &cells, faces::JUMP_LABEL);
+                }
             }
             lines.push(line);
             pos = row.next;

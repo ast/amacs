@@ -119,3 +119,15 @@
 
 (define-global-minor-mode auto-pair-mode ""
   "Insert brackets and quotes in pairs.")
+
+(define-minor-mode hl-line-mode ""
+  "Mark the line that point is on.")
+
+(define-minor-mode symbol-highlight-mode ""
+  "Mark the other occurrences of the symbol at point.")
+
+(define-minor-mode hl-todo-mode ""
+  "Make words such as TODO and FIXME stand out in comments.")
+
+(define-minor-mode whitespace-mode ""
+  "Mark trailing whitespace and text beyond `whitespace-line-column`.")

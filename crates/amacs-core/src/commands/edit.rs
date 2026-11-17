@@ -255,6 +255,9 @@ pub fn backward_kill_word(ed: &mut Editor) -> CmdResult {
 }
 
 pub fn kill_region(ed: &mut Editor) -> CmdResult {
+    if super::rect::rectangle_is_marked(ed) {
+        return super::rect::kill_rectangle(ed);
+    }
     let region = ed.region()?;
     // Killing backwards from point prepends, so that the ring entry reads in
     // buffer order however the region was marked.
@@ -267,6 +270,9 @@ pub fn kill_region(ed: &mut Editor) -> CmdResult {
 }
 
 pub fn kill_ring_save(ed: &mut Editor) -> CmdResult {
+    if super::rect::rectangle_is_marked(ed) {
+        return super::rect::copy_rectangle(ed);
+    }
     let region = ed.region()?;
     let text = ed.text().slice(region);
     ed.kill_ring.push(text);
@@ -328,6 +334,7 @@ pub fn undo_redo(ed: &mut Editor) -> CmdResult {
 pub fn set_mark(ed: &mut Editor) -> CmdResult {
     let point = ed.point();
     let buffer = ed.buffer_mut();
+    buffer.rectangle_mark = false;
     buffer.set_mark(point);
     buffer.mark_active = true;
     ed.message("Mark set");

@@ -101,6 +101,52 @@ impl UndoTree {
         Some(&self.nodes[child].txn)
     }
 
+    // The shape of the tree, for showing it and moving about in it. States
+    // are numbered; the first, with nothing done yet, is state 0.
+
+    /// The state the text is in.
+    pub fn current(&self) -> usize {
+        self.current
+    }
+
+    /// The state that matches the file on disk, if any does.
+    pub fn saved(&self) -> Option<usize> {
+        self.saved
+    }
+
+    pub fn parent(&self, state: usize) -> Option<usize> {
+        self.nodes.get(state)?.parent
+    }
+
+    /// The states reached from `state` by one transaction, oldest first.
+    pub fn children(&self, state: usize) -> &[usize] {
+        self.nodes
+            .get(state)
+            .map_or(&[], |node| node.children.as_slice())
+    }
+
+    /// The child that redo goes to from `state`.
+    pub fn redo_child(&self, state: usize) -> Option<usize> {
+        self.nodes.get(state)?.redo_child
+    }
+
+    /// The states from the first to `state`, inclusive.
+    pub fn path_to(&self, state: usize) -> Vec<usize> {
+        let mut path = vec![state];
+        while let Some(parent) = self.parent(path[path.len() - 1]) {
+            path.push(parent);
+        }
+        path.reverse();
+        path
+    }
+
+    /// Makes `child` the state that redo goes to from its parent.
+    pub fn choose_branch(&mut self, child: usize) {
+        if let Some(parent) = self.parent(child) {
+            self.nodes[parent].redo_child = Some(child);
+        }
+    }
+
     /// Marks the current state as the one on disk.
     pub fn mark_saved(&mut self) {
         self.saved = Some(self.current);
@@ -183,6 +229,24 @@ mod tests {
         );
         tree.push(txn(1, "b"));
         assert!(tree.amendable().is_some());
+    }
+
+    #[test]
+    fn the_shape_of_the_tree_can_be_read() {
+        let mut tree = UndoTree::new();
+        tree.push(txn(0, "a"));
+        tree.push(txn(1, "b"));
+        tree.undo();
+        tree.push(txn(1, "c"));
+        assert_eq!(tree.current(), 3);
+        assert_eq!(tree.children(1), [2, 3]);
+        assert_eq!(tree.parent(3), Some(1));
+        assert_eq!(tree.path_to(2), [0, 1, 2]);
+        assert_eq!(tree.redo_child(1), Some(3));
+        tree.undo();
+        tree.choose_branch(2);
+        assert_eq!(tree.redo().unwrap().edits[0].inserted, "b");
+        assert_eq!(tree.current(), 2);
     }
 
     #[test]

@@ -9,7 +9,7 @@ pub struct PaneId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct FaceId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -24,7 +24,7 @@ impl Color {
 
 /// Fully resolved appearance of a run of text. `None` colours mean the
 /// frontend's own default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct FaceAttrs {
     pub fg: Option<Color>,
     pub bg: Option<Color>,
@@ -112,7 +112,8 @@ pub enum CursorShape {
 /// An instruction to a frontend. A batch always ends with [`DrawOp::Flush`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DrawOp {
-    /// Replaces the face table.
+    /// Replaces the face table. A table that only adds faces to the one
+    /// before leaves what is drawn as it is.
     DefineFaces(Vec<FaceAttrs>),
     /// Replaces all panes. Everything previously drawn is discarded.
     Layout {

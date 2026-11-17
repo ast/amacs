@@ -1,5 +1,6 @@
 //! How text maps to screen cells: char widths, columns and wrapped rows.
 
+use amacs_proto::{DisplayLine, FaceId};
 use amacs_text::Text;
 use unicode_width::UnicodeWidthChar;
 
@@ -191,6 +192,73 @@ pub fn pos_at_column(text: &Text, line: usize, goal: usize, tab_width: usize) ->
     pos
 }
 
+/// Replaces `width` cells of a line from column `col` with `content`,
+/// padded with spaces in `fill`. The rest of the line stays as it is.
+pub(crate) fn overlay_cells(
+    line: &mut DisplayLine,
+    col: usize,
+    width: usize,
+    content: &[(char, FaceId)],
+    fill: FaceId,
+) {
+    // The line as cells: a wide char is its char and then a filler.
+    let mut cells: Vec<(Option<char>, FaceId)> = Vec::new();
+    for (segment, face) in line.segments() {
+        for c in segment.chars() {
+            match c.width().unwrap_or(1) {
+                0 => {}
+                cells_wide => {
+                    cells.push((Some(c), face));
+                    cells.extend(std::iter::repeat_n((None, face), cells_wide - 1));
+                }
+            }
+        }
+    }
+    let line_fill = line.fill;
+    if cells.len() < col + width {
+        cells.resize(col + width, (Some(' '), line_fill));
+    }
+    // A wide char cut in half by either edge becomes spaces.
+    if col > 0 && cells[col].0.is_none() {
+        let mut head = col - 1;
+        while cells[head].0.is_none() && head > 0 {
+            head -= 1;
+        }
+        for cell in &mut cells[head..col] {
+            cell.0 = Some(' ');
+        }
+    }
+    let mut after = col + width;
+    while after < cells.len() && cells[after].0.is_none() {
+        cells[after].0 = Some(' ');
+        after += 1;
+    }
+
+    let mut boxed: Vec<(Option<char>, FaceId)> = Vec::with_capacity(width);
+    for (c, face) in content {
+        let wide = c.width().unwrap_or(1);
+        if wide == 0 || boxed.len() + wide > width {
+            break;
+        }
+        boxed.push((Some(*c), *face));
+        boxed.extend(std::iter::repeat_n((None, *face), wide - 1));
+    }
+    boxed.resize(width, (Some(' '), fill));
+    cells.splice(col..col + width, boxed);
+
+    let mut rebuilt = DisplayLine {
+        fill: line_fill,
+        ..DisplayLine::default()
+    };
+    let mut buffer = [0u8; 4];
+    for (c, face) in cells {
+        if let Some(c) = c {
+            rebuilt.push(c.encode_utf8(&mut buffer), face);
+        }
+    }
+    *line = rebuilt;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,5 +317,37 @@ mod tests {
         push_glyph(&mut out, '\u{7f}', 2);
         push_glyph(&mut out, '\t', 3);
         assert_eq!(out, "^A^?   ");
+    }
+
+    fn line(text: &str) -> DisplayLine {
+        DisplayLine::plain(text, FaceId(0))
+    }
+
+    fn content(text: &str) -> Vec<(char, FaceId)> {
+        text.chars().map(|c| (c, FaceId(9))).collect()
+    }
+
+    #[test]
+    fn a_box_replaces_cells_of_a_line() {
+        let mut row = line("hello world");
+        overlay_cells(&mut row, 2, 5, &content("abc"), FaceId(9));
+        assert_eq!(row.text, "heabc  orld");
+        let faces: Vec<_> = row.runs.iter().map(|run| (run.len, run.face.0)).collect();
+        assert_eq!(faces, [(2, 0), (5, 9), (4, 0)]);
+
+        // Past the end of the text the line is padded.
+        let mut row = line("ab");
+        overlay_cells(&mut row, 4, 3, &content("xyz!"), FaceId(9));
+        assert_eq!(row.text, "ab  xyz");
+    }
+
+    #[test]
+    fn wide_chars_cut_by_a_box_become_spaces() {
+        let mut row = line("日本語日本語");
+        overlay_cells(&mut row, 3, 4, &content("ab"), FaceId(9));
+        assert_eq!(row.text, "日 ab   本語");
+        let mut row = line("a日b");
+        overlay_cells(&mut row, 0, 2, &content("語x"), FaceId(9));
+        assert_eq!(row.text, "語 b", "content that does not fit is cut");
     }
 }
