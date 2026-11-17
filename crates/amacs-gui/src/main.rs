@@ -14,7 +14,8 @@ use amacs_client::{Connection, parse_position};
 use amacs_gui::keys;
 use amacs_gui::render::Renderer;
 use amacs_proto::{
-    ClientMsg, FileSpec, FrameRequest, InputEvent, ServerMsg, read_msg, socket_path, write_msg,
+    ClientMsg, FileSpec, FrameRequest, InputEvent, MouseEvent, ServerMsg, read_msg, socket_path,
+    write_msg,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, FrameCallbackData};
@@ -25,7 +26,7 @@ use smithay_client_toolkit::reexports::calloop::{EventLoop, LoopHandle};
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
 use smithay_client_toolkit::reexports::client::protocol::{
-    wl_keyboard, wl_output, wl_seat, wl_shm, wl_surface,
+    wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface,
 };
 use smithay_client_toolkit::reexports::client::{Connection as WaylandConnection, QueueHandle};
 use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::{
@@ -39,6 +40,7 @@ use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::keyboard::{
     KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers,
 };
+use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::xdg::XdgShell;
@@ -172,6 +174,10 @@ struct App {
     /// Present if the compositor supports fractional scaling.
     viewport: Option<WpViewport>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    pointer: Option<wl_pointer::WlPointer>,
+    /// Scrolling by a touchpad that has not yet come to a whole line, in
+    /// pixels of the surface.
+    scroll_rest: f64,
     modifiers: Modifiers,
     loop_handle: LoopHandle<'static, App>,
 
@@ -451,6 +457,8 @@ fn run() -> Result<ExitCode> {
         window,
         viewport,
         keyboard: None,
+        pointer: None,
+        scroll_rest: 0.0,
         modifiers: Modifiers::default(),
         loop_handle,
         renderer,
@@ -614,6 +622,9 @@ impl SeatHandler for App {
                 .get_keyboard_with_repeat(qh, &seat, None, self.loop_handle.clone(), repeat)
                 .ok();
         }
+        if capability == Capability::Pointer && self.pointer.is_none() {
+            self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
+        }
     }
 
     fn remove_capability(
@@ -628,9 +639,66 @@ impl SeatHandler for App {
         {
             keyboard.release();
         }
+        if capability == Capability::Pointer
+            && let Some(pointer) = self.pointer.take()
+        {
+            pointer.release();
+        }
     }
 
     fn remove_seat(&mut self, _: &WaylandConnection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+/// How many lines one notch of a mouse wheel scrolls.
+const WHEEL_LINES: i32 = 3;
+/// The main button of a mouse, as Linux numbers it.
+const BUTTON_LEFT: u32 = 0x110;
+
+impl PointerHandler for App {
+    fn pointer_frame(
+        &mut self,
+        _: &WaylandConnection,
+        _: &QueueHandle<Self>,
+        _: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for event in events {
+            // The pointer is in surface units; cells are in buffer pixels.
+            let scale = f64::from(self.scale) / f64::from(SCALE_DENOMINATOR);
+            let (cell_w, cell_h) = self.renderer.cell_size();
+            let cell = |position: f64, size: u32, count: u16| {
+                let index = (position.max(0.0) * scale / f64::from(size.max(1))) as u32;
+                index.min(u32::from(count.saturating_sub(1))) as u16
+            };
+            let col = cell(event.position.0, cell_w, self.grid.0);
+            let row = cell(event.position.1, cell_h, self.grid.1);
+            match &event.kind {
+                PointerEventKind::Axis { vertical, .. } => {
+                    let lines = if vertical.value120 != 0 {
+                        vertical.value120 * WHEEL_LINES / 120
+                    } else if vertical.discrete != 0 {
+                        vertical.discrete * WHEEL_LINES
+                    } else {
+                        // A touchpad: so many pixels, of which the part
+                        // that is no whole line is kept for the next time.
+                        let line = f64::from(cell_h.max(1)) / scale;
+                        self.scroll_rest += vertical.absolute;
+                        let lines = (self.scroll_rest / line).trunc();
+                        self.scroll_rest -= lines * line;
+                        lines as i32
+                    };
+                    if lines != 0 {
+                        let lines = lines.clamp(-1000, 1000) as i16;
+                        self.send(InputEvent::Mouse(MouseEvent::Scroll { col, row, lines }));
+                    }
+                }
+                PointerEventKind::Press { button, .. } if *button == BUTTON_LEFT => {
+                    self.send(InputEvent::Mouse(MouseEvent::Press { col, row }));
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 impl KeyboardHandler for App {

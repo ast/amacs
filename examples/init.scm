@@ -41,6 +41,9 @@
     (enable-mode! 'whitespace-mode)))
 (add-hook! 'text-mode-hook (lambda () (enable-mode! 'hl-line-mode)))
 
+;; Mark, beside the line numbers, the lines that differ from what git has.
+(enable-mode! 'git-gutter-mode)
+
 ;; A project starts at the nearest of these, so that a crate or a Go module
 ;; inside a larger repository is a project of its own, with its own
 ;; language server.

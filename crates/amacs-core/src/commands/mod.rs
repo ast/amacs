@@ -486,6 +486,12 @@ pub fn install(ed: &mut Editor) {
 }
 
 impl Editor {
+    /// Selects another window, making one beside this if there is none, to
+    /// show something in.
+    pub fn select_other_window(&mut self) -> CmdResult {
+        windows::select_other_window(self)
+    }
+
     /// Scrolls the selected window by a number of lines, forward if positive.
     pub fn scroll_lines(&mut self, lines: i64) -> CmdResult {
         misc::scroll_rows(self, lines)

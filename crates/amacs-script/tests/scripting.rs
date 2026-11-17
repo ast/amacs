@@ -436,7 +436,7 @@ fn the_scheme_test_suite_passes() {
         .load_file(std::path::Path::new(tests))
         .unwrap_or_else(|e| panic!("{}", e.report));
     let result = h.eval("(run-tests)");
-    assert_eq!(result, "(27)", "failures are listed after the pass count");
+    assert_eq!(result, "(26)", "failures are listed after the pass count");
     assert_eq!(h.mode_line(), " --  *scratch*   L1 C0  (Fundamental)");
 }
 
@@ -537,6 +537,45 @@ fn quitting_a_prompt_runs_the_cleanup_of_the_waiting_command() {
     h.keys("C-c a").type_text("abc").keys("RET");
     assert_eq!(h.text(), "abc");
     assert_eq!(h.eval("trail"), "(tidied tidied)");
+}
+
+#[test]
+fn evaluated_text_can_wait_and_goes_on_afterwards() {
+    let mut h = Harness::new(70, 8);
+    // As a program outside the editor would ask: the answer comes at once,
+    // and the rest runs when the user has answered.
+    let result = h
+        .session
+        .eval("(define word (read-string \"Word: \"))\n(insert word)\n(insert \"!\" (read-string \"More: \"))\n(insert \".\")")
+        .unwrap();
+    assert_eq!(result, "");
+    h.redisplay();
+    assert_eq!(h.echo(), "Word:");
+    h.type_text("abc").keys("RET");
+    // The next question is open already, with the first answer put in.
+    assert_eq!(h.echo(), "More:");
+    assert_eq!(h.screen.row(0), "abc");
+    h.type_text("def").keys("RET");
+    assert_eq!(h.text(), "abc!def.");
+    assert_eq!(h.eval("(%waiting-count)"), "0");
+    // An error in what follows is placed in the text as it was given.
+    h.session
+        .eval("(read-string \"Again: \")\n\n(car 5)")
+        .unwrap();
+    h.redisplay();
+    h.keys("RET");
+    assert_eq!(h.echo(), "car: expected a pair, got 5");
+    assert!(
+        h.eval("(buffer-string \"*Messages*\")")
+            .contains("at eval:3:1")
+    );
+    // Quitting gives up the rest too.
+    h.session
+        .eval("(read-string \"Last: \") (insert \"never\")")
+        .unwrap();
+    h.redisplay();
+    h.keys("C-g");
+    assert_eq!(h.text(), "abc!def.");
 }
 
 #[test]

@@ -399,7 +399,7 @@ fn a_mistake_in_a_file_does_not_stop_the_forms_before_it() {
     vm.eval_each(
         "(define a 1)\n(car a)\n(define b 2)\n(define c",
         "file.scm",
-        |result| {
+        |result, _| {
             results.push(result.map(|_| ()).map_err(|report| report.summary()));
             true
         },

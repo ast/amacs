@@ -643,3 +643,90 @@ fn the_window_scrolls_by_lines_without_moving_point_far() {
     h.keys("C-u 4 M-x").type_text("scroll-up-line").keys("RET");
     assert_eq!(h.screen.row(0), "line 6");
 }
+
+#[test]
+fn the_mouse_scrolls_and_sets_point() {
+    use amacs_proto::{InputEvent, MouseEvent};
+    let mut h = Harness::new(40, 12);
+    let lines: Vec<String> = (1..=40).map(|n| format!("line {n}")).collect();
+    h.paste(&lines.join("\n"));
+    h.keys("M-< C-x 2");
+    let mouse = |h: &mut Harness, event: MouseEvent| {
+        h.editor.handle_event(InputEvent::Mouse(event));
+        h.sync();
+    };
+    // The window under the pointer scrolls, though the other is selected.
+    let lower = (0..12)
+        .find(|row| h.screen.row(*row).contains("*scratch*"))
+        .unwrap()
+        + 1;
+    assert_eq!(h.screen.row(lower), "line 1");
+    mouse(
+        &mut h,
+        MouseEvent::Scroll {
+            col: 3,
+            row: lower as u16 + 1,
+            lines: 3,
+        },
+    );
+    assert_eq!(h.screen.row(lower), "line 4");
+    assert_eq!(h.screen.row(0), "line 1", "the selected window stays");
+    assert_eq!(h.screen.cursor(), Some((0, 0)));
+    mouse(
+        &mut h,
+        MouseEvent::Scroll {
+            col: 3,
+            row: lower as u16,
+            lines: -2,
+        },
+    );
+    assert_eq!(h.screen.row(lower), "line 2");
+    // Backwards past the start stops at the start.
+    mouse(
+        &mut h,
+        MouseEvent::Scroll {
+            col: 3,
+            row: lower as u16,
+            lines: -9,
+        },
+    );
+    assert_eq!(h.screen.row(lower), "line 1");
+
+    // A click selects the window and puts point where it was made.
+    mouse(
+        &mut h,
+        MouseEvent::Press {
+            col: 2,
+            row: lower as u16 + 2,
+        },
+    );
+    assert_eq!(h.screen.cursor(), Some((lower + 2, 2)));
+    h.type_text("X");
+    assert!(h.buffer_text().contains("liXne 3"), "{}", h.buffer_text());
+    // Beyond the end of a line is the end of the line; on the mode line,
+    // nothing.
+    mouse(&mut h, MouseEvent::Press { col: 30, row: 1 });
+    assert_eq!(h.screen.cursor(), Some((1, 6)));
+    mouse(
+        &mut h,
+        MouseEvent::Press {
+            col: 5,
+            row: lower as u16 - 1,
+        },
+    );
+    assert_eq!(h.screen.cursor(), Some((1, 6)));
+    // With line numbers, the click is on the text beside them.
+    h.editor
+        .set_option("line-numbers", Value::Bool(true))
+        .unwrap();
+    h.sync();
+    let gutter = h.screen.row(0).find("line").unwrap();
+    mouse(
+        &mut h,
+        MouseEvent::Press {
+            col: gutter as u16 + 3,
+            row: 0,
+        },
+    );
+    assert_eq!(h.screen.cursor(), Some((0, gutter + 3)));
+}

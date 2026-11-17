@@ -28,4 +28,15 @@ pub enum InputEvent {
     },
     /// Text pasted by the terminal or compositor, to be inserted verbatim.
     Paste(String),
+    Mouse(MouseEvent),
+}
+
+/// Something done with the pointer, at a character cell of the frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MouseEvent {
+    /// The wheel was turned, or two fingers moved: so many lines, forward
+    /// in the text if positive.
+    Scroll { col: u16, row: u16, lines: i16 },
+    /// The main button was pressed.
+    Press { col: u16, row: u16 },
 }

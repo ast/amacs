@@ -25,6 +25,10 @@ const FILES: &[(&str, &str)] = &[
     file!("core/tools.scm"),
     file!("modes/languages.scm"),
     file!("lib/avy.scm"),
+    file!("lib/dired.scm"),
+    file!("lib/section.scm"),
+    file!("lib/menu.scm"),
+    file!("lib/git.scm"),
     file!("core/test.scm"),
 ];
 

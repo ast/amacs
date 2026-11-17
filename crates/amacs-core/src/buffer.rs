@@ -69,6 +69,15 @@ pub struct Buffer {
     /// The text's tick when it was last auto-saved, if it has been.
     pub auto_saved_tick: Option<u64>,
     pub read_only: bool,
+    /// The directory that relative file names are taken from in this
+    /// buffer, when that is not the directory of its file: for buffers
+    /// that show a directory or what a program wrote about one.
+    pub directory: Option<PathBuf>,
+    /// Faces laid over stretches of the text by code, with their names.
+    text_faces: Vec<(Range<usize>, String)>,
+    /// Marks beside lines, by line counted from 0, each the name of the
+    /// face it is drawn in: what differs from the last commit, for one.
+    line_signs: HashMap<usize, String>,
     /// Copied from the `tab-width` option whenever options change.
     pub tab_width: usize,
     /// Copied from the `line-numbers` option.
@@ -123,6 +132,9 @@ impl Buffer {
             waiters: Vec::new(),
             auto_saved_tick: None,
             read_only: false,
+            directory: None,
+            text_faces: Vec::new(),
+            line_signs: HashMap::new(),
             tab_width: 8,
             line_numbers: LineNumbers::Off,
             indent_offset: 4,
@@ -368,6 +380,8 @@ impl Buffer {
         self.set_diagnostics(Vec::new());
         self.undo = UndoTree::new();
         self.pending = None;
+        self.text_faces.clear();
+        self.line_signs.clear();
         self.mark_set = false;
         self.mark_active = false;
         self.tick += 1;
@@ -393,13 +407,101 @@ impl Buffer {
     }
 
     fn raw_insert(&mut self, pos: usize, s: &str) {
+        if !self.line_signs.is_empty() {
+            let added = s.matches('\n').count();
+            if added > 0 {
+                // A line that is pushed down takes its mark with it.
+                let line = self.text.line_of(pos);
+                let from = if self.text.line_start(line) == pos {
+                    line
+                } else {
+                    line + 1
+                };
+                self.line_signs = std::mem::take(&mut self.line_signs)
+                    .into_iter()
+                    .map(|(at, face)| (if at >= from { at + added } else { at }, face))
+                    .collect();
+            }
+        }
         self.parts().insert(pos, s);
         self.tick += 1;
+        if !self.text_faces.is_empty() {
+            let added = s.chars().count();
+            for (range, _) in &mut self.text_faces {
+                if range.start >= pos {
+                    range.start += added;
+                }
+                if range.end > pos {
+                    range.end += added;
+                }
+            }
+        }
     }
 
     fn raw_delete(&mut self, range: Range<usize>) -> String {
         self.tick += 1;
+        if !self.line_signs.is_empty() {
+            let (first, last) = (self.text.line_of(range.start), self.text.line_of(range.end));
+            if last > first {
+                // The lines that are joined into the first lose their marks.
+                self.line_signs = std::mem::take(&mut self.line_signs)
+                    .into_iter()
+                    .filter(|(at, _)| *at <= first || *at > last)
+                    .map(|(at, face)| (if at > last { at - (last - first) } else { at }, face))
+                    .collect();
+            }
+        }
+        if !self.text_faces.is_empty() {
+            // A position in what is deleted ends up where that started.
+            let moved = |pos: usize| {
+                if pos >= range.end {
+                    pos - range.len()
+                } else {
+                    pos.min(range.start)
+                }
+            };
+            for (face, _) in &mut self.text_faces {
+                *face = moved(face.start)..moved(face.end);
+            }
+            self.text_faces.retain(|(face, _)| !face.is_empty());
+        }
         self.parts().delete(range)
+    }
+
+    // Faces laid over the text
+
+    /// Lays a face, by name, over a stretch of the text. It stays on that
+    /// text as the text around it changes.
+    pub fn add_text_face(&mut self, range: Range<usize>, face: &str) {
+        let range = range.start.min(self.len())..range.end.min(self.len());
+        if !range.is_empty() {
+            self.text_faces.push((range, face.to_owned()));
+        }
+    }
+
+    /// Takes away the faces laid over the text that touch a range, or all.
+    pub fn clear_text_faces(&mut self, range: Option<Range<usize>>) {
+        match range {
+            Some(range) => self
+                .text_faces
+                .retain(|(face, _)| face.end <= range.start || face.start >= range.end),
+            None => self.text_faces.clear(),
+        }
+    }
+
+    pub fn text_faces(&self) -> &[(Range<usize>, String)] {
+        &self.text_faces
+    }
+
+    /// Replaces the marks beside lines: the line, counted from 0, and the
+    /// name of the face to draw the mark in. They are shown where line
+    /// numbers are.
+    pub fn set_line_signs(&mut self, signs: impl IntoIterator<Item = (usize, String)>) {
+        self.line_signs = signs.into_iter().collect();
+    }
+
+    pub fn line_sign(&self, line: usize) -> Option<&str> {
+        self.line_signs.get(&line).map(String::as_str)
     }
 
     // Undo

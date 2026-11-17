@@ -76,6 +76,9 @@ pub enum Completion {
     /// File names. The input is a path; candidates are the entries of its
     /// directory part.
     File,
+    /// Where to put something: like `File`, but only directories are
+    /// offered, and a path that ends in a slash is taken as it stands.
+    Directory,
     /// Buffer names, most recently selected first.
     Buffer,
     /// Command names, with their documentation.
@@ -93,6 +96,8 @@ enum Source {
         listed: Option<String>,
         /// What relative paths are resolved against.
         base: PathBuf,
+        /// Whether files that are not directories are left out.
+        only_directories: bool,
     },
     Grep(Search),
 }
@@ -202,12 +207,19 @@ impl Session {
                 candidates,
                 category,
             } => (Source::Static, candidates, category),
-            Completion::File => {
+            Completion::File | Completion::Directory => {
+                let only_directories = matches!(completion, Completion::Directory);
                 let source = Source::Files {
                     listed: None,
                     base: base.to_owned(),
+                    only_directories,
                 };
-                (source, Vec::new(), "file".to_owned())
+                let category = if only_directories {
+                    "directory"
+                } else {
+                    "file"
+                };
+                (source, Vec::new(), category.to_owned())
             }
             Completion::Grep { directory } => {
                 let search = Search {
@@ -242,14 +254,20 @@ impl Session {
     pub fn update(&mut self, input: &str, now: Instant) {
         let pattern = match &mut self.source {
             Source::Static => literal_pattern(input),
-            Source::Files { listed, base } => {
+            Source::Files {
+                listed,
+                base,
+                only_directories,
+            } => {
                 let (dir, name) = split_path(input);
                 if listed.as_deref() != Some(dir) {
                     *listed = Some(dir.to_owned());
                     self.matcher.restart(true);
                     let injector = self.matcher.injector();
                     for candidate in list_directory(&crate::files::expand_path(dir, base)) {
-                        inject(&injector, candidate);
+                        if !*only_directories || candidate.text.ends_with('/') {
+                            inject(&injector, candidate);
+                        }
                     }
                     // The matcher still holds the pattern for the old directory.
                     self.pattern = None;

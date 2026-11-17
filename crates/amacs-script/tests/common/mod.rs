@@ -82,7 +82,8 @@ impl Harness {
         while !done(self) {
             assert!(
                 start.elapsed() < Duration::from_secs(10),
-                "nothing happened"
+                "nothing happened; the screen is:\n{}",
+                self.screen.text()
             );
             std::thread::sleep(Duration::from_millis(2));
             self.redisplay();
@@ -96,6 +97,12 @@ impl Harness {
 
     pub fn echo(&self) -> String {
         self.screen.row(self.screen.size().1 - 1)
+    }
+
+    /// The row with the minibuffer prompt. Candidates are listed below it.
+    pub fn prompt(&self) -> String {
+        let rows = usize::from(self.session.editor().echo_rows());
+        self.screen.row(self.screen.size().1 - rows)
     }
 
     pub fn mode_line(&self) -> String {

@@ -11,9 +11,24 @@ is shown as `display` would show it."
 the text the line starts with."
   (await (%read-string prompt (if (null? initial) "" (car initial)) 'none)))
 
-(define (read-file-name prompt)
-  "Reads a file name, with completion, starting in the working directory."
-  (await (%read-string prompt (string-append (working-directory) "/") 'file)))
+(define (read-file-name prompt . initial)
+  "Reads a file name, with completion. The input starts as the optional
+argument, or else as the working directory."
+  (await (%read-string prompt
+                       (if (null? initial)
+                           (string-append (working-directory) "/")
+                           (car initial))
+                       'file)))
+
+(define (read-directory-name prompt . initial)
+  "Reads where to put something: the name of a directory, or a new name in
+one. Directories are offered as completions; RET takes a name that ends in
+a slash as it stands, and otherwise completes it."
+  (await (%read-string prompt
+                       (if (null? initial)
+                           (string-append (working-directory) "/")
+                           (car initial))
+                       'directory)))
 
 (define (read-buffer-name prompt)
   "Reads a buffer name, with completion."

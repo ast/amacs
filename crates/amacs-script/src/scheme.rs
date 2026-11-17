@@ -1,6 +1,6 @@
 //! The Scheme host: the interpreter with the editor's primitives in it.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
@@ -97,14 +97,28 @@ fn eval_error(report: &Report, located: bool) -> EvalError {
     }
 }
 
+/// Code that waits for a promise.
+struct Waiting {
+    fiber: Rooted,
+    /// Source text to evaluate when the code is done, and its name: the
+    /// forms that came after the one that waits.
+    then: Option<(String, String)>,
+}
+
+/// How running some code went.
+enum Ran {
+    Done(Scheme),
+    /// It waits for this promise.
+    Waiting(i64),
+    /// It was left because what it waited for will not come.
+    Abandoned,
+}
+
 pub struct SchemeHost {
     vm: Vm,
     running: Arc<AtomicBool>,
     /// Code that waits for a promise, by the promise's number.
-    waiting: Rc<RefCell<HashMap<i64, Rooted>>>,
-    /// Whether the running code was called by the editor, as a command or
-    /// a hook is, rather than evaluated as text. Only then can it wait.
-    called: Rc<Cell<bool>>,
+    waiting: Rc<RefCell<HashMap<i64, Waiting>>>,
     /// What code has written since it was last taken.
     output: String,
 }
@@ -152,16 +166,24 @@ impl SchemeHost {
                 Ok(core.string(formatted))
             },
         );
-        let waiting: Rc<RefCell<HashMap<i64, Rooted>>> = Rc::default();
-        let called: Rc<Cell<bool>> = Rc::default();
-        let flag = called.clone();
         vm.core.define_native(
-            "%can-wait?",
-            0,
-            Some(0),
-            "Whether the running code can wait for a promise.",
-            move |_, _| Ok(Scheme::Bool(flag.get())),
+            "format-time",
+            2,
+            Some(2),
+            "(format-time seconds format) A time, given in seconds since 1970, written in local time as the strftime directives in format say.",
+            |core, args| {
+                let (Scheme::Int(seconds), Some(format)) = (args[0], core.as_str(args[1])) else {
+                    return Err(Error::new("format-time: expected seconds and a format string"));
+                };
+                let time = jiff::Timestamp::from_second(seconds)
+                    .map_err(|error| Error::new(format!("format-time: {error}")))?
+                    .to_zoned(jiff::tz::TimeZone::system());
+                let formatted = jiff::fmt::strtime::format(format, &time)
+                    .map_err(|error| Error::new(format!("format-time: {error}")))?;
+                Ok(core.string(formatted))
+            },
         );
+        let waiting: Rc<RefCell<HashMap<i64, Waiting>>> = Rc::default();
         let count = waiting.clone();
         vm.core.define_native(
             "%waiting-count",
@@ -174,7 +196,6 @@ impl SchemeHost {
             vm,
             running: Arc::default(),
             waiting,
-            called,
             output: String::new(),
         };
         for (name, source) in runtime::sources() {
@@ -204,7 +225,7 @@ impl SchemeHost {
         &mut self,
         editor: &Rc<RefCell<Editor>>,
         body: impl FnOnce(&mut Vm) -> Result<Outcome, Report>,
-    ) -> Result<Scheme, Report> {
+    ) -> Result<Ran, Report> {
         let outcome = {
             let _current = CurrentEditor::enter(editor);
             // An interrupt that arrived just after the previous run ended
@@ -230,11 +251,13 @@ impl SchemeHost {
             }
         }
         match outcome {
-            Ok(Outcome::Done(value)) => Ok(value),
+            Ok(Outcome::Done(value)) => Ok(Ran::Done(value)),
             Ok(Outcome::Suspended { fiber, value }) => match value {
                 Scheme::Int(promise) => {
-                    self.waiting.borrow_mut().insert(promise, fiber);
-                    Ok(Scheme::Void)
+                    self.waiting
+                        .borrow_mut()
+                        .insert(promise, Waiting { fiber, then: None });
+                    Ok(Ran::Waiting(promise))
                 }
                 other => Err(Report {
                     message: format!(
@@ -248,25 +271,26 @@ impl SchemeHost {
             },
             // The code was waiting for something that will not come, as
             // when the user quits a prompt: it has been left, in order.
-            Err(report) if report.escape.as_deref() == Some("quit") => Ok(Scheme::Void),
+            Err(report) if report.escape.as_deref() == Some("quit") => Ok(Ran::Abandoned),
             Err(report) => Err(report),
         }
     }
 
     /// Evaluates source text. The value is that of the last form that has
-    /// one.
+    /// one. If a form waits for something, the forms after it run when
+    /// that has come, and the value is none.
     fn eval_source(
         &mut self,
         editor: &Rc<RefCell<Editor>>,
         source: &str,
         name: &str,
     ) -> Result<Scheme, Report> {
-        // Evaluation inside a call, as by `eval-buffer` in a command, is
-        // still part of that call.
-        self.guarded(editor, |vm| {
+        let mut stopped = source.len();
+        let ran = self.guarded(editor, |vm| {
             let mut last = Ok(Outcome::Done(Scheme::Void));
-            vm.eval_each(source, name, |result| {
+            vm.eval_each(source, name, |result, after| {
                 let go_on = matches!(result, Ok(Outcome::Done(_)));
+                stopped = after;
                 match result {
                     // A form without a value leaves the last one standing.
                     Ok(Outcome::Done(Scheme::Void)) => {}
@@ -275,7 +299,26 @@ impl SchemeHost {
                 go_on
             });
             last
-        })
+        })?;
+        match ran {
+            Ran::Done(value) => Ok(value),
+            Ran::Abandoned => Ok(Scheme::Void),
+            Ran::Waiting(promise) => {
+                let rest = &source[stopped.min(source.len())..];
+                if !rest.trim().is_empty()
+                    && let Some(waiting) = self.waiting.borrow_mut().get_mut(&promise)
+                {
+                    // What has run is blanked out rather than cut off, so
+                    // that errors in the rest are placed where they are.
+                    let done: String = source[..stopped]
+                        .chars()
+                        .map(|c| if c == '\n' { '\n' } else { ' ' })
+                        .collect();
+                    waiting.then = Some((format!("{done}{rest}"), name.to_owned()));
+                }
+                Ok(Scheme::Void)
+            }
+        }
     }
 
     fn printed(&self, value: Scheme) -> String {
@@ -360,11 +403,9 @@ impl SchemeHost {
             })
             .collect();
         let values: Vec<Scheme> = args.iter().map(Rooted::value).collect();
-        self.called.set(true);
-        let result = self.guarded(editor, |vm| vm.call(procedure, &values));
-        self.called.set(false);
-        match result {
-            Ok(value) => Ok(self.printed(value)),
+        match self.guarded(editor, |vm| vm.call(procedure, &values)) {
+            Ok(Ran::Done(value)) => Ok(self.printed(value)),
+            Ok(Ran::Waiting(_) | Ran::Abandoned) => Ok(String::new()),
             Err(report) => Err(eval_error(&report, false)),
         }
     }
@@ -380,7 +421,7 @@ impl SchemeHost {
         let Some(Value::Int(promise)) = args.first() else {
             return Ok(String::new());
         };
-        let Some(fiber) = self.waiting.borrow_mut().remove(promise) else {
+        let Some(Waiting { fiber, then }) = self.waiting.borrow_mut().remove(promise) else {
             return Ok(String::new());
         };
         let value = if resolved {
@@ -389,12 +430,23 @@ impl SchemeHost {
             let quit = self.vm.core.symbol("quit");
             self.vm.core.alloc(Object::Escape(quit, Scheme::Void))
         };
-        self.called.set(true);
-        let result = self.guarded(editor, |vm| vm.resume(&fiber, value));
-        self.called.set(false);
-        match result {
-            Ok(value) => Ok(self.printed(value)),
-            Err(report) => Err(eval_error(&report, false)),
+        let ran = self
+            .guarded(editor, |vm| vm.resume(&fiber, value))
+            .map_err(|report| eval_error(&report, false))?;
+        match (ran, then) {
+            // It waits again, and what is to follow waits with it.
+            (Ran::Waiting(next), then) => {
+                if let Some(waiting) = self.waiting.borrow_mut().get_mut(&next) {
+                    waiting.then = then;
+                }
+                Ok(String::new())
+            }
+            (Ran::Done(_), Some((source, name))) => self
+                .eval_source(editor, &source, &name)
+                .map(|value| self.printed(value))
+                .map_err(|report| eval_error(&report, false)),
+            (Ran::Done(value), None) => Ok(self.printed(value)),
+            (Ran::Abandoned, _) => Ok(String::new()),
         }
     }
 }

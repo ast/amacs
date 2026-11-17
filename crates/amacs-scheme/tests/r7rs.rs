@@ -20,7 +20,7 @@ fn r7rs_suite() {
     vm.eval_each(
         include_str!("r7rs/r7rs-tests.scm"),
         "r7rs-tests.scm",
-        |result| {
+        |result, _| {
             if let Err(report) = result {
                 broken.push(report.summary());
             }

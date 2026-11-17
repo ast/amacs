@@ -190,6 +190,15 @@ impl Editor {
             (range, face)
         }));
 
+        // What code has laid over the text goes on top of the rest.
+        ranges.extend(
+            buffer
+                .text_faces()
+                .iter()
+                .filter(|(range, _)| range.start < shown.end && range.end > shown.start)
+                .filter_map(|(range, name)| Some((range.clone(), self.faces.face_id(name)?))),
+        );
+
         let region = match buffer.mark() {
             Some(mark) if buffer.mark_active && selected => mark.min(point)..mark.max(point),
             _ => 0..0,
@@ -251,15 +260,17 @@ impl Decorations<'_> {
         }
     }
 
-    /// The face of `base` with `over` laid over it. Only the built-in faces
-    /// are laid over text, and those have small ids.
+    /// The face of `base` with `over` laid over it.
     fn combine(&mut self, base: FaceId, over: &[FaceId]) -> FaceId {
         if over.is_empty() {
             return base;
         }
-        let bits = over
-            .iter()
-            .fold(0u64, |bits, face| bits | 1 << (face.0 % 64));
+        // The built-in faces have small ids and are remembered by a bit
+        // each; the others are looked up every time.
+        if over.iter().any(|face| face.0 >= 64) {
+            return self.faces.overlay(base, over);
+        }
+        let bits = over.iter().fold(0u64, |bits, face| bits | 1 << face.0);
         let faces = self.faces;
         *self
             .memo

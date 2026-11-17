@@ -10,6 +10,7 @@ use amacs_text::Text;
 use crate::buffer::{Buffer, BufferId};
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
+use crate::script::Value;
 
 /// Expands a leading `~` and resolves a relative path against `base`,
 /// without touching the file system.
@@ -283,16 +284,26 @@ impl Editor {
     /// The directory that file names typed by the user are relative to: the
     /// current buffer's directory, or the editor's default directory.
     pub fn working_directory(&self) -> &Path {
-        self.buffer()
-            .file
+        let buffer = self.buffer();
+        buffer
+            .directory
             .as_deref()
-            .and_then(Path::parent)
+            .or_else(|| buffer.file.as_deref().and_then(Path::parent))
             .unwrap_or(&self.default_directory)
     }
 
     /// Shows `path` in the selected window, reading it if no buffer visits it
     /// yet. A path that does not exist gives an empty buffer for a new file.
     pub fn find_file(&mut self, path: &Path) -> CmdResult {
+        // Directories are shown by the file manager, which is Scheme.
+        if path.is_dir() && self.has_script_host() {
+            let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+            self.queue_named(
+                "%visit-directory",
+                vec![Value::Str(path.display().to_string())],
+            );
+            return Ok(());
+        }
         let (id, note) = self.visit_file(path)?;
         self.switch_to_buffer(id);
         if let Some(note) = note {

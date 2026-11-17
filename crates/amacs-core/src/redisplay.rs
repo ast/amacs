@@ -322,7 +322,20 @@ impl Editor {
             let mut line = DisplayLine::default();
             if gutter > 0 {
                 let (number, face) = line_number(buffer, start, point_line, gutter);
-                line.push(&number, face);
+                // A line's mark takes the place of the space after its
+                // number, on the row that starts the line.
+                let row_line = text.line_of(start);
+                let sign = buffer
+                    .line_sign(row_line)
+                    .filter(|_| text.line_start(row_line) == start)
+                    .and_then(|name| self.faces.face_id(name));
+                match sign {
+                    Some(sign) => {
+                        line.push(&number[..number.len() - 1], face);
+                        line.push("▎", sign);
+                    }
+                    None => line.push(&number, face),
+                }
             }
             let line_index = text.line_of(start);
             let line_end = text.line_end(line_index);

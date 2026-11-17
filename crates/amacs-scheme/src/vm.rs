@@ -478,7 +478,7 @@ impl Vm {
     /// Reads and runs every form in a text and gives the value of the last.
     pub fn eval(&mut self, source: &str, name: &str) -> Result<Outcome, Report> {
         let mut last = Ok(Outcome::Done(Value::Void));
-        self.eval_each(source, name, |result| {
+        self.eval_each(source, name, |result, _| {
             let go_on = matches!(result, Ok(Outcome::Done(_)));
             last = result;
             go_on
@@ -487,12 +487,13 @@ impl Vm {
     }
 
     /// Reads a text and runs its forms one by one, handing each result to
-    /// `each`, which says whether to go on with the next.
+    /// `each` with where in the text the form ended; `each` says whether
+    /// to go on with the next.
     pub fn eval_each(
         &mut self,
         source: &str,
         name: &str,
-        mut each: impl FnMut(Result<Outcome, Report>) -> bool,
+        mut each: impl FnMut(Result<Outcome, Report>, usize) -> bool,
     ) {
         let file = self.core.sources.add(name, source);
         let mut pos = 0;
@@ -506,7 +507,7 @@ impl Vm {
                 }
                 Ok(None) => return,
                 Err(error) => {
-                    each(Err(self.core.report(&error)));
+                    each(Err(self.core.report(&error)), source.len());
                     return;
                 }
             };
@@ -514,7 +515,7 @@ impl Vm {
                 .compile(form)
                 .and_then(|closure| self.start(closure, &[]))
                 .map_err(|error| self.core.report(&error));
-            if !each(result) {
+            if !each(result, pos) {
                 return;
             }
         }

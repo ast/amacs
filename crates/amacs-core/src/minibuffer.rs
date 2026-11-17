@@ -410,6 +410,14 @@ pub fn exit_minibuffer(ed: &mut Editor) -> CmdResult {
     let Some((category, candidate)) = ed.candidate_at_point() else {
         return ed.accept(Accepted::Input(input));
     };
+    // Where to put something: a directory as typed is the answer, and a
+    // name being typed is completed to a directory.
+    if category == "directory" {
+        if input.is_empty() || input.ends_with('/') {
+            return ed.accept(Accepted::Input(input));
+        }
+        return ed.set_minibuffer_input(candidate.value());
+    }
     if category == "file" && candidate.text.ends_with('/') {
         return ed.set_minibuffer_input(candidate.value());
     }

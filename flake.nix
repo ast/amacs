@@ -23,7 +23,10 @@
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ pkgs.libxkbcommon ];
           # Searching a project's files runs ripgrep, and so do its tests.
-          nativeCheckInputs = [ pkgs.ripgrep ];
+          nativeCheckInputs = [
+            pkgs.ripgrep
+            pkgs.git
+          ];
           # The renderer's tests draw text and need a known font.
           AMACS_TEST_FONTS = "${pkgs.jetbrains-mono}/share/fonts";
           # The check phase runs the whole test suite. Some tests expand `~`.
@@ -76,6 +79,7 @@
             rustfmt
             rust-analyzer
             cargo-deny
+            just
             cargo-insta
             ripgrep
           ];

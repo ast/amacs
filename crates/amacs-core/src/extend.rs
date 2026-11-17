@@ -120,6 +120,12 @@ impl Editor {
         self.set_window_buffer(self.selected(), buffer);
     }
 
+    /// Shows lines under the echo area until the next key, as the keys
+    /// that can follow a prefix are shown.
+    pub fn show_hint(&mut self, lines: Vec<String>) {
+        self.frame_mut().hint = lines;
+    }
+
     // Labels
 
     /// Shows key sequences over places in windows: a position in the

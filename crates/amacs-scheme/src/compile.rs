@@ -1445,6 +1445,28 @@ impl<'a> Compiler<'a> {
             form.list_like(vec![define, target, value])
         };
 
+        // What the type defines says what it is, for `describe`.
+        let type_text = type_name
+            .ident()
+            .map(|ident| {
+                self.core
+                    .symbols
+                    .name(ident.name)
+                    .trim_matches(['<', '>'])
+                    .to_owned()
+            })
+            .unwrap_or_default();
+        let field_text = |compiler: &Self, field: &Syntax| {
+            field
+                .ident()
+                .map(|ident| compiler.core.symbols.name(ident.name).to_owned())
+                .unwrap_or_default()
+        };
+        let documented = |compiler: &mut Self, target: Syntax, doc: String, value: Syntax| {
+            let define = compiler.global_ident("define", span);
+            let doc = Syntax::new(Datum::Str(doc.into()), span);
+            form.list_like(vec![define, target, doc, value])
+        };
         let mut out = vec![self.global_ident("begin", span)];
         let quoted_name = quote(self, type_name.clone());
         let quoted_fields = quote(self, form.list_like(field_names.clone()));
@@ -1467,7 +1489,8 @@ impl<'a> Compiler<'a> {
                     });
                 }
                 let body = call(self, "%record", values);
-                out.push(define(self, constructor.clone(), body));
+                let doc = format!("Makes a {type_text}.");
+                out.push(documented(self, constructor.clone(), doc, body));
             }
             Datum::Ident(_) => {
                 let mut target = vec![constructor.clone()];
@@ -1475,7 +1498,8 @@ impl<'a> Compiler<'a> {
                 let mut values = vec![type_name.clone()];
                 values.extend(field_names.iter().cloned());
                 let body = call(self, "%record", values);
-                out.push(define(self, form.list_like(target), body));
+                let doc = format!("Makes a {type_text}.");
+                out.push(documented(self, form.list_like(target), doc, body));
             }
             Datum::Bool(false) => {}
             _ => {
@@ -1488,9 +1512,10 @@ impl<'a> Compiler<'a> {
         if predicate.ident().is_some() {
             let object = self.symbol_syntax("object", span);
             let body = call(self, "%record?", vec![type_name.clone(), object.clone()]);
-            out.push(define(
+            out.push(documented(
                 self,
                 form.list_like(vec![predicate.clone(), object]),
+                format!("Whether something is a {type_text}."),
                 body,
             ));
         }
@@ -1506,9 +1531,14 @@ impl<'a> Compiler<'a> {
                     "%record-ref",
                     vec![type_name.clone(), record.clone(), index_syntax.clone(), who],
                 );
-                out.push(define(
+                let doc = format!(
+                    "The {} of a {type_text}.",
+                    field_text(self, &field_names[index])
+                );
+                out.push(documented(
                     self,
                     form.list_like(vec![accessor.clone(), record.clone()]),
+                    doc,
                     body,
                 ));
             }
@@ -1525,9 +1555,14 @@ impl<'a> Compiler<'a> {
                         who,
                     ],
                 );
-                out.push(define(
+                let doc = format!(
+                    "Changes the {} of a {type_text}.",
+                    field_text(self, &field_names[index])
+                );
+                out.push(documented(
                     self,
                     form.list_like(vec![modifier.clone(), record, value]),
+                    doc,
                     body,
                 ));
             }

@@ -84,6 +84,22 @@ fn pos_or_point(ed: &Editor, args: &[Value], index: usize) -> CmdResult<usize> {
     }
 }
 
+/// A path without `.` and `..` parts, worked out from the name alone.
+fn tidy_path(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut tidy = std::path::PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                tidy.pop();
+            }
+            other => tidy.push(other),
+        }
+    }
+    tidy
+}
+
 /// An optional window argument, defaulting to the selected window.
 fn window_arg(ed: &Editor, args: &[Value], index: usize) -> CmdResult<WindowId> {
     if index < args.len() {
@@ -116,6 +132,7 @@ fn completion(args: &[Value], index: usize) -> CmdResult<Completion> {
     match name(args, index)? {
         "none" => Ok(Completion::None),
         "file" => Ok(Completion::File),
+        "directory" => Ok(Completion::Directory),
         "buffer" => Ok(Completion::Buffer),
         "command" => Ok(Completion::Command),
         other => Err(CmdError::msg(format!("unknown completion kind: {other}"))),
@@ -252,6 +269,12 @@ pub const API: &[ApiFn] = api! {
             let pos = pos_or_point(ed, args, 0)?;
             let text = ed.text();
             Ok(text.line_end(text.line_of(pos)).into())
+        };
+    "goto-line" (1, Some(1)) "Move point to the start of a line, counting from 1. A number beyond the last line goes to the last." =>
+        |ed, args| {
+            let line = usize::try_from(int(args, 0)?).unwrap_or(1).max(1);
+            ed.goto_line(line, 0);
+            Ok(Value::Void)
         };
     "line-number-at-pos" (0, Some(1)) "Line number of a position (default point), counting from 1." =>
         |ed, args| {
@@ -632,6 +655,177 @@ pub const API: &[ApiFn] = api! {
             Ok(root.map(|root| root.display().to_string()).into())
         };
 
+    // Text that code writes and decorates
+
+    "%replace-buffer-text!" (1, Some(1)) "Make a string the whole text of the current buffer, whether or not it is read-only. The undo history and the faces laid over the text are dropped, point goes to the start, and the buffer counts as unchanged." =>
+        |ed, args| {
+            let text = string(args, 0)?;
+            let buffer = ed.buffer_mut();
+            buffer.reset(text.into());
+            buffer.mark_saved();
+            ed.set_point(0);
+            Ok(Value::Void)
+        };
+    "add-face!" (3, Some(3)) "Lay a face over the text between two positions of the current buffer. The face is a name, as given to set-face!. It stays on that text as the text around it changes." =>
+        |ed, args| {
+            let (a, b) = (pos(ed, args, 0)?, pos(ed, args, 1)?);
+            let face = name(args, 2)?.to_owned();
+            ed.buffer_mut().add_text_face(a.min(b)..a.max(b), &face);
+            Ok(Value::Void)
+        };
+    "clear-faces!" (0, Some(2)) "Take away the faces that add-face! laid over the current buffer: those that touch the text between two positions, or all of them." =>
+        |ed, args| {
+            let range = match args.len() {
+                0 => None,
+                2 => {
+                    let (a, b) = (pos(ed, args, 0)?, pos(ed, args, 1)?);
+                    Some(a.min(b)..a.max(b))
+                }
+                _ => return Err(CmdError::msg("give both ends of the range, or neither")),
+            };
+            ed.buffer_mut().clear_text_faces(range);
+            Ok(Value::Void)
+        };
+    "set-line-signs!" (1, Some(1)) "Replace the marks beside the lines of the current buffer: a list of lists of a line number, counting from 1, and the name of the face to draw its mark in. The marks are shown where the line numbers are." =>
+        |ed, args| {
+            let Value::List(entries) = &args[0] else {
+                return Err(wrong_type(0, "a list", &args[0]));
+            };
+            let mut signs = Vec::new();
+            for entry in entries {
+                match entry {
+                    Value::List(parts) if parts.len() == 2 => match (&parts[0], parts[1].as_name()) {
+                        (Value::Int(line), Some(face)) if *line >= 1 => {
+                            signs.push((*line as usize - 1, face.to_owned()));
+                        }
+                        _ => return Err(wrong_type(0, "a list of (line face)", entry)),
+                    },
+                    other => return Err(wrong_type(0, "a list of (line face)", other)),
+                }
+            }
+            ed.buffer_mut().set_line_signs(signs);
+            Ok(Value::Void)
+        };
+    "set-buffer-directory!" (1, Some(1)) "Set the directory that relative file names are taken from in the current buffer, for a buffer that visits no file; #f for the default." =>
+        |ed, args| {
+            let directory = match &args[0] {
+                Value::Bool(false) => None,
+                _ => Some(expand_path(string(args, 0)?, ed.working_directory())),
+            };
+            ed.buffer_mut().directory = directory;
+            Ok(Value::Void)
+        };
+
+    // Files
+
+    "expand-file-name" (1, Some(2)) "A file name made absolute: relative to the second argument, or to the working directory, with a leading ~ as the home directory and without . and .. parts." =>
+        |ed, args| {
+            let base = match args.get(1) {
+                Some(_) => expand_path(string(args, 1)?, ed.working_directory()),
+                None => ed.working_directory().to_owned(),
+            };
+            Ok(tidy_path(&expand_path(string(args, 0)?, &base)).display().to_string().into())
+        };
+    "abbreviate-file-name" (1, Some(1)) "A file name with the home directory written as ~." =>
+        |_, args| Ok(amacs_core::abbreviate_path(std::path::Path::new(string(args, 0)?)).into());
+    "file-name-directory" (1, Some(1)) "The directory part of a file name, without a slash at the end, or #f if it has none. Of a directory, that is its parent." =>
+        |_, args| {
+            let path = std::path::Path::new(string(args, 0)?);
+            Ok(path.parent().filter(|parent| !parent.as_os_str().is_empty()).map(|parent| parent.display().to_string()).into())
+        };
+    "file-name-nondirectory" (1, Some(1)) "The last part of a file name." =>
+        |_, args| {
+            let path = std::path::Path::new(string(args, 0)?);
+            Ok(path.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned()).into())
+        };
+    "file-exists?" (1, Some(1)) "Whether there is a file, directory or link of this name." =>
+        |ed, args| Ok(expand_path(string(args, 0)?, ed.working_directory()).symlink_metadata().is_ok().into());
+    "file-directory?" (1, Some(1)) "Whether the name is that of a directory, or of a link to one." =>
+        |ed, args| Ok(expand_path(string(args, 0)?, ed.working_directory()).is_dir().into());
+    "directory-entries" (1, Some(1)) "What a directory holds, in order of name: for each entry a list of its name, 'directory or 'file (a link counts as what it leads to), its size in bytes, when it was last changed in seconds since 1970, what it links to if it is a link (else #f), and whether it can be run as a program." =>
+        |ed, args| {
+            let directory = expand_path(string(args, 0)?, ed.working_directory());
+            let failed = |error: std::io::Error| {
+                CmdError::msg(format!("cannot read {}: {error}", directory.display()))
+            };
+            let mut entries = Vec::new();
+            for entry in std::fs::read_dir(&directory).map_err(failed)? {
+                let entry = entry.map_err(failed)?;
+                let own = entry.metadata().ok();
+                let link = own
+                    .as_ref()
+                    .filter(|own| own.file_type().is_symlink())
+                    .and_then(|_| std::fs::read_link(entry.path()).ok());
+                // What a link leads to says what it is, if it leads anywhere.
+                let followed = std::fs::metadata(entry.path()).ok().or(own);
+                let (is_dir, size, changed, runs) = followed.as_ref().map_or((false, 0, 0, false), |meta| {
+                    use std::os::unix::fs::PermissionsExt;
+                    let changed = meta
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |since| since.as_secs());
+                    (meta.is_dir(), meta.len(), changed, !meta.is_dir() && meta.permissions().mode() & 0o111 != 0)
+                });
+                entries.push((
+                    entry.file_name().to_string_lossy().into_owned(),
+                    Value::List(vec![
+                        Value::Void,
+                        Value::sym(if is_dir { "directory" } else { "file" }),
+                        Value::Int(size as i64),
+                        Value::Int(changed as i64),
+                        link.map(|target| target.display().to_string()).into(),
+                        runs.into(),
+                    ]),
+                ));
+            }
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Ok(Value::List(
+                entries
+                    .into_iter()
+                    .map(|(name, mut entry)| {
+                        if let Value::List(parts) = &mut entry {
+                            parts[0] = name.into();
+                        }
+                        entry
+                    })
+                    .collect(),
+            ))
+        };
+    "write-file" (2, Some(2)) "Write a string to a file, replacing what the file held." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            std::fs::write(&path, string(args, 1)?)
+                .map(|()| Value::Void)
+                .map_err(|error| CmdError::msg(format!("cannot write {}: {error}", path.display())))
+        };
+    "make-directory" (1, Some(1)) "Create a directory, and the directories above it that are missing." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            std::fs::create_dir_all(&path)
+                .map(|()| Value::Void)
+                .map_err(|error| CmdError::msg(format!("cannot create {}: {error}", path.display())))
+        };
+    "delete-file" (1, Some(1)) "Delete a file or a link. A directory is deleted with everything in it." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            let is_dir = path.symlink_metadata().is_ok_and(|meta| meta.is_dir());
+            if is_dir { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) }
+                .map(|()| Value::Void)
+                .map_err(|error| CmdError::msg(format!("cannot delete {}: {error}", path.display())))
+        };
+    "rename-file" (2, Some(2)) "Give a file or directory another name, which can be in another directory on the same file system. It is an error if something has the new name already." =>
+        |ed, args| {
+            let from = expand_path(string(args, 0)?, ed.working_directory());
+            let to = expand_path(string(args, 1)?, ed.working_directory());
+            if to.symlink_metadata().is_ok() {
+                return Err(CmdError::msg(format!("{} exists already", to.display())));
+            }
+            std::fs::rename(&from, &to)
+                .map(|()| Value::Void)
+                .map_err(|error| CmdError::msg(format!("cannot rename {}: {error}", from.display())))
+        };
+
     // Windows
 
     "window-list" (0, Some(0)) "The windows of the frame, as numbers, the selected one first." =>
@@ -642,6 +836,11 @@ pub const API: &[ApiFn] = api! {
         |ed, args| {
             let window = ed.window_by_number(int(args, 0)?)?;
             ed.select_window(window)?;
+            Ok(Value::Void)
+        };
+    "select-other-window" (0, Some(0)) "Select another window, to show something in, making one beside this if it is the only one." =>
+        |ed, _| {
+            ed.select_other_window()?;
             Ok(Value::Void)
         };
     "window-buffer" (0, Some(1)) "Name of the buffer that a window (default the selected one) shows." =>
@@ -680,6 +879,11 @@ pub const API: &[ApiFn] = api! {
                 labels.push((ed.window_by_number(window)?, pos, keys.clone()));
             }
             ed.show_labels(labels, args.len() > 1 && boolean(args, 1));
+            Ok(Value::Void)
+        };
+    "show-hint!" (1, Some(1)) "Show lines of text, a list of strings, under the echo area until the next key: what a menu of keys offers, for instance." =>
+        |ed, args| {
+            ed.show_hint(strings(args, 0)?);
             Ok(Value::Void)
         };
     "hide-labels!" (0, Some(0)) "Take away the labels that `show-labels!` put up." =>

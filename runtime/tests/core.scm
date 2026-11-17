@@ -157,10 +157,6 @@
   (check-false (minor-mode-enabled? 'test-minor-mode))
   (check-equal? (key-binding "C-f") 'forward-char))
 
-(deftest await-needs-a-command
-  ;; Tests run at top level, where there is nothing to return to.
-  (check-error (lambda () (read-string "Prompt: "))))
-
 (deftest buffers
   (check-equal? (buffer-name) "*test*")
   (check-false (buffer-file-name))

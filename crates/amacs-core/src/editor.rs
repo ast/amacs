@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use amacs_proto::{InputEvent, Key, KeyCode, Mods, NamedKey};
+use amacs_proto::{InputEvent, Key, KeyCode, Mods, MouseEvent, NamedKey};
 use amacs_text::{MarkerId, Text};
 use slotmap::SlotMap;
 
@@ -485,6 +485,7 @@ impl Editor {
             InputEvent::Key(key) => self.handle_key(key),
             InputEvent::Resize { cols, rows } => self.resize(cols, rows),
             InputEvent::Paste(text) => self.handle_paste(&text),
+            InputEvent::Mouse(event) => self.handle_mouse(event),
         }
     }
 
@@ -581,6 +582,88 @@ impl Editor {
                 self.message(format!("{keys} is undefined"));
             }
         }
+    }
+
+    /// The window that shows a cell of the frame, and the cell's row and
+    /// column in it. The mode line is no part of that.
+    fn window_at(&self, col: u16, row: u16) -> Option<(WindowId, usize, usize)> {
+        self.frame().layout.leaves().into_iter().find_map(|id| {
+            let rect = self.windows[id].rect;
+            let inside = (rect.x..rect.x + rect.w).contains(&col)
+                && (rect.y..rect.y + rect.h.saturating_sub(1)).contains(&row);
+            inside.then(|| (id, usize::from(row - rect.y), usize::from(col - rect.x)))
+        })
+    }
+
+    fn handle_mouse(&mut self, event: MouseEvent) {
+        self.relayout();
+        match event {
+            MouseEvent::Scroll { col, row, lines } => {
+                let Some((id, _, _)) = self.window_at(col, row) else {
+                    return;
+                };
+                // The window under the pointer scrolls, whichever is selected.
+                let selected = self.selected();
+                self.frame_mut().selected = id;
+                let result = self.scroll_lines(i64::from(lines));
+                self.frame_mut().selected = selected;
+                self.report(result);
+            }
+            MouseEvent::Press { col, row } => {
+                if self.in_minibuffer() || self.key_prompt.is_some() {
+                    return;
+                }
+                let Some((id, row, col)) = self.window_at(col, row) else {
+                    return;
+                };
+                self.frame_mut().echo = None;
+                self.cancel_pending();
+                self.execute_with("mouse-set-point", |ed| {
+                    ed.frame_mut().selected = id;
+                    let pos = ed.position_at(id, row, col);
+                    ed.set_point(pos);
+                    ed.buffer_mut().mark_active = false;
+                    Ok(())
+                });
+            }
+        }
+    }
+
+    /// The position in a window's buffer that is shown at a row and column
+    /// of the window, or the nearest there is.
+    fn position_at(&self, id: WindowId, row: usize, col: usize) -> usize {
+        let window = &self.windows[id];
+        let buffer = &self.buffers[window.buffer];
+        let (gutter, width) = crate::redisplay::text_area(window, buffer);
+        let col = col.saturating_sub(gutter);
+        let mut start = buffer.marker(window.start);
+        for _ in 0..row {
+            let walked = crate::display::walk_row(
+                buffer.text(),
+                start,
+                width,
+                buffer.tab_width,
+                |_, _, _, _| {},
+            );
+            match walked.next {
+                Some(next) => start = next,
+                // Below the end of the text.
+                None => return buffer.len(),
+            }
+        }
+        let mut found = None;
+        let walked = crate::display::walk_row(
+            buffer.text(),
+            start,
+            width,
+            buffer.tab_width,
+            |pos, _, column, cells| {
+                if found.is_none() && col < column + cells {
+                    found = Some(pos);
+                }
+            },
+        );
+        found.unwrap_or(walked.end)
     }
 
     fn handle_paste(&mut self, text: &str) {

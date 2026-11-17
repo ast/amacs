@@ -68,8 +68,11 @@ goes on working meanwhile. Each of these returns when the thing is there:
 
 If the user quits with `C-g` while a command waits, the command is left the
 way an error leaves it: `unwind-protect` and `dynamic-wind` clean up, and
-`guard` does not see it. Waiting works in commands and hooks, not in code
-evaluated as text.
+`guard` does not see it.
+
+Code evaluated as text, with `M-:` or `amacsclient --eval`, can wait too. The
+evaluation then answers at once, without a value, and the forms after the
+one that waits run when the wait is over.
 
 ## What is on screen
 
@@ -77,6 +80,86 @@ evaluated as text.
 places in windows, and `(hide-labels!)` removes them. `(avy-candidates match?)`
 finds places on screen, `(avy-pick candidates)` lets the user choose one by
 its label, and `(avy-jump candidates)` goes there.
+
+## Buffers that code writes
+
+A feature that shows something of its own, as the file manager does, writes
+a buffer and decorates it:
+
+```scheme
+(switch-to-buffer "*report*")
+(%replace-buffer-text! "Name   Size\nalpha    12\n")
+(add-face! 0 4 'dired-header)
+(set-buffer-read-only! #t)
+(set-buffer-directory! "~/src")
+```
+
+`%replace-buffer-text!` sets the whole text, read-only or not, without undo
+history. `add-face!` lays a face over a stretch of text, which stays on that
+text as the text around it changes; `clear-faces!` takes them away, and
+`set-face!` defines new faces. A major mode gives the buffer its keys:
+`(define-major-mode report-mode #f "Report" "...")` and then
+`(define-key 'report-mode "g" 'report-refresh)`. What the feature knows about
+each of its buffers it keeps itself, in a hash table by buffer name.
+
+## Files
+
+`(directory-entries dir)`, `(file-exists? name)`, `(file-directory? name)`,
+`(make-directory name)`, `(delete-file name)`, `(rename-file from to)`,
+`(read-file name)`, `(expand-file-name name)`, `(abbreviate-file-name name)`,
+`(file-name-directory name)`, `(file-name-nondirectory name)`. Copying is
+left to `cp`, through `run-process`, so that it does not hold the editor up.
+`(read-file-name "Prompt: ")` and `(read-directory-name "Prompt: ")` ask for
+names with completion.
+
+## The file manager
+
+`C-x d`, or visiting a directory, lists it; `runtime/lib/dired.scm` is the
+code. The keys are dired's: `RET` visits, `^` or `DEL` goes up, `m` `u` `U`
+`t` mark, `C` copies, `R` moves or renames, `D` deletes, `d` and `x` flag and
+delete, `+` makes a directory, `g` reads again, `q` quits. `TAB` opens a
+directory in place, `/` narrows to names that contain a text, `.` hides the
+dot files, `s` changes the order, `b` goes to a directory of the
+`dired-quick-access` option and `r` to one visited before. With two listings
+side by side, copying and moving offer the other one as where to.
+
+Its parts are there for other code: `(dired-open dir)`,
+`(dired-file-at-point)`, `(dired-marked-files)`, `(dired-refresh)`.
+
+## Git
+
+`C-x g` shows the status of the repository that the current buffer is in;
+`runtime/lib/git.scm` is the code, and everything is done by running git.
+
+| Key | Does |
+|---|---|
+| `TAB` | Fold or open the section at point: a group, a file, a hunk |
+| `RET` | Go to the file and line of a change; show a commit or a stash |
+| `s` / `u` | Stage / unstage the file or hunk at point, or the whole group |
+| `k` | Discard the change, delete the untracked file, or drop the stash, after asking |
+| `c` | Commit: `c` a new commit, `a` amend, `e` extend; `-a` and `-n` are switches |
+| `b` | Branch: `b` check out, `c` create, `k` delete |
+| `P` / `F` / `f` | Push (`-f` for force-with-lease), pull, fetch |
+| `z` | Stash: `z` stash, `p` pop, `a` apply |
+| `r` | Rebase: `u` onto the upstream, `c` continue, `s` skip, `a` abort |
+| `l` | Log: `l` this branch, `a` all |
+| `g` / `q` / `$` | Refresh, quit, show what git was asked and answered |
+
+The message of a commit is written in a buffer: `C-c C-c` commits and
+`C-c C-k` cancels. `M-x git-blame` shows who last changed each line of a
+file. With `(enable-mode! 'git-gutter-mode)` and line numbers on, the lines
+of a file that differ from what git has are marked beside their numbers when
+the file is visited or saved.
+
+The parts are there for other code: `(git root "arg" ...)` runs git and
+returns what it wrote, `(git-lines root ...)` the same as lines,
+`(git-parse-diff text)` takes a diff apart, and `(git-root)` finds the
+repository. The views are built from `runtime/lib/section.scm`, buffers of
+sections that fold, and the menus from `runtime/lib/menu.scm`:
+
+```scheme
+(key-menu "Push" '(("-f" "Force" "--force")) '(("p" "Push" push)))
+```
 
 ## Loading code
 
