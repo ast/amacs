@@ -9,7 +9,7 @@
 
 use amacs_core::{
     Buffer, BufferId, Candidate, CmdError, CmdResult, CommandBody, Completion, Editor, FaceSpec,
-    Formatter, ServerConfig, Value, expand_path,
+    Formatter, ServerConfig, Value, WindowId, expand_path, window_number,
 };
 use amacs_proto::parse_keys;
 
@@ -81,6 +81,15 @@ fn pos_or_point(ed: &Editor, args: &[Value], index: usize) -> CmdResult<usize> {
         pos(ed, args, index)
     } else {
         Ok(ed.point())
+    }
+}
+
+/// An optional window argument, defaulting to the selected window.
+fn window_arg(ed: &Editor, args: &[Value], index: usize) -> CmdResult<WindowId> {
+    if index < args.len() {
+        ed.window_by_number(int(args, index)?)
+    } else {
+        Ok(ed.selected_window())
     }
 }
 
@@ -365,13 +374,31 @@ pub const API: &[ApiFn] = api! {
     "%call-native-command" (1, Some(1)) "Run a built-in command by name." =>
         |ed, args| {
             let name = name(args, 0)?;
-            match ed.command(name).map(|command| command.body.clone()) {
-                Some(CommandBody::Native(run)) => run(ed).map(|()| Value::Void),
-                Some(CommandBody::Script(_)) => {
+            match ed.native_command(name) {
+                Some(run) => run(ed).map(|()| Value::Void),
+                None if ed.command(name).is_some() => {
                     Err(CmdError::msg(format!("{name} is not a built-in command")))
                 }
                 None => Err(CmdError::msg(format!("Unknown command: {name}"))),
             }
+        };
+    "%restore-native-command" (1, Some(1)) "Make a name stand for its built-in command again." =>
+        |ed, args| {
+            let name = name(args, 0)?;
+            let Some(run) = ed.native_command(name) else {
+                return Err(CmdError::msg(format!("{name} is not a built-in command")));
+            };
+            let doc = ed.command(name).map(|command| command.doc.clone()).unwrap_or_default();
+            ed.define_command(name, &doc, CommandBody::Native(run));
+            Ok(Value::Void)
+        };
+    "%native-command?" (1, Some(1)) "Whether there is a built-in command of this name, even if a command defined in Scheme has taken the name." =>
+        |ed, args| Ok(ed.native_command(name(args, 0)?).is_some().into());
+    "command-names" (0, Some(0)) "The names of all commands, as strings, in order." =>
+        |ed, _| {
+            let mut names: Vec<&str> = ed.command_names().collect();
+            names.sort_unstable();
+            Ok(Value::List(names.into_iter().map(Value::from).collect()))
         };
     "command?" (1, Some(1)) "Whether a command with this name exists." =>
         |ed, args| Ok(ed.command(name(args, 0)?).is_some().into());
@@ -603,6 +630,88 @@ pub const API: &[ApiFn] = api! {
         |ed, _| {
             let root = ed.project_of(ed.working_directory());
             Ok(root.map(|root| root.display().to_string()).into())
+        };
+
+    // Windows
+
+    "window-list" (0, Some(0)) "The windows of the frame, as numbers, the selected one first." =>
+        |ed, _| Ok(Value::List(ed.window_list().into_iter().map(|id| Value::Int(window_number(id))).collect()));
+    "selected-window" (0, Some(0)) "The selected window, as a number." =>
+        |ed, _| Ok(Value::Int(window_number(ed.selected_window())));
+    "select-window" (1, Some(1)) "Select a window of the frame." =>
+        |ed, args| {
+            let window = ed.window_by_number(int(args, 0)?)?;
+            ed.select_window(window)?;
+            Ok(Value::Void)
+        };
+    "window-buffer" (0, Some(1)) "Name of the buffer that a window (default the selected one) shows." =>
+        |ed, args| Ok(ed.window_state(window_arg(ed, args, 0)?).0.into());
+    "window-point" (0, Some(1)) "Where point is in a window (default the selected one)." =>
+        |ed, args| Ok(ed.window_state(window_arg(ed, args, 0)?).1.into());
+    "window-start" (0, Some(1)) "Position of the first char that a window (default the selected one) shows." =>
+        |ed, args| Ok(ed.visible_range(window_arg(ed, args, 0)?).start.into());
+    "window-end" (0, Some(1)) "Position after the last char that a window (default the selected one) shows." =>
+        |ed, args| Ok(ed.visible_range(window_arg(ed, args, 0)?).end.into());
+    "in-minibuffer?" (0, Some(0)) "Whether the minibuffer is selected." =>
+        |ed, _| Ok(ed.in_minibuffer().into());
+    "%set-buffer" (1, Some(1)) "Make the selected window show the named buffer for a moment, without what goes with switching to it." =>
+        |ed, args| {
+            let id = buffer_arg(ed, args, 0)?;
+            ed.set_current_buffer(id);
+            Ok(Value::Void)
+        };
+    "show-labels!" (1, Some(2)) "Show key sequences over places on screen, as for jumping to them: a list of lists of a window, a position in its buffer or #f for the window itself, and the keys as a string. With a second argument that is not #f, the text under them is dimmed." =>
+        |ed, args| {
+            let Value::List(entries) = &args[0] else {
+                return Err(wrong_type(0, "a list", &args[0]));
+            };
+            let mut labels = Vec::new();
+            for entry in entries {
+                let (window, pos, keys) = match entry {
+                    Value::List(parts) => match parts.as_slice() {
+                        [Value::Int(window), Value::Int(pos), Value::Str(keys)] => {
+                            (*window, usize::try_from(*pos).ok(), keys)
+                        }
+                        [Value::Int(window), Value::Bool(false), Value::Str(keys)] => (*window, None, keys),
+                        _ => return Err(wrong_type(0, "a list of (window position keys)", entry)),
+                    },
+                    other => return Err(wrong_type(0, "a list of (window position keys)", other)),
+                };
+                labels.push((ed.window_by_number(window)?, pos, keys.clone()));
+            }
+            ed.show_labels(labels, args.len() > 1 && boolean(args, 1));
+            Ok(Value::Void)
+        };
+    "hide-labels!" (0, Some(0)) "Take away the labels that `show-labels!` put up." =>
+        |ed, _| {
+            ed.hide_labels();
+            Ok(Value::Void)
+        };
+
+    // Waiting
+
+    "%read-key" (1, Some(1)) "Start waiting for a key, with a prompt. Returns a promise for the key as a string such as \"a\" or \"C-x\"." =>
+        |ed, args| Ok(Value::Int(ed.read_key_promise(string(args, 0)?) as i64));
+    "%timer" (1, Some(1)) "A promise that resolves after a number of milliseconds." =>
+        |ed, args| {
+            let milliseconds = u64::try_from(int(args, 0)?)
+                .map_err(|_| CmdError::msg("the time to wait cannot be negative"))?;
+            Ok(Value::Int(ed.timer_promise(milliseconds) as i64))
+        };
+    "%run-process" (3, Some(3)) "Start a program: its name, its arguments as a list of strings, and the text for its standard input. Returns a promise for a list of the exit status, what it wrote to standard output and what it wrote to standard error." =>
+        |ed, args| {
+            let Value::List(given) = &args[1] else {
+                return Err(wrong_type(1, "a list of strings", &args[1]));
+            };
+            let arguments = given
+                .iter()
+                .map(|arg| match arg {
+                    Value::Str(text) => Ok(text.clone()),
+                    other => Err(wrong_type(1, "a list of strings", other)),
+                })
+                .collect::<CmdResult<Vec<String>>>()?;
+            let id = ed.process_promise(string(args, 0)?, &arguments, string(args, 2)?.to_owned());
+            Ok(Value::Int(id as i64))
         };
 
     // The editor itself

@@ -432,4 +432,5 @@ The language server tests run against a small server of their own
 
 `runtime/` holds the part of the editor written in Scheme, and its tests.
 
-`docs/scheme.md` describes the editor's own Scheme.
+`docs/scheme.md` describes the editor's own Scheme, and `docs/extending.md`
+how to extend the editor with it.

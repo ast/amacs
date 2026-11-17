@@ -3,7 +3,6 @@
 mod edit;
 mod files;
 pub(crate) mod indent;
-mod jump;
 mod misc;
 mod motion;
 mod rect;
@@ -103,13 +102,6 @@ pub fn install(ed: &mut Editor) {
         "lsp-workspace-symbols" => Editor::lsp_workspace_symbols, "Find a symbol of the project by name.";
         "direnv-reload" => direnv_reload, "Read the project environments from direnv again.";
 
-        "avy-goto-char" => jump::goto_char, "Jump to a char on screen: type it, then the label that appears on the one you mean.";
-        "avy-goto-char-2" => jump::goto_char_2, "Jump to a pair of chars on screen.";
-        "avy-goto-word" => jump::goto_word, "Jump to a word on screen by its first char.";
-        "avy-goto-line" => jump::goto_line, "Jump to a line on screen.";
-        "zap-to-char" => jump::zap_to_char, "Kill from point through a char picked on screen.";
-        "zap-up-to-char" => jump::zap_up_to_char, "Kill from point up to a char picked on screen.";
-        "ace-window" => jump::ace_window, "Select another window, by label if there are several.";
         "windmove-left" => windows::windmove_left, "Select the window to the left.";
         "windmove-right" => windows::windmove_right, "Select the window to the right.";
         "windmove-up" => windows::windmove_up, "Select the window above.";

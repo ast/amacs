@@ -1,95 +1,16 @@
 //! End-to-end tests of the Scheme integration: keys in, screen out, with
 //! commands, hooks and modes defined in Scheme.
 
+mod common;
+
 use std::time::{Duration, Instant};
 
-use amacs_proto::{InputEvent, Key, parse_keys};
-use amacs_script::Session;
-use amacs_testkit::Screen;
-
-struct Harness {
-    session: Session,
-    screen: Screen,
-}
-
-impl Harness {
-    fn new() -> Self {
-        let mut session = Session::new(70, 8).unwrap_or_else(|e| panic!("{}", e.report));
-        session
-            .editor_mut()
-            .set_default_directory("/nonexistent/amacs-test");
-        let mut harness = Self {
-            session,
-            screen: Screen::default(),
-        };
-        harness.redisplay();
-        harness
-    }
-
-    fn redisplay(&mut self) {
-        // Wait for the matcher's worker threads, so that what a test sees
-        // does not depend on timing.
-        let start = Instant::now();
-        loop {
-            self.session.poll();
-            if !self.session.editor().is_matching() || start.elapsed() > Duration::from_secs(5) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        let ops = self.session.redisplay();
-        self.screen.apply(&ops);
-    }
-
-    fn keys(&mut self, keys: &str) -> &mut Self {
-        for key in parse_keys(keys).unwrap() {
-            self.session.handle_event(InputEvent::Key(key));
-            self.redisplay();
-        }
-        self
-    }
-
-    fn type_text(&mut self, text: &str) -> &mut Self {
-        for c in text.chars() {
-            self.session.handle_event(InputEvent::Key(Key::char(c)));
-        }
-        self.redisplay();
-        self
-    }
-
-    /// Evaluates Scheme that is expected to succeed.
-    fn eval(&mut self, source: &str) -> String {
-        let result = self
-            .session
-            .eval(source)
-            .unwrap_or_else(|e| panic!("{}", e.report));
-        self.redisplay();
-        result
-    }
-
-    /// Inserts a tab and an `x`, to see where the next tab stop is.
-    fn paste_tab(&mut self) {
-        self.session
-            .handle_event(InputEvent::Paste("\tx".to_owned()));
-        self.redisplay();
-    }
-
-    fn echo(&self) -> String {
-        self.screen.row(7)
-    }
-
-    fn mode_line(&self) -> String {
-        self.screen.row(6)
-    }
-
-    fn text(&self) -> String {
-        self.session.editor().text().to_string()
-    }
-}
+use amacs_proto::InputEvent;
+use common::Harness;
 
 #[test]
 fn evaluates_expressions() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     assert_eq!(h.eval("(+ 1 2)"), "3");
     assert_eq!(h.eval("(buffer-name)"), "\"*scratch*\"");
     assert_eq!(h.eval("(define x 5)"), "");
@@ -98,7 +19,7 @@ fn evaluates_expressions() {
 
 #[test]
 fn a_scheme_command_bound_to_a_key_is_one_undo_step() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(define-command (insert-banner)
              "Insert a banner line."
@@ -118,7 +39,7 @@ fn a_scheme_command_bound_to_a_key_is_one_undo_step() {
 
 #[test]
 fn built_in_keys_can_be_rebound_to_scheme_commands() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(define-command (kill-region-or-backward-kill-word)
              "Kill the region if it is active, else the word before point."
@@ -138,7 +59,7 @@ fn built_in_keys_can_be_rebound_to_scheme_commands() {
 
 #[test]
 fn prefix_arguments_reach_scheme_commands() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(define-command (show-arg)
              "Show the prefix argument."
@@ -153,7 +74,7 @@ fn prefix_arguments_reach_scheme_commands() {
 
 #[test]
 fn a_command_can_wait_for_minibuffer_input() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(define-command (greet)
              "Ask for a name and a greeting, and insert them."
@@ -179,7 +100,7 @@ fn a_command_can_wait_for_minibuffer_input() {
 
 #[test]
 fn quitting_a_prompt_abandons_the_command() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(define-command (ask)
              "Ask and insert."
@@ -200,7 +121,7 @@ fn quitting_a_prompt_abandons_the_command() {
 
 #[test]
 fn yes_or_no_questions() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(define-command (confirm)
              "Ask and report."
@@ -219,7 +140,7 @@ fn yes_or_no_questions() {
 
 #[test]
 fn errors_in_commands_are_reported_and_logged() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(define-command (broken)
              "Fail after editing."
@@ -248,7 +169,7 @@ fn errors_in_commands_are_reported_and_logged() {
 
 #[test]
 fn primitives_check_their_arguments() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     let arity = h.session.eval("(goto-char)").unwrap_err();
     assert!(
         arity
@@ -275,7 +196,7 @@ fn primitives_check_their_arguments() {
 
 #[test]
 fn eval_expression_shows_the_result() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.keys("M-:").type_text("(* 6 7)").keys("RET");
     assert_eq!(h.echo(), "42");
     h.keys("M-:").type_text("(undefined-function)").keys("RET");
@@ -288,7 +209,7 @@ fn eval_expression_shows_the_result() {
 
 #[test]
 fn eval_buffer_defines_commands_from_the_buffer() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.session.handle_event(InputEvent::Paste(
         "(define-command (from-buffer) \"Say so.\" (message \"defined in a buffer\"))".to_owned(),
     ));
@@ -299,7 +220,7 @@ fn eval_buffer_defines_commands_from_the_buffer() {
 
 #[test]
 fn runaway_scheme_code_can_be_interrupted() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval("(define (spin) (spin))");
     let interrupt = h.session.interrupt_handle();
     assert!(!interrupt.interrupt(), "nothing is running yet");
@@ -333,7 +254,7 @@ fn files_get_their_major_mode_from_their_name() {
     let path = dir.path().join("config.scm");
     std::fs::write(&path, "(define\tx 1)\n").unwrap();
 
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(r#"(add-hook! 'scheme-mode-hook (lambda () (set-local! 'tab-width 4)))"#);
     h.eval(&format!("(find-file {:?})", path.to_str().unwrap()));
     assert_eq!(h.mode_line(), " --  config.scm   L1 C0  (Scheme)");
@@ -352,7 +273,7 @@ fn source_files_are_highlighted_and_indented_by_their_mode() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("main.rs");
     std::fs::write(&file, "fn main() {\n}\n").unwrap();
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(add-hook! 'prog-mode-hook (lambda () (set-local! 'line-numbers 'relative)))
            (enable-mode! 'auto-pair-mode)
@@ -392,7 +313,7 @@ fn lisp_files_can_have_paredit_from_a_hook() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("init.scm");
     std::fs::write(&file, "").unwrap();
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval("(add-hook! 'scheme-mode-hook (lambda () (enable-mode! 'paredit-mode)))");
     h.eval(&format!("(find-file {:?})", file.display().to_string()));
     assert!(
@@ -413,7 +334,7 @@ fn snippets_and_formatters_are_set_up_from_scheme() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("notes.txt");
     std::fs::write(&file, "").unwrap();
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(define-snippets 'text-mode
              `((sig "-- " (p "name") n ,(lambda () (string-append "sent " "today")) q)))
@@ -439,7 +360,7 @@ fn snippets_and_formatters_are_set_up_from_scheme() {
 
 #[test]
 fn minor_modes_show_in_the_mode_line() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(r#"(define-minor-mode ruler-mode "Ruler" "Pretend to show a ruler.")"#);
     h.keys("M-x").type_text("ruler-mode").keys("RET");
     assert_eq!(h.echo(), "Ruler mode enabled");
@@ -450,7 +371,7 @@ fn minor_modes_show_in_the_mode_line() {
 
 #[test]
 fn post_command_hook_runs_once_per_command() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(define count 0)
            (add-hook! 'post-command-hook (lambda () (set! count (+ count 1))))"#,
@@ -469,7 +390,7 @@ fn post_command_hook_runs_once_per_command() {
 fn after_save_hook_runs_after_saving() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("saved.txt");
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(r#"(add-hook! 'after-save-hook (lambda () (log-message (string-append "saved " (buffer-name)))))"#);
     h.eval(&format!("(find-file {:?})", path.to_str().unwrap()));
     assert_eq!(h.mode_line(), " --  saved.txt   L1 C0  (Text)");
@@ -491,7 +412,7 @@ fn init_file_errors_are_reported_and_earlier_forms_take_effect() {
     )
     .unwrap();
 
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     let error = h.session.load_file(&init).unwrap_err();
     assert!(
         error.summary.contains("this-is-not-defined"),
@@ -510,7 +431,7 @@ fn init_file_errors_are_reported_and_earlier_forms_take_effect() {
 #[test]
 fn the_scheme_test_suite_passes() {
     let tests = concat!(env!("CARGO_MANIFEST_DIR"), "/../../runtime/tests/core.scm");
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.session
         .load_file(std::path::Path::new(tests))
         .unwrap_or_else(|e| panic!("{}", e.report));
@@ -521,7 +442,7 @@ fn the_scheme_test_suite_passes() {
 
 #[test]
 fn failing_scheme_tests_are_reported_by_name() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(deftest passes (check-equal? 1 1))
            (deftest fails (insert "x") (check-equal? (buffer-string) "y"))
@@ -536,7 +457,7 @@ fn failing_scheme_tests_are_reported_by_name() {
 #[test]
 fn the_example_init_file_loads_and_its_commands_work() {
     let init = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/init.scm");
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.session
         .load_file(std::path::Path::new(init))
         .unwrap_or_else(|e| panic!("{}", e.report));
@@ -571,7 +492,7 @@ fn the_example_init_file_loads_and_its_commands_work() {
 
 #[test]
 fn scheme_commands_can_offer_candidates() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(define-command (pick-colour)
              "Choose a colour and insert it."
@@ -598,7 +519,7 @@ fn scheme_commands_can_offer_candidates() {
 /// on its way out.
 #[test]
 fn quitting_a_prompt_runs_the_cleanup_of_the_waiting_command() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(define trail '())
            (define-command (careful)
@@ -623,7 +544,7 @@ fn files_of_scheme_are_loaded_by_name() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("lib.scm");
     std::fs::write(&path, "(define (triple x) (* 3 x))\n(triple 2)\n").unwrap();
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     assert_eq!(
         h.eval(&format!("(load {:?})", path.display().to_string())),
         "6"
@@ -651,7 +572,7 @@ fn files_of_scheme_are_loaded_by_name() {
 
 #[test]
 fn the_editor_can_be_asked_about_itself() {
-    let mut h = Harness::new();
+    let mut h = Harness::new(70, 8);
     h.eval(
         r#"(define-command (shout)
              "Insert a loud word."

@@ -15,6 +15,7 @@ use crate::completion::Waker;
 use crate::decorate::Labels;
 use crate::env::{EnvState, Environments};
 use crate::error::{CmdError, CmdResult};
+use crate::extend::ExtendState;
 use crate::faces::Faces;
 use crate::format::Formatter;
 use crate::frame::{Frame, FrameId};
@@ -96,7 +97,7 @@ pub(crate) struct KeyPrompt {
     pub prompt: String,
     answer: KeyAnswer,
     /// Promise to reject if the question is abandoned, when Scheme waits.
-    promise: Option<u64>,
+    pub(crate) promise: Option<u64>,
 }
 
 /// The system clipboard, as far as the kill ring is concerned. Kills are
@@ -145,6 +146,11 @@ pub struct Editor {
     events: Vec<EditorEvent>,
 
     commands: HashMap<String, Command>,
+    /// The built-in commands. A command of the same name defined in Scheme
+    /// replaces the entry above but not this one, so that it can call what
+    /// it replaces.
+    natives: HashMap<String, fn(&mut Editor) -> CmdResult>,
+    pub(crate) extend: ExtendState,
     /// Keymaps by name: [`GLOBAL_MAP`], [`MINIBUFFER_MAP`], and one per mode,
     /// named after the mode.
     keymaps: HashMap<String, Keymap>,
@@ -219,6 +225,8 @@ impl Editor {
             events: Vec::new(),
             commands: HashMap::new(),
             keymaps: HashMap::new(),
+            natives: HashMap::new(),
+            extend: ExtendState::default(),
             script: ScriptState::new(),
             faces: Faces::default(),
             lsp: LspState::default(),
@@ -263,6 +271,9 @@ impl Editor {
     /// Defines or redefines a command. Keys bound to its name run the new
     /// definition.
     pub fn define_command(&mut self, name: &str, doc: &str, body: CommandBody) {
+        if let CommandBody::Native(run) = &body {
+            self.natives.insert(name.to_owned(), *run);
+        }
         let command = Command {
             name: name.to_owned(),
             doc: doc.to_owned(),
@@ -273,6 +284,12 @@ impl Editor {
 
     pub fn command(&self, name: &str) -> Option<&Command> {
         self.commands.get(name)
+    }
+
+    /// The built-in command of a name, whether or not a command defined in
+    /// Scheme has taken the name.
+    pub fn native_command(&self, name: &str) -> Option<fn(&mut Editor) -> CmdResult> {
+        self.natives.get(name).copied()
     }
 
     pub fn command_names(&self) -> impl Iterator<Item = &str> {
@@ -313,6 +330,18 @@ impl Editor {
         self.this_command = Some(name.to_owned());
         self.keep_goal = false;
         self.keep_mark = false;
+        // With functions on the hook that runs before commands, Scheme runs
+        // them and then the command.
+        if self.hook_active("pre-command-hook") {
+            let queued = self.queue_script(ScriptCall {
+                target: ScriptTarget::Named("%run-command"),
+                args: vec![Value::sym(name)],
+                command: Some(name.to_owned()),
+                echo_result: false,
+            });
+            self.report(queued);
+            return;
+        }
         let run = match body {
             CommandBody::Native(run) => run,
             CommandBody::Script(func) => {
@@ -645,6 +674,7 @@ impl Editor {
         self.sync_minibuffer(now);
         self.environment_poll();
         self.lsp_poll(now);
+        self.extend_poll(now);
         self.completion_poll(now);
         if self.auto_revert_due.is_none_or(|due| due <= now) {
             self.auto_revert_due = Some(now + AUTO_REVERT_INTERVAL);
@@ -664,6 +694,7 @@ impl Editor {
             self.completion.due,
             self.lsp.idle_due,
             self.auto_revert_due,
+            self.extend_deadline(),
         ]
         .into_iter()
         .flatten()

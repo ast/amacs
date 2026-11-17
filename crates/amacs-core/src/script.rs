@@ -401,6 +401,10 @@ impl Editor {
         }
     }
 
+    pub(crate) fn hook_active(&self, name: &str) -> bool {
+        self.script.active_hooks.contains(name)
+    }
+
     /// Queues a run of a hook's functions, if it has any.
     pub fn run_hook(&mut self, name: &str, mut args: Vec<Value>) {
         if self.script.active_hooks.contains(name) {
