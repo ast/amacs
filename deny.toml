@@ -5,14 +5,7 @@ all-features = true
 
 [advisories]
 version = 2
-# Unmaintained crates that steel-core 0.8.3 depends on. None has a known
-# vulnerability. Revisit when Steel is upgraded.
 ignore = [
-    { id = "RUSTSEC-2025-0141", reason = "bincode 1, via steel-core" },
-    { id = "RUSTSEC-2026-0247", reason = "bitmaps, via steel-core (im-rc)" },
-    { id = "RUSTSEC-2026-0250", reason = "im-rc, via steel-core" },
-    { id = "RUSTSEC-2026-0251", reason = "sized-chunks, via steel-core (im-rc)" },
-    { id = "RUSTSEC-2026-0543", reason = "chrono, via steel-core" },
     # Unmaintained, no known vulnerability. Used by cosmic-text's font database
     # to read font files. Revisit when cosmic-text is upgraded.
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser, via cosmic-text (fontdb)" },

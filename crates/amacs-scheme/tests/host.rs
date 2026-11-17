@@ -355,7 +355,7 @@ fn the_program_can_look_at_itself() {
             &mut vm,
             "(filter (lambda (name) (let ((value (global-ref name))) (and (procedure? value) (not (procedure-documentation value)) (not (char=? #\\% (string-ref (symbol->string name) 0)))))) (global-names))"
         ),
-        "(promise? sum)"
+        "(sum)"
     );
 }
 

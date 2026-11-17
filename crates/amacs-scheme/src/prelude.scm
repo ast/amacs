@@ -313,7 +313,7 @@ or for default if there is none."
 
 (define-record-type promise
   (%make-promise done? value)
-  promise?
+  %promise?
   (done? %promise-done? %promise-done!)
   (value %promise-value %promise-value!))
 
@@ -324,6 +324,10 @@ or for default if there is none."
 (define-syntax delay
   (syntax-rules ()
     ((_ expression) (delay-force (%make-promise #t expression)))))
+
+(define (promise? x)
+  "Whether x is a promise, as made by delay."
+  (%promise? x))
 
 (define (make-promise value)
   "A promise that already has its value."

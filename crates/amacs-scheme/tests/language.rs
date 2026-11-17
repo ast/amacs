@@ -714,6 +714,21 @@ fn eval_runs_data_as_code() {
     );
     assert_eq!(run("(read-from-string \"\")"), "#<eof>");
     assert_eq!(
+        run(
+            "(eval-string \"(define-syntax twice (syntax-rules () ((_ e) (* 2 e)))) (define (f x) (twice x)) (f 4)\")"
+        ),
+        "8"
+    );
+    assert_eq!(run("(eval-string \"\")"), "#<void>");
+    assert_eq!(
+        run("(eval-string \"(define ok 1)\\n(car ok)\" \"lib.scm\")"),
+        "error: lib.scm:2:1: car: expected a pair, got 1"
+    );
+    assert_eq!(
+        run("(eval-string \"(define (g) 1\" \"lib.scm\")"),
+        "error: lib.scm:1:1: this bracket is never closed"
+    );
+    assert_eq!(
         run("(guard (e (#t (error-object-message e))) (read-from-string \"(1\"))"),
         "\"read-from-string: this bracket is never closed\""
     );

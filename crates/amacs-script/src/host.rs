@@ -1,4 +1,4 @@
-//! What the Scheme engines have in common.
+//! What the Scheme host and the session share.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -6,24 +6,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use amacs_core::Editor;
-
-/// Which Scheme runs the editor's extensions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Engine {
-    Steel,
-    /// amacs's own Scheme, the `amacs-scheme` crate.
-    Own,
-}
-
-impl Engine {
-    /// The engine that `AMACS_ENGINE` names: `steel`, or `own`.
-    pub fn from_env() -> Self {
-        match std::env::var("AMACS_ENGINE").as_deref() {
-            Ok("own") => Engine::Own,
-            _ => Engine::Steel,
-        }
-    }
-}
 
 thread_local! {
     /// The editor that primitives act on while Scheme code runs on this thread.
@@ -87,4 +69,25 @@ pub struct EvalError {
     pub summary: String,
     /// The full report with the source location.
     pub report: String,
+    /// The message alone.
+    pub message: String,
+    /// Where the error is, as `file:line:column`.
+    pub location: Option<String>,
+    /// The calls that were in progress, innermost first: the procedure's
+    /// name and where it had got to.
+    pub trace: Vec<(Option<String>, Option<String>)>,
+}
+
+impl EvalError {
+    /// An error that is one line and nothing more.
+    pub fn plain(summary: impl Into<String>) -> Self {
+        let summary = summary.into();
+        Self {
+            report: summary.clone(),
+            message: summary.clone(),
+            summary,
+            location: None,
+            trace: Vec::new(),
+        }
+    }
 }

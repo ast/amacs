@@ -124,8 +124,10 @@ impl Client {
             source: source.to_owned(),
         });
         match self.receive() {
-            Some(ServerMsg::EvalResult { ok: true, text }) => Ok(text),
-            Some(ServerMsg::EvalResult { ok: false, text }) => Err(text),
+            Some(ServerMsg::EvalResult { ok: true, text, .. }) => Ok(text),
+            Some(ServerMsg::EvalResult {
+                ok: false, text, ..
+            }) => Err(text),
             other => panic!("unexpected reply: {other:?}"),
         }
     }
@@ -183,6 +185,63 @@ impl Client {
 }
 
 #[test]
+fn programs_get_errors_in_parts_and_what_the_code_wrote() {
+    let server = Server::start();
+    let library = server.file(
+        "library.scm",
+        "(define (first-word words)\n  (display \"looking\")\n  (car words))\n",
+    );
+    let mut client = Client::connect(&server);
+    client.eval(&format!("(load {library:?})")).unwrap();
+    let library = library.display();
+
+    client.send(ClientMsg::Eval {
+        source: "(display \"hello \") (write 'there) (+ 1 2)".to_owned(),
+    });
+    let Some(ServerMsg::EvalResult {
+        ok: true,
+        text,
+        output,
+        failure: None,
+    }) = client.receive()
+    else {
+        panic!("expected a value");
+    };
+    assert_eq!((text.as_str(), output.as_str()), ("3", "hello there"));
+
+    client.send(ClientMsg::Eval {
+        source: "(define (count-words text) (list (first-word text)))\n(count-words 5)".to_owned(),
+    });
+    let Some(ServerMsg::EvalResult {
+        ok: false,
+        text,
+        output,
+        failure: Some(failure),
+    }) = client.receive()
+    else {
+        panic!("expected an error");
+    };
+    assert_eq!(output, "looking");
+    assert_eq!(failure.message, "car: expected a pair, got 5");
+    assert_eq!(failure.location, Some(format!("{library}:3:3")));
+    assert_eq!(
+        failure.trace,
+        vec![
+            (
+                Some("first-word".to_owned()),
+                Some(format!("{library}:3:3"))
+            ),
+            (Some("count-words".to_owned()), Some("eval:1:34".to_owned())),
+            (None, Some("eval:2:1".to_owned())),
+        ]
+    );
+    assert!(
+        text.starts_with("error: car: expected a pair, got 5\n  at "),
+        "{text}"
+    );
+}
+
+#[test]
 fn evaluates_scheme_for_programs() {
     let server = Server::start();
     let file = server.file("notes.txt", "first\nsecond\n");
@@ -208,11 +267,7 @@ fn evaluates_scheme_for_programs() {
     );
 
     let error = client.eval("(car 1)").unwrap_err();
-    // The wording of either Scheme engine, for as long as there are two.
-    assert!(
-        error.contains("car expected a list or pair") || error.contains("car: expected a pair"),
-        "{error}"
-    );
+    assert!(error.contains("car: expected a pair, got 1"), "{error}");
     assert_eq!(
         client.eval("(+ 2 2)").unwrap(),
         "4",

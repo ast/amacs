@@ -11,18 +11,34 @@
   (syntax-rules ()
     [(_ (name) doc body ...)
      (begin
-       (define (name) doc body ...)
+       (define (name) body ...)
+       (set-documentation! 'name doc)
        (%define-command 'name doc name))]))
 
-;; Runs a command by name, whether it is built in or defined in Scheme.
+(set-documentation! 'define-command
+  "(define-command (name) \"Documentation.\" body ...)
+Defines a command, which M-x offers and keys can be bound to, and a
+procedure of the same name.")
+
 (define (call-command name)
+  "Runs a command by name, whether it is built in or defined in Scheme."
   (let ((f (%script-command name)))
     (if f (f) (%call-native-command name))))
 
-;; Key sequences are strings in Emacs notation: "C-x C-f", "M-<left>", "H-c".
-(define (global-set-key keys command) (%bind-key 'global keys command))
-(define (global-unset-key keys) (%unbind-key 'global keys))
+(define (global-set-key keys command)
+  "Binds a key sequence to a command, a symbol, in every buffer. Key
+sequences are strings in Emacs notation: \"C-x C-f\", \"M-<left>\", \"H-c\"."
+  (%bind-key 'global keys command))
 
-;; MAP is the name of a mode, or 'global or 'minibuffer.
-(define (define-key map keys command) (%bind-key map keys command))
-(define (undefine-key map keys) (%unbind-key map keys))
+(define (global-unset-key keys)
+  "Removes the global binding of a key sequence."
+  (%unbind-key 'global keys))
+
+(define (define-key map keys command)
+  "Binds a key sequence to a command in a keymap: the name of a mode, or
+'global or 'minibuffer."
+  (%bind-key map keys command))
+
+(define (undefine-key map keys)
+  "Removes the binding of a key sequence in a keymap."
+  (%unbind-key map keys))

@@ -1,7 +1,7 @@
 //! The editor primitives that Scheme code can call.
 //!
 //! Each primitive is a plain function over the core's [`Value`] type, so this
-//! table does not depend on the Scheme engine. Names starting with `%` are
+//! table does not depend on the Scheme interpreter. Names starting with `%` are
 //! building blocks for the Scheme runtime in `runtime/`, not for users.
 //!
 //! Buffer positions are zero-based char offsets: the first position is 0 and
@@ -299,6 +299,13 @@ pub const API: &[ApiFn] = api! {
             let path = expand_path(string(args, 0)?, ed.working_directory());
             ed.find_file(&path)?;
             Ok(Value::Void)
+        };
+    "read-file" (1, Some(1)) "The contents of a file, as a string. A relative name is taken from the working directory, and a leading ~ is the home directory." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            std::fs::read_to_string(&path)
+                .map(Value::from)
+                .map_err(|error| CmdError::msg(format!("cannot read {}: {error}", path.display())))
         };
     "working-directory" (0, Some(0)) "Directory that relative file names are resolved against." =>
         |ed, _| Ok(ed.working_directory().display().to_string().into());

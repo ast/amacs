@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use amacs_core::{EditorEvent, FrameId};
 use amacs_proto::{
-    ClientMsg, FileSpec, FrameRequest, InputEvent, Key, PROTOCOL_VERSION, ServerMsg, read_msg,
-    socket_path, write_msg,
+    ClientMsg, EvalFailure, FileSpec, FrameRequest, InputEvent, Key, PROTOCOL_VERSION, ServerMsg,
+    read_msg, socket_path, write_msg,
 };
 use amacs_script::{InterruptHandle, Session};
 use anyhow::{Context, Result, bail};
@@ -365,11 +365,25 @@ impl Server {
         match message {
             ClientMsg::Hello { .. } => {}
             ClientMsg::Eval { source } => {
-                let reply = match self.session.eval_quietly(&source) {
-                    Ok(text) => ServerMsg::EvalResult { ok: true, text },
+                self.session.take_output();
+                let result = self.session.eval_quietly(&source);
+                let output = self.session.take_output();
+                let reply = match result {
+                    Ok(text) => ServerMsg::EvalResult {
+                        ok: true,
+                        text,
+                        output,
+                        failure: None,
+                    },
                     Err(error) => ServerMsg::EvalResult {
                         ok: false,
                         text: error.report.trim_end().to_owned(),
+                        output,
+                        failure: Some(EvalFailure {
+                            message: error.message,
+                            location: error.location,
+                            trace: error.trace,
+                        }),
                     },
                 };
                 self.send(id, reply);

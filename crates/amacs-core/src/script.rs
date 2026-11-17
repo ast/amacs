@@ -1,6 +1,6 @@
 //! The core's side of the Scheme interface.
 //!
-//! The core never runs Scheme itself and does not know which engine is used.
+//! The core never runs Scheme itself and does not know the interpreter.
 //! When it wants Scheme code to run, such as a command defined in Scheme, a
 //! hook, or a waiting `read-string`, it queues a [`ScriptCall`]. The script
 //! host takes calls off the queue between input events and runs them while it

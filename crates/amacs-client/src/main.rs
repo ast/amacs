@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use amacs_client::{Connection, parse_position, sibling_binary};
-use amacs_proto::{ClientMsg, FileSpec, FrameRequest, ServerMsg, read_msg, socket_path, write_msg};
+use amacs_proto::{
+    ClientMsg, EvalFailure, FileSpec, FrameRequest, ServerMsg, read_msg, socket_path, write_msg,
+};
 use amacs_tty::Tty;
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -22,6 +24,9 @@ Options:
   -c, --create-frame      Open a frame in a new window
   -n, --no-wait           Return at once instead of waiting for the files
   -e, --eval EXPR         Evaluate a Scheme expression and print its value
+      --json              Print the outcome of each --eval as a JSON object:
+                          the value and what the code wrote, or the error's
+                          message, location and trace
       --kill-server       Stop the server, saving what it can for recovery
   -s, --socket-name PATH  Use this socket instead of the default
   -h, --help              Show this help
@@ -33,6 +38,7 @@ Without -t, a frame is opened in this terminal only if no client has one.";
 struct Options {
     files: Vec<FileSpec>,
     evals: Vec<String>,
+    json: bool,
     tty: bool,
     create_frame: bool,
     no_wait: bool,
@@ -93,6 +99,7 @@ fn parse_args() -> Result<Option<Options>> {
             "-c" | "--create-frame" => options.create_frame = true,
             "-n" | "--no-wait" => options.no_wait = true,
             "--kill-server" => options.kill_server = true,
+            "--json" => options.json = true,
             "-s" | "--socket-name" => options.socket = Some(value("a path")?.into()),
             "-e" | "--eval" => {
                 let expr = value("an expression")?
@@ -124,6 +131,29 @@ fn exit(message: Option<String>, status: u8) -> ExitCode {
     ExitCode::from(status)
 }
 
+/// The outcome of an evaluation as one line of JSON.
+fn eval_json(ok: bool, text: &str, output: &str, failure: Option<&EvalFailure>) -> String {
+    let value = match failure {
+        _ if ok => serde_json::json!({ "ok": true, "value": text, "output": output }),
+        Some(failure) => serde_json::json!({
+            "ok": false,
+            "message": failure.message,
+            "location": failure.location,
+            "trace": failure
+                .trace
+                .iter()
+                .map(|(procedure, location)| {
+                    serde_json::json!({ "procedure": procedure, "location": location })
+                })
+                .collect::<Vec<_>>(),
+            "output": output,
+            "report": text,
+        }),
+        None => serde_json::json!({ "ok": false, "message": text, "output": output }),
+    };
+    value.to_string()
+}
+
 fn run() -> Result<ExitCode> {
     let Some(options) = parse_args()? else {
         return Ok(ExitCode::SUCCESS);
@@ -139,8 +169,21 @@ fn run() -> Result<ExitCode> {
             source: source.clone(),
         })?;
         match connection.receive()? {
-            ServerMsg::EvalResult { ok: true, text } => println!("{text}"),
-            ServerMsg::EvalResult { ok: false, text } => {
+            ServerMsg::EvalResult {
+                ok,
+                text,
+                output,
+                failure,
+            } if options.json => {
+                println!("{}", eval_json(ok, &text, &output, failure.as_ref()));
+                if !ok {
+                    return Ok(ExitCode::FAILURE);
+                }
+            }
+            ServerMsg::EvalResult { ok: true, text, .. } => println!("{text}"),
+            ServerMsg::EvalResult {
+                ok: false, text, ..
+            } => {
                 eprintln!("{text}");
                 return Ok(ExitCode::FAILURE);
             }

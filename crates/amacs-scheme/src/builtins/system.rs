@@ -120,11 +120,18 @@ fn call_form(core: &Core, name: &str, signature: &Signature) -> String {
 /// Everything known about what a name means at the top level, as text.
 fn describe(core: &Core, name: Symbol) -> String {
     let text = core.symbols.name(name);
+    let noted = core.docs.get(&name);
+    let with_note = |mut out: String| {
+        if let Some(doc) = noted {
+            let _ = write!(out, "\n{doc}");
+        }
+        out
+    };
     if core.macros.contains_key(&name) {
-        return format!("{text} is a macro.");
+        return with_note(format!("{text} is a macro."));
     }
     if core.specials.contains_key(&name) {
-        return format!("{text} is a special form.");
+        return with_note(format!("{text} is a special form."));
     }
     let Some(global) = core.global(name) else {
         return format!("{text} is not defined.");
@@ -134,10 +141,10 @@ fn describe(core: &Core, name: Symbol) -> String {
         .and_then(|span| core.sources.location(span))
         .map(|location| location.to_string());
     let Ok(signature) = signature(core, "describe", global.value) else {
-        let mut out = format!(
+        let mut out = with_note(format!(
             "{text} is a variable. Its value is {}",
             core.write(global.value)
-        );
+        ));
         if let Some(location) = defined_at {
             let _ = write!(out, "\nDefined at {location}");
         }
@@ -149,7 +156,7 @@ fn describe(core: &Core, name: Symbol) -> String {
         "a procedure built in"
     };
     let mut out = format!("{text} is {kind}: {}", call_form(core, text, &signature));
-    if let Some(doc) = &signature.doc {
+    if let Some(doc) = signature.doc.as_ref().or(noted) {
         let _ = write!(out, "\n{doc}");
     }
     if let Some(location) = signature.location.or(defined_at) {
@@ -181,6 +188,13 @@ pub(super) fn install(core: &mut Core) {
             Some(2),
             Control::Eval,
             "(eval datum) Runs a datum as code at the top level.",
+        ),
+        (
+            "eval-string",
+            1,
+            Some(2),
+            Control::EvalString,
+            "(eval-string text [name]) Reads the text and runs everything in it, at the top level. Returns the last value. The name is what errors call the text; a file's path, when it comes from a file.",
         ),
         (
             "raise",
@@ -689,6 +703,33 @@ pub(super) fn install(core: &mut Core) {
         |core, args| {
             let described = describe(core, symbol(core, "describe", args[0])?);
             Ok(core.string(described))
+        },
+    );
+    core.define_native(
+        "set-documentation!",
+        2,
+        Some(2),
+        "(set-documentation! 'name text) Gives documentation to a name that cannot carry its own: a macro or a variable. `describe` shows it.",
+        |core, args| {
+            let name = symbol(core, "set-documentation!", args[0])?;
+            let doc = text(core, "set-documentation!", args[1])?.to_owned();
+            core.docs.insert(name, doc);
+            Ok(Value::Void)
+        },
+    );
+    core.define_native(
+        "documentation",
+        1,
+        Some(1),
+        "(documentation 'name) The documentation of what a name means at the top level, or #f: a procedure's own, or what `set-documentation!` gave.",
+        |core, args| {
+            let name = symbol(core, "documentation", args[0])?;
+            let own = core
+                .global(name)
+                .and_then(|global| signature(core, "documentation", global.value).ok())
+                .and_then(|signature| signature.doc);
+            let doc = own.or_else(|| core.docs.get(&name).cloned());
+            Ok(optional_string(core, doc))
         },
     );
     core.define_native(

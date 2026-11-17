@@ -15,18 +15,25 @@
     [(_ name body ...)
      (set! %tests (cons (cons 'name (lambda () body ...)) %tests))]))
 
+(set-documentation! 'deftest
+  "(deftest name body ...)
+Defines a test, which `run-tests` runs in a new, empty buffer.")
+
 (define (check-equal? actual expected)
+  "Fails the running test unless the two values are equal?."
   (unless (equal? actual expected)
     (error "check-equal? failed: got" actual "but expected" expected)))
 
 (define (check-true value)
+  "Fails the running test if the value is #f."
   (unless value (error "check-true failed")))
 
 (define (check-false value)
+  "Fails the running test unless the value is #f."
   (when value (error "check-false failed: got" value)))
 
-;; Checks that THUNK raises an error.
 (define (check-error thunk)
+  "Fails the running test unless calling thunk raises an error."
   (unless (call-with-error-handler (lambda (message) #t) (lambda () (thunk) #f))
     (error "check-error failed: no error was raised")))
 
@@ -42,10 +49,10 @@
    (lambda (message) message)
    (lambda () ((cdr test)) #f)))
 
-;; Runs every test defined so far, in definition order. Returns a list whose
-;; first element is the number of tests that passed and whose other elements
-;; are (name message) for each failure.
 (define (run-tests)
+  "Runs every test defined so far, in definition order. Returns a list
+whose first element is the number of tests that passed and whose other
+elements are (name message) for each failure."
   (let loop ((tests (reverse %tests)) (passed 0) (failures '()))
     (if (null? tests)
         (begin

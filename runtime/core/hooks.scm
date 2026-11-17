@@ -6,24 +6,27 @@
 ;;;   post-command-hook  after every command
 ;;; Every mode also has a hook named after it, such as `rust-mode-hook`.
 
-(define %hooks (table))
+(define %hooks (make-hash-table))
 
 (define (hook-functions name)
-  (or (table-ref %hooks name) '()))
+  "The procedures on a hook, in the order they run."
+  (hash-table-ref %hooks name '()))
 
 (define (%set-hook-functions! name functions)
-  (set! %hooks (table-set %hooks name functions))
+  (hash-table-set! %hooks name functions)
   (%hook-active! name (not (null? functions))))
 
-;; Adds F to the end of a hook, unless it is already there.
 (define (add-hook! name f)
+  "Adds a procedure to the end of a hook, unless it is already there."
   (unless (member f (hook-functions name))
     (%set-hook-functions! name (append (hook-functions name) (list f)))))
 
 (define (remove-hook! name f)
+  "Takes a procedure off a hook."
   (%set-hook-functions! name (filter (lambda (g) (not (equal? f g))) (hook-functions name))))
 
 (define (run-hooks name . args)
+  "Calls every procedure on a hook with the arguments."
   (for-each (lambda (f) (apply f args)) (hook-functions name)))
 
 ;; The editor's entry point.

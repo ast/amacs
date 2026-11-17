@@ -40,13 +40,14 @@
 (define-formatter 'shfmt "shfmt" '("-"))
 (define-formatter 'tofu-fmt "tofu" '("fmt" "-"))
 
-;; Buffers in MODE are formatted with FORMATTER by `format-buffer`.
 (define (use-formatter! mode formatter)
+  "Buffers in the mode are formatted with the formatter by `format-buffer`."
   (add-hook! (%mode-hook-name mode)
     (lambda () (set-local! 'formatter formatter))))
 
-;; Buffers in MODE are formatted with FORMATTER, also whenever they are saved.
 (define (format-on-save! mode formatter)
+  "Buffers in the mode are formatted with the formatter, also whenever
+they are saved."
   (add-hook! (%mode-hook-name mode)
     (lambda ()
       (set-local! 'formatter formatter)
@@ -75,6 +76,9 @@
 ;;; next field and S-TAB to the previous.
 
 (define (define-snippets mode snippets)
+  "Defines snippets for a mode and the modes derived from it. Each is a
+list of a name and the elements of its template; see runtime/core/tools.scm
+for what the elements are."
   (for-each
    (lambda (snippet)
      (%define-snippet mode (car snippet) (cdr snippet)))
@@ -89,4 +93,5 @@
         elements)))
 
 (define (expand-snippet . elements)
+  "Expands a snippet template, given as its elements, at point."
   (%expand-snippet elements))

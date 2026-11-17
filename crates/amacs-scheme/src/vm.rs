@@ -17,6 +17,7 @@ use crate::heap::Heap;
 use crate::reader::read_next;
 use crate::source::{Sources, Span};
 use crate::symbol::Interner;
+use crate::syntax::{Datum, Ident, Syntax};
 use crate::value::{
     Closure, Control, ErrorObject, Handle, Native, NativeKind, Object, Symbol, Value,
 };
@@ -75,6 +76,9 @@ pub struct Core {
     global_index: HashMap<Symbol, u32>,
     pub macros: HashMap<Symbol, Rc<Macro>>,
     pub specials: HashMap<Symbol, Special>,
+    /// Documentation given to names that cannot carry their own: macros
+    /// and variables.
+    pub docs: HashMap<Symbol, String>,
     pub keywords: Keywords,
     marks: u32,
     functions: u32,
@@ -152,6 +156,7 @@ impl Core {
             global_index: HashMap::new(),
             macros: HashMap::new(),
             specials,
+            docs: HashMap::new(),
             keywords,
             marks: 0,
             functions: 0,
@@ -515,7 +520,7 @@ impl Vm {
         }
     }
 
-    fn compile(&mut self, form: crate::syntax::Syntax) -> Result<Value, Error> {
+    fn compile(&mut self, form: Syntax) -> Result<Value, Error> {
         // Code is a tree that can be some thousand levels deep, and taking
         // such a tree apart when done with it needs stack like building it.
         let proto = stacker::maybe_grow(2 * 1024 * 1024, 16 * 1024 * 1024, || {
@@ -654,6 +659,7 @@ impl Vm {
                     message: error.message,
                     irritants: error.irritants,
                     trace,
+                    span: error.span,
                 })))
             }
         };
@@ -667,6 +673,7 @@ impl Vm {
                 let mut error = Error::new(object.message.clone());
                 error.irritants.clone_from(&object.irritants);
                 error.trace.clone_from(&object.trace);
+                error.span = object.span;
                 error
             }
             Some(Object::Escape(tag, _)) if *tag == Value::Sym(self.core.interrupt_tag) => {
@@ -929,6 +936,41 @@ impl Vm {
                 self.fiber.stack.push(closure);
                 self.call_value(0, false)
             }
+            Control::EvalString => {
+                let Some(source) = self.core.as_str(arg(self, 0)).map(str::to_owned) else {
+                    return Err(Error::new("eval-string: expected a string")
+                        .with_irritants(vec![arg(self, 0)]));
+                };
+                let name = match (nargs > 1).then(|| self.core.as_str(arg(self, 1))) {
+                    Some(Some(name)) => name.to_owned(),
+                    Some(None) => {
+                        return Err(Error::new("eval-string: expected a string as the name")
+                            .with_irritants(vec![arg(self, 1)]));
+                    }
+                    None => "eval-string".to_owned(),
+                };
+                // The forms become one `begin`, which at the top level is
+                // the same as the forms one after the other.
+                let file = self.core.sources.add(&name, &source);
+                let begin = self.core.symbols.intern("begin");
+                let whole = Span {
+                    file,
+                    start: 0,
+                    end: source.len() as u32,
+                };
+                let mut forms = vec![Syntax::new(Datum::Ident(Ident::plain(begin)), whole)];
+                let mut pos = 0;
+                while let Some((form, after)) =
+                    read_next(&source, file, pos, &mut self.core.symbols)?
+                {
+                    forms.push(form);
+                    pos = after;
+                }
+                let closure = self.compile(Syntax::new(Datum::List(forms), whole))?;
+                self.fiber.stack.truncate(slot);
+                self.fiber.stack.push(closure);
+                self.call_value(0, false)
+            }
             Control::Raise | Control::RaiseContinuable => {
                 let payload = arg(self, 0);
                 self.fiber.stack.truncate(slot);
@@ -947,6 +989,7 @@ impl Vm {
                     message,
                     irritants,
                     trace,
+                    span: None,
                 })));
                 self.raise(payload, false)?;
                 Ok(Flow::Frame)

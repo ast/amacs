@@ -1,4 +1,4 @@
-//! The backend built on amacs's own Scheme, `amacs-scheme`.
+//! The Scheme host: the interpreter with the editor's primitives in it.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -11,7 +11,7 @@ use amacs_core::{Editor, ScriptCall, ScriptFn, ScriptOutcome, ScriptTarget, Valu
 use amacs_scheme::{Core, Error, Object, Outcome, Report, Rooted, Vm};
 
 use crate::api::API;
-use crate::host::{CurrentEditor, Engine, EvalError, EvalResult, InterruptHandle, current_editor};
+use crate::host::{CurrentEditor, EvalError, EvalResult, InterruptHandle, current_editor};
 use crate::runtime;
 
 type Scheme = amacs_scheme::Value;
@@ -74,7 +74,7 @@ fn to_scheme(core: &mut Core, value: &Value) -> Scheme {
         Value::Func(ScriptFn(func)) => func
             .downcast_ref::<Rooted>()
             .map(Rooted::value)
-            // A procedure from some other engine cannot be called by this one.
+            // Not a procedure of this interpreter.
             .unwrap_or(Scheme::Void),
     }
 }
@@ -87,6 +87,13 @@ fn eval_error(report: &Report, located: bool) -> EvalError {
             report.message.clone()
         },
         report: report.to_string(),
+        message: report.message.clone(),
+        location: report.location.as_ref().map(ToString::to_string),
+        trace: report
+            .trace
+            .iter()
+            .map(|(name, location)| (name.clone(), location.as_ref().map(ToString::to_string)))
+            .collect(),
     }
 }
 
@@ -98,6 +105,8 @@ pub struct SchemeHost {
     /// Whether the running code was called by the editor, as a command or
     /// a hook is, rather than evaluated as text. Only then can it wait.
     called: Rc<Cell<bool>>,
+    /// What code has written since it was last taken.
+    output: String,
 }
 
 impl SchemeHost {
@@ -166,15 +175,20 @@ impl SchemeHost {
             running: Arc::default(),
             waiting,
             called,
+            output: String::new(),
         };
-        for (name, source) in runtime::sources(Engine::Own) {
+        for (name, source) in runtime::sources() {
             host.eval_source(editor, &source, &format!("runtime/{name}"))
                 .map_err(|report| EvalError {
                     summary: format!("runtime/{name}: {}", report.message),
-                    report: report.to_string(),
+                    ..eval_error(&report, true)
                 })?;
         }
         Ok(host)
+    }
+
+    pub fn take_output(&mut self) -> String {
+        std::mem::take(&mut self.output)
     }
 
     pub fn interrupt_handle(&self) -> InterruptHandle {
@@ -205,6 +219,15 @@ impl SchemeHost {
         let written = std::mem::take(&mut self.vm.core.output);
         if !written.is_empty() {
             editor.borrow_mut().log(written.trim_end_matches('\n'));
+            self.output.push_str(&written);
+            // Nobody may ever ask for it.
+            if self.output.len() > 1 << 20 {
+                let keep = self.output.len() - (1 << 19);
+                let cut = (keep..self.output.len())
+                    .find(|at| self.output.is_char_boundary(*at))
+                    .unwrap_or(self.output.len());
+                self.output.drain(..cut);
+            }
         }
         match outcome {
             Ok(Outcome::Done(value)) => Ok(value),
@@ -286,10 +309,7 @@ impl SchemeHost {
         let value = self
             .eval_source(editor, source, "eval")
             .map_err(|report| eval_error(&report, false))?;
-        from_scheme(&self.vm.core, value).map_err(|error| EvalError {
-            summary: error.message.clone(),
-            report: error.message,
-        })
+        from_scheme(&self.vm.core, value).map_err(|error| EvalError::plain(error.message))
     }
 
     /// Runs a call that the editor queued.
@@ -311,13 +331,7 @@ impl SchemeHost {
                 let symbol = self.vm.core.symbols.intern(name);
                 match self.vm.core.lookup(symbol) {
                     Some(procedure) => self.call(editor, procedure, &call.args),
-                    None => {
-                        let summary = format!("unbound variable: {name}");
-                        Err(EvalError {
-                            report: summary.clone(),
-                            summary,
-                        })
-                    }
+                    None => Err(EvalError::plain(format!("unbound variable: {name}"))),
                 }
             }
         };

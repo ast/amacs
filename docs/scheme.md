@@ -6,9 +6,10 @@ a Rust rebuild: a definition takes effect at once, every procedure can be
 asked what it is, and an error says where it happened and how the program got
 there.
 
-It runs next to Steel for now. `AMACS_ENGINE=own` in the environment of the
-`amacs` server selects it; without that the engine is Steel. The scripting
-tests run on both.
+The editor used Steel until this was written. Steel is a good Scheme, but it
+is a general one: values could not be traced back to their source, a call
+could not be suspended and resumed from outside without `call/cc` tricks, and
+starting it took a tenth of a second.
 
 ## What it is
 
@@ -56,6 +57,8 @@ fails if they get worse.
 | `(global-set! 'name value)` | A definition made by a program |
 | `(error-object-trace e)` | The calls that led to an error, as data |
 | `(record->list r)` | The fields of any record |
+| `(documentation 'name)`, `(set-documentation! 'name text)` | Documentation, also for macros and variables, which cannot carry their own |
+| `(load "file.scm")`, `(eval-string text)` | Run a file or a text; definitions take effect at once |
 
 All of it works through `amacsclient --eval`, which is how a program outside
 the editor uses it. An error comes back like this:
@@ -67,6 +70,11 @@ error: car: expected a pair, got 5
   in outer, at init.scm:15:9
   in top level, at init.scm:20:1
 ```
+
+With `--json`, `amacsclient --eval` prints one JSON object for each
+expression instead: `ok`, and then either `value` and `output` (what the code
+wrote with `display`), or `message`, `location`, `trace` (a list of
+`procedure` and `location`), `output` and the `report` above.
 
 A name refers to a numbered variable, not to the value it had when the code
 that uses it was compiled. Defining a procedure again changes it for every
@@ -90,15 +98,18 @@ thread, and `Vm::fuel` bounds how long code may run.
 
 ## Speed
 
-`cargo run --release -p amacs-script --example compare` runs the same
-programs on both engines. On the machine this was written on:
+Measured against Steel 0.8.3 with the same programs, before Steel was
+removed, on the machine this was written on:
 
 | | Steel | own |
 |---|---|---|
-| Start an engine | 124 ms | 0.9 ms |
+| Start an interpreter | 124 ms | 0.9 ms |
 | `fib 27` | 37 ms | 35 ms |
 | 1M calls of a host procedure | 86 ms | 56 ms |
 | `map` and `filter` over 300k items | 130 ms | 93 ms |
 | 1M calls of a closure that assigns | 160 ms | 86 ms |
 | 200k string appends and comparisons | 35 ms | 23 ms |
 | 100k lookups in an association list | 252 ms | 37 ms |
+
+`cargo run --release -p amacs-scheme --example bench` times a few programs
+on the interpreter as it is now.

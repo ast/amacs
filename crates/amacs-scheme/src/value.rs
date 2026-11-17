@@ -90,6 +90,8 @@ pub struct Native {
 pub enum Control {
     Apply,
     Eval,
+    /// `eval-string`: read a text and run everything in it.
+    EvalString,
     Raise,
     RaiseContinuable,
     /// `error`: make an error of a message and raise it.
@@ -141,6 +143,10 @@ pub struct ErrorObject {
     pub irritants: Vec<Value>,
     /// Where it was raised: the innermost call first.
     pub trace: Vec<crate::error::TraceFrame>,
+    /// Where in the source the mistake is, when that is somewhere other
+    /// than where the innermost call had got to: in code being read or
+    /// compiled.
+    pub span: Option<crate::source::Span>,
 }
 
 pub enum Object {

@@ -20,6 +20,12 @@
 ;;
 ;; The parent is another mode, or #f. The body runs each time the mode is
 ;; selected, before the mode hooks.
+(set-documentation! 'define-major-mode
+  "(define-major-mode name parent \"Pretty name\" \"Documentation.\" body ...)
+Defines a major mode and the command that selects it. The parent is another
+mode, or #f. The body runs each time the mode is selected, before the hooks
+of the mode and its ancestors.")
+
 (define-syntax define-major-mode
   (syntax-rules ()
     [(_ name parent pretty doc body ...)
@@ -40,8 +46,14 @@
     (%set-minor-mode! mode (if (member mode %global-modes) #t #f) on)
     (run-hooks (%mode-hook-name mode))))
 
-(define (enable-mode! mode) (%switch-mode! mode #t))
-(define (disable-mode! mode) (%switch-mode! mode #f))
+(define (enable-mode! mode)
+  "Turns a minor mode on without saying so, for hooks and init files. A
+mode defined as global is turned on everywhere."
+  (%switch-mode! mode #t))
+
+(define (disable-mode! mode)
+  "Turns a minor mode off without saying so."
+  (%switch-mode! mode #f))
 
 (define (%toggle-minor-mode name pretty global?)
   (let ((on (not (minor-mode-enabled? name))))
@@ -54,6 +66,15 @@
 ;;   (define-minor-mode ruler-mode "Ruler" "Show a ruler.")
 ;;
 ;; The mode's hook runs on every toggle; use `minor-mode-enabled?` in it.
+(set-documentation! 'define-minor-mode
+  "(define-minor-mode name \"Pretty name\" \"Documentation.\")
+Defines a minor mode and the command that toggles it in the current buffer.
+The mode's hook runs on every toggle; use `minor-mode-enabled?` in it.")
+
+(set-documentation! 'define-global-minor-mode
+  "(define-global-minor-mode name \"Pretty name\" \"Documentation.\")
+Like `define-minor-mode`, for a mode that is on in every buffer at once.")
+
 (define-syntax define-minor-mode
   (syntax-rules ()
     [(_ name pretty doc)
@@ -75,9 +96,9 @@
 ;; Pairs of (suffix . mode), newest first.
 (define %auto-modes '())
 
-;; Files whose names end in SUFFIX open in MODE. A suffix can be an extension
-;; such as ".rs" or a whole name such as "/Makefile".
 (define (add-auto-mode! suffix mode)
+  "Files whose names end in the suffix open in the mode. A suffix can be an
+extension such as \".rs\" or a whole name such as \"/Makefile\"."
   (set! %auto-modes (cons (cons suffix mode) %auto-modes)))
 
 (define (%auto-mode-for file)

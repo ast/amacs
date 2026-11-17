@@ -1,6 +1,6 @@
 [package]
 name = "amacs-script"
-description = "Scheme host for amacs: the primitives exposed to Scheme and the engines that run it"
+description = "Scheme host for amacs: the primitives exposed to Scheme and the interpreter that runs it"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,6 @@ amacs-proto.workspace = true
 amacs-scheme.workspace = true
 jiff.workspace = true
 serde_json.workspace = true
-steel-core.workspace = true
 
 [dev-dependencies]
 amacs-testkit.workspace = true

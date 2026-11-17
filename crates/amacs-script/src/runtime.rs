@@ -6,19 +6,16 @@
 
 use std::path::PathBuf;
 
-use crate::host::Engine;
-
 macro_rules! file {
     ($name:literal) => {
         ($name, include_str!(concat!("../../../runtime/", $name)))
     };
 }
 
-/// Runtime files in load order, relative to the runtime directory. The
-/// first two are written for one engine each.
-const STEEL: &[(&str, &str)] = &[file!("core/compat.scm"), file!("core/async.scm")];
-const OWN: &[(&str, &str)] = &[file!("core/compat-own.scm"), file!("core/async-own.scm")];
-const SHARED: &[(&str, &str)] = &[
+/// Runtime files in load order, relative to the runtime directory.
+const FILES: &[(&str, &str)] = &[
+    file!("core/compat.scm"),
+    file!("core/async.scm"),
     file!("core/prompts.scm"),
     file!("core/commands.scm"),
     file!("core/hooks.scm"),
@@ -29,15 +26,11 @@ const SHARED: &[(&str, &str)] = &[
     file!("core/test.scm"),
 ];
 
-/// Name and source of each runtime file for an engine, in load order.
-pub fn sources(engine: Engine) -> Vec<(String, String)> {
+/// Name and source of each runtime file, in load order.
+pub fn sources() -> Vec<(String, String)> {
     let root = std::env::var_os("AMACS_RUNTIME").map(PathBuf::from);
-    let own = match engine {
-        Engine::Steel => STEEL,
-        Engine::Own => OWN,
-    };
-    own.iter()
-        .chain(SHARED)
+    FILES
+        .iter()
         .map(|(name, embedded)| {
             let on_disk = root
                 .as_ref()

@@ -11,8 +11,8 @@ mod wire;
 pub use draw::{Color, CursorShape, DisplayLine, DrawOp, FaceAttrs, FaceId, PaneId, PaneRect, Run};
 pub use key::{Key, KeyCode, Mods, NamedKey, ParseKeyError, parse_keys};
 pub use wire::{
-    ClientMsg, FileSpec, FrameRequest, PROTOCOL_VERSION, ServerMsg, pid_path, read_msg,
-    socket_path, write_msg,
+    ClientMsg, EvalFailure, FileSpec, FrameRequest, PROTOCOL_VERSION, ServerMsg, pid_path,
+    read_msg, socket_path, write_msg,
 };
 
 use serde::{Deserialize, Serialize};

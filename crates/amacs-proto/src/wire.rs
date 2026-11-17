@@ -13,11 +13,23 @@ use serde::{Deserialize, Serialize};
 use crate::{DrawOp, InputEvent};
 
 /// Changes whenever a message changes shape. Client and server must agree.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Larger messages are refused, so that a corrupt length cannot make the
 /// reader allocate without bound.
 const MAX_MESSAGE: usize = 64 * 1024 * 1024;
+
+/// An error from evaluating Scheme, in parts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvalFailure {
+    /// One line: what went wrong.
+    pub message: String,
+    /// Where, as `file:line:column`.
+    pub location: Option<String>,
+    /// The calls that were in progress, innermost first: the procedure's
+    /// name and where it had got to. Either can be unknown.
+    pub trace: Vec<(Option<String>, Option<String>)>,
+}
 
 /// A file to visit, with an optional position to go to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +88,10 @@ pub enum ServerMsg {
     EvalResult {
         ok: bool,
         text: String,
+        /// What the code wrote with `display` and its like.
+        output: String,
+        /// The error taken apart, for programs.
+        failure: Option<EvalFailure>,
     },
     /// The client is done and should exit with this status.
     Exit {

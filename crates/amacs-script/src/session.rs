@@ -5,81 +5,27 @@ use std::rc::Rc;
 use amacs_core::{Editor, FrameId, ScriptCall, ScriptOutcome, ScriptTarget, Value};
 use amacs_proto::{DrawOp, InputEvent};
 
-use crate::host::{Engine, EvalError, EvalResult, InterruptHandle};
+use crate::host::{EvalError, EvalResult, InterruptHandle};
 use crate::scheme::SchemeHost;
-use crate::steel::SteelHost;
 
-/// The engine that runs the Scheme code.
-enum Host {
-    Steel(Box<SteelHost>),
-    Own(Box<SchemeHost>),
-}
-
-impl Host {
-    fn interrupt_handle(&self) -> InterruptHandle {
-        match self {
-            Host::Steel(host) => host.interrupt_handle(),
-            Host::Own(host) => host.interrupt_handle(),
-        }
-    }
-
-    fn eval(
-        &mut self,
-        editor: &Rc<RefCell<Editor>>,
-        source: &str,
-        path: Option<&Path>,
-    ) -> EvalResult {
-        match self {
-            Host::Steel(host) => host.eval(editor, source, path),
-            Host::Own(host) => host.eval(editor, source, path),
-        }
-    }
-
-    fn eval_value(
-        &mut self,
-        editor: &Rc<RefCell<Editor>>,
-        source: &str,
-    ) -> Result<Value, EvalError> {
-        match self {
-            Host::Steel(host) => host.eval_value(editor, source),
-            Host::Own(host) => host.eval_value(editor, source),
-        }
-    }
-
-    fn run(&mut self, editor: &Rc<RefCell<Editor>>, call: &ScriptCall) -> ScriptOutcome {
-        match self {
-            Host::Steel(host) => host.run(editor, call),
-            Host::Own(host) => host.run(editor, call),
-        }
-    }
-}
-
-/// An editor together with the Scheme engine that extends it.
+/// An editor together with the Scheme interpreter that extends it.
 ///
 /// The session owns the control flow between the two: the editor never calls
 /// Scheme directly. It queues calls, and the session runs them after each
 /// event, when nothing holds a borrow of the editor.
 pub struct Session {
     editor: Rc<RefCell<Editor>>,
-    host: Host,
+    host: SchemeHost,
 }
 
 impl Session {
     /// Creates an editor with a frame of the given size and loads the Scheme
-    /// runtime, on the engine that the environment names. Fails only if
-    /// the runtime itself is broken.
+    /// runtime. Fails only if the runtime itself is broken.
     pub fn new(cols: u16, rows: u16) -> Result<Self, EvalError> {
-        Self::with_engine(cols, rows, Engine::from_env())
-    }
-
-    pub fn with_engine(cols: u16, rows: u16, engine: Engine) -> Result<Self, EvalError> {
         let mut editor = Editor::new(cols, rows);
         editor.attach_script_host();
         let editor = Rc::new(RefCell::new(editor));
-        let host = match engine {
-            Engine::Steel => Host::Steel(Box::new(SteelHost::new(&editor)?)),
-            Engine::Own => Host::Own(Box::new(SchemeHost::new(&editor)?)),
-        };
+        let host = SchemeHost::new(&editor)?;
         let mut session = Self { editor, host };
         session.pump();
         Ok(session)
@@ -154,6 +100,12 @@ impl Session {
         result
     }
 
+    /// What Scheme code has written with `display` and its like since this
+    /// was last asked. It is also in the message log.
+    pub fn take_output(&mut self) -> String {
+        self.host.take_output()
+    }
+
     pub fn should_exit(&self) -> bool {
         self.editor.borrow().should_exit()
     }
@@ -189,10 +141,7 @@ impl Session {
         let source = std::fs::read_to_string(path).map_err(|error| {
             let summary = format!("Cannot read {shown}: {error}");
             self.editor.borrow_mut().message(summary.clone());
-            EvalError {
-                report: summary.clone(),
-                summary,
-            }
+            EvalError::plain(summary)
         })?;
         self.eval_top_level(&source, Some(path))
             .map(drop)
