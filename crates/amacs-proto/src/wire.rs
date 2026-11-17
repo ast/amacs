@@ -135,6 +135,14 @@ pub fn socket_path() -> PathBuf {
     dir.join("server.sock")
 }
 
+/// Where a server listening on `socket` writes its process id, so that it
+/// can be stopped by a client that cannot talk to it.
+pub fn pid_path(socket: &std::path::Path) -> PathBuf {
+    let mut name = socket.as_os_str().to_owned();
+    name.push(".pid");
+    PathBuf::from(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

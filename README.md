@@ -308,6 +308,12 @@ and starts it if it is not running:
     amacsclient -n FILE            # visit FILE and return at once
     amacsclient +12:4 FILE         # go to line 12, column 4
     amacsclient --eval '(buffer-list)'
+    amacsclient --kill-server      # stop the server, as after rebuilding
+
+A client and a server from different builds may not understand each other;
+the client then says so, and `amacsclient --kill-server` stops the old
+server so that the next client starts a new one. It asks the server to
+terminate, which makes it auto-save unsaved buffers first.
 
 `EDITOR=amacsclient` works for `git commit` and the like: without `-t`, the
 file opens in a frame that some client already has, or else in this terminal.

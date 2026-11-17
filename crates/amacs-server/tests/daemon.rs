@@ -345,7 +345,7 @@ fn bad_clients_are_turned_away_without_harm() {
             message: Some(message),
             status: 1,
         }) => {
-            assert!(message.contains("restart the server"), "{message}");
+            assert!(message.contains("amacsclient --kill-server"), "{message}");
         }
         other => panic!("unexpected reply: {other:?}"),
     }
@@ -386,6 +386,12 @@ fn a_second_server_refuses_to_take_over_the_socket() {
 #[test]
 fn exiting_the_editor_stops_the_server_and_its_clients() {
     let mut server = Server::start();
+    // The server says which process it is, for stopping it from outside.
+    let pid_file = amacs_proto::pid_path(&server.socket());
+    assert_eq!(
+        fs::read_to_string(&pid_file).unwrap().trim(),
+        server.child.id().to_string()
+    );
     let mut frame = Client::attach(&server, 40, 6, &[], false);
     let mut other = Client::connect(&server);
     assert_eq!(other.eval("(exit-editor)").unwrap(), "");
@@ -401,6 +407,7 @@ fn exiting_the_editor_stops_the_server_and_its_clients() {
         !server.socket().exists(),
         "the socket is removed on a clean exit"
     );
+    assert!(!pid_file.exists(), "and so is the note of the process id");
 }
 
 #[test]

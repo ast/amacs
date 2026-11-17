@@ -22,6 +22,7 @@ Options:
   -c, --create-frame      Open a frame in a new window
   -n, --no-wait           Return at once instead of waiting for the files
   -e, --eval EXPR         Evaluate a Scheme expression and print its value
+      --kill-server       Stop the server, saving what it can for recovery
   -s, --socket-name PATH  Use this socket instead of the default
   -h, --help              Show this help
   -V, --version           Show the version
@@ -35,6 +36,7 @@ struct Options {
     tty: bool,
     create_frame: bool,
     no_wait: bool,
+    kill_server: bool,
     socket: Option<PathBuf>,
 }
 
@@ -90,6 +92,7 @@ fn parse_args() -> Result<Option<Options>> {
             "-t" | "--tty" => options.tty = true,
             "-c" | "--create-frame" => options.create_frame = true,
             "-n" | "--no-wait" => options.no_wait = true,
+            "--kill-server" => options.kill_server = true,
             "-s" | "--socket-name" => options.socket = Some(value("a path")?.into()),
             "-e" | "--eval" => {
                 let expr = value("an expression")?
@@ -104,6 +107,9 @@ fn parse_args() -> Result<Option<Options>> {
         bail!("--tty and --create-frame cannot be combined");
     }
     let wants_frame = options.tty || options.create_frame;
+    if options.kill_server {
+        return Ok(Some(options));
+    }
     if options.files.is_empty() && options.evals.is_empty() && !wants_frame {
         bail!("nothing to do: give a file, --eval, --tty or --create-frame\n{USAGE}");
     }
@@ -123,6 +129,9 @@ fn run() -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     };
     let socket = options.socket.clone().unwrap_or_else(socket_path);
+    if options.kill_server {
+        return kill_server(&socket);
+    }
     let mut connection = Connection::open(&socket)?;
 
     for source in &options.evals {
@@ -140,6 +149,15 @@ fn run() -> Result<ExitCode> {
         }
     }
     if options.create_frame {
+        // The window is a program of its own, which with --no-wait has
+        // nowhere to say that the server would not have it. Ask something
+        // here first: a server of another build answers by refusing.
+        connection.send(&ClientMsg::Eval {
+            source: "#t".to_owned(),
+        })?;
+        if let ServerMsg::Exit { message, status } = connection.receive()? {
+            return Ok(exit(message, status.max(1)));
+        }
         return open_window(&options, &socket);
     }
     if options.files.is_empty() && !options.tty {
@@ -177,6 +195,53 @@ fn run() -> Result<ExitCode> {
         ServerMsg::Exit { message, status } => Ok(exit(message, status)),
         other => bail!("unexpected reply from the server: {other:?}"),
     }
+}
+
+/// Stops the server that listens on `socket`, without talking to it, so
+/// that a server of another build can be stopped too. It is asked to
+/// terminate, which makes it save what is unsaved for recovery first.
+fn kill_server(socket: &Path) -> Result<ExitCode> {
+    use std::os::unix::net::UnixStream;
+
+    let listening = || UnixStream::connect(socket).is_ok();
+    let pid_file = amacs_proto::pid_path(socket);
+    let pid = std::fs::read_to_string(&pid_file)
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok());
+    let Some(pid) = pid else {
+        if listening() {
+            bail!(
+                "a server is running, but it is from a build that did not record its \
+                 process id; stop it with `pkill -x amacs`"
+            );
+        }
+        println!("No server is running");
+        return Ok(ExitCode::SUCCESS);
+    };
+    // The id may be left over from a server that is gone, and belong to
+    // something else by now.
+    let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+    if name.trim() != "amacs" {
+        let _ = std::fs::remove_file(&pid_file);
+        println!("No server is running");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let asked = Command::new("kill")
+        .arg(pid.to_string())
+        .status()
+        .context("cannot run kill")?;
+    if !asked.success() {
+        bail!("could not stop the server (process {pid})");
+    }
+    let started = std::time::Instant::now();
+    while listening() {
+        if started.elapsed() > std::time::Duration::from_secs(10) {
+            bail!("the server (process {pid}) was asked to stop but is still running");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    println!("Server stopped");
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Hands over to the graphical client, which opens a window for the files.

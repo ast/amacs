@@ -66,14 +66,26 @@ struct Server {
 struct Listener {
     listener: UnixListener,
     created: Option<PathBuf>,
+    /// The file that holds this process's id, for `amacsclient
+    /// --kill-server`.
+    pid_file: Option<PathBuf>,
 }
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        if let Some(path) = &self.created {
+        for path in [&self.created, &self.pid_file].into_iter().flatten() {
             let _ = std::fs::remove_file(path);
         }
     }
+}
+
+/// Writes this process's id beside the socket. Not being able to is no
+/// reason not to serve.
+fn write_pid_file() -> Option<PathBuf> {
+    let path = amacs_proto::pid_path(&socket_path());
+    std::fs::write(&path, format!("{}\n", std::process::id()))
+        .ok()
+        .map(|()| path)
 }
 
 /// Takes the socket that systemd passed in, or binds one.
@@ -86,6 +98,7 @@ fn listen() -> Result<Listener> {
         return Ok(Listener {
             listener,
             created: None,
+            pid_file: write_pid_file(),
         });
     }
 
@@ -110,6 +123,7 @@ fn listen() -> Result<Listener> {
     Ok(Listener {
         listener,
         created: Some(path),
+        pid_file: write_pid_file(),
     })
 }
 
@@ -332,7 +346,9 @@ impl Server {
                 ClientMsg::Hello { version } if version == PROTOCOL_VERSION => conn.greeted = true,
                 ClientMsg::Hello { version } => {
                     let message = format!(
-                        "amacsclient speaks protocol {version} but the server speaks {PROTOCOL_VERSION}; restart the server"
+                        "amacsclient speaks protocol {version} but the server that is running speaks {PROTOCOL_VERSION}: \
+                         it is from another build. Stop it with `amacsclient --kill-server`, or `pkill -x amacs` \
+                         if it is too old to know that, and try again"
                     );
                     self.finish(id, Some(message), 1);
                 }
