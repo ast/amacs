@@ -12,6 +12,7 @@ use crate::buffer::{Buffer, BufferId};
 use crate::commands;
 use crate::completion::Waker;
 use crate::error::{CmdError, CmdResult};
+use crate::faces::Faces;
 use crate::frame::{Frame, FrameId};
 use crate::history::History;
 use crate::keymap::{Keymap, Lookup, lookup_in};
@@ -129,6 +130,7 @@ pub struct Editor {
     /// named after the mode.
     keymaps: HashMap<String, Keymap>,
     pub(crate) script: ScriptState,
+    pub(crate) faces: Faces,
     pending_keys: Vec<Key>,
     esc_pending: bool,
     /// Prefix argument for the next command.
@@ -182,6 +184,7 @@ impl Editor {
             commands: HashMap::new(),
             keymaps: HashMap::new(),
             script: ScriptState::new(),
+            faces: Faces::default(),
             pending_keys: Vec::new(),
             esc_pending: false,
             prefix_arg: None,
@@ -643,6 +646,36 @@ impl Editor {
         if let Some(question) = &mut self.key_prompt {
             question.promise = Some(id);
         }
+    }
+
+    // Faces and themes
+
+    pub fn faces(&self) -> &Faces {
+        &self.faces
+    }
+
+    /// The faces, for changing them. Frames are redrawn afterwards.
+    pub fn faces_mut(&mut self) -> &mut Faces {
+        &mut self.faces
+    }
+
+    /// Sets the language of the current buffer by name, or clears it.
+    pub fn set_language(&mut self, name: Option<&str>) -> CmdResult {
+        let language = match name {
+            Some(name) => Some(
+                amacs_treesit::language(name)
+                    .ok_or_else(|| CmdError::msg(format!("Unknown language: {name}")))?,
+            ),
+            None => None,
+        };
+        self.buffer_mut().set_language(language);
+        Ok(())
+    }
+
+    /// Indents the line that point is on as its language says.
+    pub fn indent_current_line(&mut self) -> CmdResult {
+        let line = self.text().line_of(self.point());
+        crate::commands::indent_line(self, line)
     }
 
     // Messages and exit

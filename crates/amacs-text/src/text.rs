@@ -93,6 +93,48 @@ impl Text {
         self.rope.chars_at(pos)
     }
 
+    // Byte offsets, for tools such as tree-sitter that count in UTF-8 bytes.
+
+    /// Length in bytes.
+    pub fn len_bytes(&self) -> usize {
+        self.rope.len_bytes()
+    }
+
+    pub fn char_to_byte(&self, pos: usize) -> usize {
+        self.rope.char_to_byte(pos)
+    }
+
+    /// The char that contains byte `byte`. `byte == self.len_bytes()` is valid.
+    pub fn byte_to_char(&self, byte: usize) -> usize {
+        self.rope.byte_to_char(byte)
+    }
+
+    /// Byte offset of the first char of `line`.
+    pub fn line_to_byte(&self, line: usize) -> usize {
+        self.rope.line_to_byte(line)
+    }
+
+    /// Zero-based line containing byte `byte`.
+    pub fn byte_to_line(&self, byte: usize) -> usize {
+        self.rope.byte_to_line(byte)
+    }
+
+    /// A piece of the text that starts at byte `byte`. It is empty only at
+    /// the end of the text.
+    pub fn chunk_at_byte(&self, byte: usize) -> &str {
+        if byte >= self.rope.len_bytes() {
+            return "";
+        }
+        let (chunk, chunk_start, _, _) = self.rope.chunk_at_byte(byte);
+        &chunk[byte - chunk_start..]
+    }
+
+    /// The pieces that make up a byte range. The range must lie on char
+    /// boundaries.
+    pub fn byte_chunks(&self, range: Range<usize>) -> impl Iterator<Item = &str> + '_ {
+        self.rope.byte_slice(range).chunks()
+    }
+
     /// Chars before `pos`, nearest first.
     pub fn chars_before(&self, pos: usize) -> impl Iterator<Item = char> + '_ {
         self.rope.chars_at(pos).reversed()
@@ -149,6 +191,19 @@ mod tests {
         let mut text = Text::from("hällo world");
         assert_eq!(text.remove(1..5), "ällo");
         assert_eq!(text.to_string(), "h world");
+    }
+
+    #[test]
+    fn byte_offsets_follow_utf8() {
+        let text = Text::from("hä\nlö");
+        assert_eq!(text.len_bytes(), 7);
+        assert_eq!(text.char_to_byte(2), 3);
+        assert_eq!(text.byte_to_char(3), 2);
+        assert_eq!(text.line_to_byte(1), 4);
+        assert_eq!(text.byte_to_line(5), 1);
+        assert_eq!(text.chunk_at_byte(4), "lö");
+        assert_eq!(text.chunk_at_byte(7), "");
+        assert_eq!(text.byte_chunks(1..5).collect::<String>(), "ä\nl");
     }
 
     #[test]

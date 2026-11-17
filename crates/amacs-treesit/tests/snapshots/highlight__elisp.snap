@@ -1,0 +1,21 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"elisp\", \"sample.el\")"
+---
+«comment|;;; sample.el --- A sample  -*- lexical-binding: t; -*-»
+
+«bracket|(»require «operator|'»cl-lib«bracket|)»
+
+«bracket|(»«keyword|defvar» my/limit «number|10»
+  «string|"How many."»«bracket|)»
+
+«bracket|(»«keyword|defun» «function-name|my/square» «bracket|(»«variable-name|x»«bracket|)»
+  «string|"Return X squared."»
+  «bracket|(»«keyword|interactive» «string|"nNumber: "»«bracket|)»
+  «bracket|(»«keyword|let» «bracket|((»result «bracket|(»* x x«bracket|)))»
+    «bracket|(»when «bracket|(»> result my/limit«bracket|)»
+      «bracket|(»message «string|"big: %d"» result«bracket|))»
+    result«bracket|))»
+
+«bracket|(»use-package magit
+  «constant|:bind» «bracket|(»«string|"C-x g"» . magit-status«bracket|))»

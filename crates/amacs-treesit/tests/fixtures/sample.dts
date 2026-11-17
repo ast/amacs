@@ -1,0 +1,21 @@
+/dts-v1/;
+
+#include "board.dtsi"
+
+/ {
+    model = "Example Board";
+    compatible = "vendor,board";
+
+    leds {
+        compatible = "gpio-leds";
+        led0: led-0 {
+            gpios = <&gpio0 13 0>;
+            label = "status";
+        };
+    };
+};
+
+&uart0 {
+    status = "okay";
+    current-speed = <115200>;
+};

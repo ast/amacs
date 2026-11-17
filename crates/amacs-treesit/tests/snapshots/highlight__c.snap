@@ -1,0 +1,38 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"c\", \"sample.c\")"
+---
+«keyword|#include» «string|<stdio.h>»
+
+«keyword|#define» «constant|MAX» 10
+
+«keyword|struct» «type|point» {
+  «type|int» «property|x»;
+  «type|int» «property|y»;
+};
+
+«keyword|static» «type|int» «function-name|add»(«type|int» a, «type|int» b)
+{
+  «keyword|return» a «operator|+» b;
+}
+
+«type|int» «function-name|main»(«type|int» argc, «type|char» «operator|**»argv) {
+  «type|int» total «operator|=» «number|0»;
+  «keyword|for» («type|int» i «operator|=» «number|0»; i «operator|<» «constant|MAX»; i«operator|++») {
+    «keyword|if» (i % «number|2» «operator|==» «number|0») {
+      total «operator|=» «function-call|add»(total,
+        i);
+    } «keyword|else» {
+      total«operator|--»;
+    }
+  }
+  «keyword|switch» (total) {
+  «keyword|case» «number|0»:
+    «function-call|printf»(«string|"zero\n"»);
+    «keyword|break»;
+  «keyword|default»:
+    «keyword|break»;
+  }
+  «comment|/* done */»
+  «keyword|return» «number|0»;
+}

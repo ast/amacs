@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
-use crate::buffer::BufferId;
+use crate::buffer::{BufferId, LineNumbers};
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
 
@@ -167,7 +167,23 @@ pub const FUNDAMENTAL_MODE: &str = "fundamental-mode";
 const TAB_WIDTH: &str = "tab-width";
 const FONT_FAMILY: &str = "font-family";
 const FONT_SIZE: &str = "font-size";
+const LINE_NUMBERS: &str = "line-numbers";
+const INDENT_OFFSET: &str = "indent-offset";
+const INDENT_TABS: &str = "indent-tabs-mode";
 const MESSAGES: &str = "*Messages*";
+
+/// What a value of the `line-numbers` option asks for.
+fn line_numbers(value: &Value) -> Option<LineNumbers> {
+    match value {
+        Value::Bool(false) => Some(LineNumbers::Off),
+        Value::Bool(true) => Some(LineNumbers::Absolute),
+        _ => match value.as_name()? {
+            "absolute" => Some(LineNumbers::Absolute),
+            "relative" => Some(LineNumbers::Relative),
+            _ => None,
+        },
+    }
+}
 
 impl ScriptState {
     pub fn new() -> Self {
@@ -184,6 +200,27 @@ impl ScriptState {
             OptionDef {
                 default: Value::Int(8),
                 doc: "Distance between tab stops, in columns.".to_owned(),
+            },
+        );
+        state.options.insert(
+            LINE_NUMBERS.to_owned(),
+            OptionDef {
+                default: Value::Bool(false),
+                doc: "Line numbers beside the text: #f, 'absolute or 'relative.".to_owned(),
+            },
+        );
+        state.options.insert(
+            INDENT_OFFSET.to_owned(),
+            OptionDef {
+                default: Value::Int(4),
+                doc: "Columns per level of indentation.".to_owned(),
+            },
+        );
+        state.options.insert(
+            INDENT_TABS.to_owned(),
+            OptionDef {
+                default: Value::Bool(false),
+                doc: "Whether indentation is made of tabs rather than spaces.".to_owned(),
             },
         );
         state.options.insert(
@@ -360,6 +397,16 @@ impl Editor {
         if name == FONT_FAMILY && !matches!(value, Value::Str(_)) {
             return Err(CmdError::msg("font-family must be a string"));
         }
+        if name == INDENT_OFFSET && !matches!(value, Value::Int(1..=16)) {
+            return Err(CmdError::msg(
+                "indent-offset must be an integer from 1 to 16",
+            ));
+        }
+        if name == LINE_NUMBERS && line_numbers(value).is_none() {
+            return Err(CmdError::msg(
+                "line-numbers must be #f, 'absolute or 'relative",
+            ));
+        }
         Ok(())
     }
 
@@ -399,6 +446,18 @@ impl Editor {
             if let Some(Value::Int(width)) = self.option_in(id, TAB_WIDTH) {
                 self.buffers[id].tab_width = width as usize;
             }
+            if let Some(Value::Int(offset)) = self.option_in(id, INDENT_OFFSET) {
+                self.buffers[id].indent_offset = offset as usize;
+            }
+            if let Some(value) = self.option_in(id, INDENT_TABS) {
+                self.buffers[id].indent_tabs = value != Value::Bool(false);
+            }
+            if let Some(numbers) = self
+                .option_in(id, LINE_NUMBERS)
+                .and_then(|value| line_numbers(&value))
+            {
+                self.buffers[id].line_numbers = numbers;
+            }
         }
     }
 
@@ -433,6 +492,7 @@ impl Editor {
         let buffer = self.buffer_mut();
         buffer.major_mode = name.to_owned();
         buffer.locals.clear();
+        buffer.set_language(None);
         self.apply_options();
         Ok(())
     }

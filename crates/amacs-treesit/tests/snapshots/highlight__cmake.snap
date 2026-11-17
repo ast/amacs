@@ -1,0 +1,24 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"cmake\", \"CMakeLists.txt\")"
+---
+«builtin|cmake_minimum_required»«bracket|(»«constant|VERSION» «constant|3.20»«bracket|)»
+«builtin|project»«bracket|(»«constant|amacs» «constant|LANGUAGES» «constant|C» «constant|CXX»«bracket|)»
+
+«builtin|set»«bracket|(»SOURCES
+  «constant|main.c»
+  «constant|util.c»
+«bracket|)»
+
+«comment|# Warnings in debug builds.»
+«keyword|if»«bracket|(»CMAKE_BUILD_TYPE «keyword|STREQUAL» «string|"Debug"»«bracket|)»
+  «builtin|add_compile_options»«bracket|(»«constant|-Wall» «constant|-Wextra»«bracket|)»
+«keyword|else»«bracket|()»
+  «builtin|message»«bracket|(»«constant|STATUS» «string|"release"»«bracket|)»
+«keyword|endif»«bracket|()»
+
+«keyword|foreach»«bracket|(»src «delimiter|${»SOURCES«delimiter|}»«bracket|)»
+  «builtin|message»«bracket|(»«constant|STATUS» «string|"»«delimiter|${»src«delimiter|}»«string|"»«bracket|)»
+«keyword|endforeach»«bracket|()»
+
+«builtin|add_executable»«bracket|(»«constant|amacs» «delimiter|${»SOURCES«delimiter|}»«bracket|)»

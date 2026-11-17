@@ -1,0 +1,37 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"typescript\", \"sample.ts\")"
+---
+«keyword|import» «bracket|{» readFile «bracket|}» «keyword|from» «string|"fs/promises"»«delimiter|;»
+
+«keyword|interface» «type|User» «bracket|{»
+  «property|id»: «type|number»«delimiter|;»
+  «property|name»: «type|string»«delimiter|;»
+«bracket|}»
+
+«keyword|export» «keyword|class» «type|Store»«operator|<»«type|T» «keyword|extends» «type|User»«operator|>» «bracket|{»
+  «keyword|private» «property|items»: «type|Map»«bracket|<»«type|number»«delimiter|,» «type|T»«bracket|>» «operator|=» «keyword|new» «type|Map»«bracket|()»«delimiter|;»
+
+  «function-name|add»«bracket|(»«variable-name|item»: «type|T»«bracket|)»: «type|void» «bracket|{»
+    «builtin|this»«delimiter|.»«property|items»«delimiter|.»«function-call|set»«bracket|(»item«delimiter|.»«property|id»«delimiter|,» item«bracket|)»«delimiter|;»
+  «bracket|}»
+
+  «function-name|find»«bracket|(»«variable-name|id»: «type|number»«bracket|)»: «type|T» «operator||» «constant|undefined» «bracket|{»
+    «keyword|return» «builtin|this»«delimiter|.»«property|items»«delimiter|.»«function-call|get»«bracket|(»id«bracket|)»«delimiter|;»
+  «bracket|}»
+«bracket|}»
+
+«keyword|async» «keyword|function» «function-name|main»«bracket|()»: «type|Promise»«bracket|<»«type|void»«bracket|>» «bracket|{»
+  «keyword|const» text «operator|=» «keyword|await» «function-call|readFile»«bracket|(»«string|"users.json"»«delimiter|,» «string|"utf8"»«bracket|)»«delimiter|;»
+  «keyword|const» users: «type|User»«bracket|[]» «operator|=» «type|JSON»«delimiter|.»«function-call|parse»«bracket|(»text«bracket|)»«delimiter|;»
+  «keyword|const» names «operator|=» users
+    «delimiter|.»«function-call|filter»«bracket|((»«variable-name|u»«bracket|)» «operator|=>» u«delimiter|.»«property|id» «operator|>» «number|0»«bracket|)»
+    «delimiter|.»«function-call|map»«bracket|((»«variable-name|u»«bracket|)» «operator|=>» u«delimiter|.»«property|name»«bracket|)»«delimiter|;»
+  «keyword|switch» «bracket|(»names«delimiter|.»«property|length»«bracket|)» «bracket|{»
+    «keyword|case» «number|0»:
+      «builtin|console»«delimiter|.»«function-call|log»«bracket|(»«string|"none"»«bracket|)»«delimiter|;»
+      «keyword|break»«delimiter|;»
+    «keyword|default»:
+      «builtin|console»«delimiter|.»«function-call|log»«bracket|(»«string|`found »«delimiter|${»names«delimiter|.»«property|length»«delimiter|}»«string|`»«bracket|)»«delimiter|;»
+  «bracket|}»
+«bracket|}»

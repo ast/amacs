@@ -8,8 +8,8 @@
 //! the last is the buffer's length.
 
 use amacs_core::{
-    Buffer, BufferId, Candidate, CmdError, CmdResult, CommandBody, Completion, Editor, Value,
-    expand_path,
+    Buffer, BufferId, Candidate, CmdError, CmdResult, CommandBody, Completion, Editor, FaceSpec,
+    Value, expand_path,
 };
 use amacs_proto::parse_keys;
 
@@ -111,6 +111,58 @@ fn completion(args: &[Value], index: usize) -> CmdResult<Completion> {
         "command" => Ok(Completion::Command),
         other => Err(CmdError::msg(format!("unknown completion kind: {other}"))),
     }
+}
+
+/// A list of two-element lists of names, such as palette entries.
+fn name_pairs(args: &[Value], index: usize) -> CmdResult<Vec<(String, String)>> {
+    let expected = "a list of (name value) lists";
+    let Value::List(entries) = &args[index] else {
+        return Err(wrong_type(index, expected, &args[index]));
+    };
+    entries
+        .iter()
+        .map(|entry| match entry {
+            Value::List(pair) if pair.len() == 2 => pair[0]
+                .as_name()
+                .zip(pair[1].as_name())
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .ok_or_else(|| wrong_type(index, expected, entry)),
+            other => Err(wrong_type(index, expected, other)),
+        })
+        .collect()
+}
+
+/// Applies `attribute value ...` arguments to a face.
+fn apply_face_attributes(spec: &mut FaceSpec, attributes: &[Value]) -> CmdResult {
+    if !attributes.len().is_multiple_of(2) {
+        return Err(CmdError::msg(
+            "set-face! takes attributes and values in pairs",
+        ));
+    }
+    for pair in attributes.chunks(2) {
+        let on = !matches!(pair[1], Value::Bool(false));
+        let color = || match &pair[1] {
+            Value::Bool(false) => Ok(None),
+            value => value
+                .as_name()
+                .map(|name| Some(name.to_owned()))
+                .ok_or_else(|| CmdError::msg("a colour is a palette name, \"#rrggbb\" or #f")),
+        };
+        match pair[0].as_name() {
+            Some("fg") => spec.fg = color()?,
+            Some("bg") => spec.bg = color()?,
+            Some("bold") => spec.bold = on,
+            Some("italic") => spec.italic = on,
+            Some("underline") => spec.underline = on,
+            _ => {
+                return Err(CmdError::msg(format!(
+                    "unknown face attribute {:?}; use fg, bg, bold, italic or underline",
+                    pair[0]
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub const API: &[ApiFn] = api! {
@@ -403,6 +455,51 @@ pub const API: &[ApiFn] = api! {
         };
     "minor-mode-enabled?" (1, Some(1)) "Whether a minor mode is on in the current buffer or globally." =>
         |ed, args| Ok(ed.minor_mode_enabled(name(args, 0)?).into());
+
+    // Languages, faces and themes
+
+    "set-buffer-language!" (1, Some(1)) "Set the language of the current buffer, which decides highlighting and indentation; #f for none." =>
+        |ed, args| {
+            ed.set_language(args[0].as_name())?;
+            Ok(Value::Void)
+        };
+    "buffer-language" (0, Some(0)) "Name of the current buffer's language, or #f." =>
+        |ed, _| Ok(ed.buffer().language().map(|language| language.name).into());
+    "indent-line" (0, Some(0)) "Indent the current line as its language says." =>
+        |ed, _| {
+            ed.indent_current_line()?;
+            Ok(Value::Void)
+        };
+    "load-theme" (1, Some(1)) "Switch to the named theme." =>
+        |ed, args| {
+            ed.faces_mut().load_theme(name(args, 0)?)?;
+            Ok(Value::Void)
+        };
+    "current-theme" (0, Some(0)) "Name of the theme in use, as a symbol." =>
+        |ed, _| Ok(Value::sym(ed.faces().theme()));
+    "theme-names" (0, Some(0)) "Names of all themes, as strings." =>
+        |ed, _| Ok(Value::List(ed.faces().theme_names().map(Value::from).collect()));
+    "define-theme" (3, Some(3)) "Define a theme: its name, the theme it starts from, and a list of (name value) palette entries that differ. A value is \"#rrggbb\" or the name of another entry." =>
+        |ed, args| {
+            let entries = name_pairs(args, 2)?;
+            let (theme, base) = (name(args, 0)?.to_owned(), name(args, 1)?.to_owned());
+            ed.faces_mut().define_theme(&theme, &base, entries)?;
+            Ok(Value::Void)
+        };
+    "set-palette-overrides!" (1, Some(1)) "Replace palette entries in every theme: a list of (name value) lists, such as '((comment yellow-faint))." =>
+        |ed, args| {
+            let entries = name_pairs(args, 0)?;
+            ed.faces_mut().set_overrides(entries);
+            Ok(Value::Void)
+        };
+    "set-face!" (1, None) "Change a face, or define a new one: its name, then attributes and values. The attributes are 'fg and 'bg (a palette name, \"#rrggbb\" or #f) and 'bold, 'italic and 'underline (booleans)." =>
+        |ed, args| {
+            let face = name(args, 0)?.to_owned();
+            let mut spec = ed.faces().spec(&face).cloned().unwrap_or_default();
+            apply_face_attributes(&mut spec, &args[1..])?;
+            ed.faces_mut().set_face(&face, spec);
+            Ok(Value::Void)
+        };
 
     // The editor itself
 

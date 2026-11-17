@@ -2,8 +2,10 @@
 
 mod edit;
 mod files;
+mod indent;
 mod motion;
 mod search;
+mod sexp;
 mod windows;
 
 use crate::completion::Completion;
@@ -12,6 +14,7 @@ use crate::error::{CmdError, CmdResult};
 use crate::minibuffer;
 
 pub(crate) use edit::delete_backward_char;
+pub(crate) use indent::indent_line;
 
 macro_rules! commands {
     ($editor:expr; $( $name:literal => $run:path, $doc:literal; )*) => {
@@ -48,6 +51,28 @@ pub fn install(ed: &mut Editor) {
         "execute-extended-command" => execute_extended_command, "Read a command name and run it.";
         "eval-expression" => eval_expression, "Read a Scheme expression, evaluate it and show the result.";
         "eval-buffer" => eval_buffer, "Evaluate the current buffer as Scheme code.";
+
+        "indent-for-tab-command" => indent::indent_for_tab_command, "Indent the current line, or the lines of the active region.";
+        "indent-region" => indent::indent_region, "Indent every line of the region.";
+        "forward-sexp" => sexp::forward_sexp, "Move forward over a balanced expression.";
+        "backward-sexp" => sexp::backward_sexp, "Move backward over a balanced expression.";
+        "kill-sexp" => sexp::kill_sexp, "Kill the balanced expression after point.";
+        "backward-kill-sexp" => sexp::backward_kill_sexp, "Kill the balanced expression before point.";
+        "mark-sexp" => sexp::mark_sexp, "Put the mark at the end of the balanced expression after point.";
+        "backward-up-list" => sexp::backward_up_list, "Move out of the enclosing list, to its start.";
+        "up-list" => sexp::up_list, "Move out of the enclosing list, past its end.";
+        "down-list" => sexp::down_list, "Move into the next list.";
+        "paredit-open-round" => sexp::paredit_open_round, "Insert a balanced pair of round brackets.";
+        "paredit-open-square" => sexp::paredit_open_square, "Insert a balanced pair of square brackets.";
+        "paredit-close" => sexp::paredit_close, "Move past the closing bracket of the enclosing list.";
+        "paredit-doublequote" => sexp::paredit_doublequote, "Insert a pair of double quotes, or step over or escape one.";
+        "paredit-wrap-round" => sexp::paredit_wrap_round, "Wrap the following expression in round brackets.";
+        "paredit-splice-sexp" => sexp::paredit_splice, "Remove the brackets of the enclosing list.";
+        "paredit-raise-sexp" => sexp::paredit_raise, "Replace the enclosing list with the following expression.";
+        "paredit-forward-slurp-sexp" => sexp::paredit_forward_slurp, "Take the expression after the enclosing list into it.";
+        "paredit-forward-barf-sexp" => sexp::paredit_forward_barf, "Put the last expression of the enclosing list after it.";
+        "paredit-backward-slurp-sexp" => sexp::paredit_backward_slurp, "Take the expression before the enclosing list into it.";
+        "paredit-backward-barf-sexp" => sexp::paredit_backward_barf, "Put the first expression of the enclosing list before it.";
 
         "forward-char" => motion::forward_char, "Move point right one character.";
         "backward-char" => motion::backward_char, "Move point left one character.";
@@ -123,6 +148,22 @@ pub fn install(ed: &mut Editor) {
         ("C-@", "set-mark-command"),
         ("C-x C-x", "exchange-point-and-mark"),
         ("C-x h", "mark-whole-buffer"),
+        ("TAB", "indent-for-tab-command"),
+        ("C-i", "indent-for-tab-command"),
+        ("C-M-\\", "indent-region"),
+        ("C-M-f", "forward-sexp"),
+        ("C-M-<right>", "forward-sexp"),
+        ("C-M-b", "backward-sexp"),
+        ("C-M-<left>", "backward-sexp"),
+        ("C-M-k", "kill-sexp"),
+        ("C-M-DEL", "backward-kill-sexp"),
+        ("C-M-SPC", "mark-sexp"),
+        ("C-M-@", "mark-sexp"),
+        ("C-M-u", "backward-up-list"),
+        ("C-M-<up>", "backward-up-list"),
+        ("C-M-n", "up-list"),
+        ("C-M-d", "down-list"),
+        ("C-M-<down>", "down-list"),
         ("C-g", "keyboard-quit"),
         ("C-u", "universal-argument"),
         ("M-x", "execute-extended-command"),
@@ -208,6 +249,32 @@ pub fn install(ed: &mut Editor) {
         ("M-n", "next-history-element"),
         ("C-.", "act-on-candidate"),
     ];
+    // Structural editing for Lisp. The mode itself is switched from Scheme.
+    const PAREDIT: &[(&str, &str)] = &[
+        ("(", "paredit-open-round"),
+        (")", "paredit-close"),
+        ("[", "paredit-open-square"),
+        ("]", "paredit-close"),
+        ("\"", "paredit-doublequote"),
+        ("M-(", "paredit-wrap-round"),
+        ("M-s", "paredit-splice-sexp"),
+        ("M-r", "paredit-raise-sexp"),
+        ("C-)", "paredit-forward-slurp-sexp"),
+        ("C-<right>", "paredit-forward-slurp-sexp"),
+        ("C-}", "paredit-forward-barf-sexp"),
+        ("C-<left>", "paredit-forward-barf-sexp"),
+        ("C-(", "paredit-backward-slurp-sexp"),
+        ("C-M-<left>", "paredit-backward-slurp-sexp"),
+        ("C-{", "paredit-backward-barf-sexp"),
+        ("C-M-<right>", "paredit-backward-barf-sexp"),
+    ];
+    ed.define_mode(sexp::PAREDIT_MODE, None, "Paredit");
+    ed.define_mode(edit::AUTO_PAIR_MODE, None, "");
+    let paredit = ed.keymap_mut(sexp::PAREDIT_MODE);
+    for (keys, command) in PAREDIT {
+        paredit.bind_str(keys, command);
+    }
+
     let minibuffer = ed.keymap_mut(MINIBUFFER_MAP);
     for (keys, command) in MINIBUFFER {
         minibuffer.bind_str(keys, command);

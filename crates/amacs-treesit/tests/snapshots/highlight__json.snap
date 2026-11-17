@@ -1,0 +1,16 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"json\", \"sample.json\")"
+---
+{
+  «string|"name"»: «string|"amacs"»,
+  «string|"version"»: «number|1»,
+  «string|"private"»: «constant|true»,
+  «string|"tags"»: [
+    «string|"editor"»,
+    «constant|null»
+  ],
+  «string|"nested"»: {
+    «string|"ratio"»: «number|0.5»
+  }
+}

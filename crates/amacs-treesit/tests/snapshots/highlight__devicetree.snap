@@ -1,0 +1,25 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"devicetree\", \"sample.dts\")"
+---
+«keyword|/dts-v1/»«delimiter|;»
+
+«keyword|#include» "board.dtsi"
+
+/ «bracket|{»
+    model = "Example Board"«delimiter|;»
+    compatible = "vendor,board"«delimiter|;»
+
+    leds «bracket|{»
+        compatible = "gpio-leds"«delimiter|;»
+        led0: led-0 «bracket|{»
+            gpios = «bracket|<»«operator|&»gpio0 13 0«bracket|>»«delimiter|;»
+            label = "status"«delimiter|;»
+        «bracket|}»«delimiter|;»
+    «bracket|}»«delimiter|;»
+«bracket|}»«delimiter|;»
+
+«operator|&»uart0 «bracket|{»
+    status = "okay"«delimiter|;»
+    current-speed = «bracket|<»115200«bracket|>»«delimiter|;»
+«bracket|}»«delimiter|;»

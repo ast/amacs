@@ -1,0 +1,19 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"tsx\", \"sample.tsx\")"
+---
+«keyword|import» «type|React»«delimiter|,» «bracket|{» useState «bracket|}» «keyword|from» «string|"react"»«delimiter|;»
+
+«keyword|type» «type|Props» «operator|=» «bracket|{» «property|title»: «type|string» «bracket|}»«delimiter|;»
+
+«keyword|export» «keyword|function» «type|Counter»«bracket|({» title «bracket|}»: «type|Props»«bracket|)» «bracket|{»
+  «keyword|const» «bracket|[»count«delimiter|,» setCount«bracket|]» «operator|=» «function-call|useState»«bracket|(»«number|0»«bracket|)»«delimiter|;»
+  «keyword|return» «bracket|(»
+    «bracket|<»«function-name|div» «preprocessor|className»«operator|=»«string|"counter"»«bracket|>»
+      «bracket|<»«function-name|h1»«bracket|>{»title«bracket|}</»«function-name|h1»«bracket|>»
+      «bracket|<»«function-name|button» «preprocessor|onClick»«operator|=»«bracket|{()» «operator|=>» «function-call|setCount»«bracket|(»count «operator|+» «number|1»«bracket|)}>»
+        Clicked «bracket|{»count«bracket|}» times
+      «bracket|</»«function-name|button»«bracket|>»
+    «bracket|</»«function-name|div»«bracket|>»
+  «bracket|)»«delimiter|;»
+«bracket|}»

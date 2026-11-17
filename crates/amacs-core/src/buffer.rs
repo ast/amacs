@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use amacs_text::{Edit, MarkerId, MarkerSet, Text, Transaction, UndoTree};
+use amacs_treesit::{Highlights, IndentParams, Language, Syntax};
 use slotmap::new_key_type;
 
 use crate::error::{CmdError, CmdResult};
@@ -15,6 +16,16 @@ new_key_type! {
 
 /// Consecutive single-char insertions are undone in groups of this size.
 const AMALGAMATION_LIMIT: usize = 20;
+
+/// Whether and how line numbers are shown beside the text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineNumbers {
+    #[default]
+    Off,
+    Absolute,
+    /// Distances from the line that point is on, which shows its own number.
+    Relative,
+}
 
 /// Text being edited, with the state that belongs to the text rather than to
 /// any window showing it.
@@ -32,6 +43,15 @@ pub struct Buffer {
     pub read_only: bool,
     /// Copied from the `tab-width` option whenever options change.
     pub tab_width: usize,
+    /// Copied from the `line-numbers` option.
+    pub line_numbers: LineNumbers,
+    /// Copied from the `indent-offset` option: columns per level.
+    pub indent_offset: usize,
+    /// Copied from the `indent-tabs-mode` option: indent with tabs.
+    pub indent_tabs: bool,
+    /// The language of the text, which decides highlighting and indentation.
+    language: Option<&'static Language>,
+    syntax: Option<Syntax>,
     pub major_mode: String,
     /// Buffer-local minor modes, in the order they were enabled.
     pub minor_modes: Vec<String>,
@@ -70,6 +90,11 @@ impl Buffer {
             auto_saved_tick: None,
             read_only: false,
             tab_width: 8,
+            line_numbers: LineNumbers::Off,
+            indent_offset: 4,
+            indent_tabs: false,
+            language: None,
+            syntax: None,
             major_mode: FUNDAMENTAL_MODE.to_owned(),
             minor_modes: Vec::new(),
             locals: HashMap::new(),
@@ -116,6 +141,52 @@ impl Buffer {
     /// does not match any file on disk.
     pub fn mark_unsaved(&mut self) {
         self.undo.clear_saved();
+    }
+
+    // Syntax
+
+    pub fn language(&self) -> Option<&'static Language> {
+        self.language
+    }
+
+    /// Sets the language of the text. Its syntax tree is built when next
+    /// needed.
+    pub fn set_language(&mut self, language: Option<&'static Language>) {
+        self.language = language;
+        self.syntax = language.and_then(Syntax::new);
+    }
+
+    /// Whether the text has a syntax tree, which takes a language with a
+    /// grammar.
+    pub fn has_syntax(&self) -> bool {
+        self.syntax.is_some()
+    }
+
+    /// Brings the syntax tree up to date with the text.
+    pub fn update_syntax(&mut self) {
+        if let Some(syntax) = &mut self.syntax {
+            syntax.update(&self.text);
+        }
+    }
+
+    /// Syntax highlights for a range of bytes. The tree must be up to date.
+    pub fn highlights(&self, range: Range<usize>) -> Option<Highlights> {
+        Some(self.syntax.as_ref()?.highlights(&self.text, range))
+    }
+
+    pub fn indent_params(&self) -> IndentParams {
+        IndentParams {
+            offset: self.indent_offset,
+            tab_width: self.tab_width,
+        }
+    }
+
+    /// The column that the syntax tree says a line should be indented to.
+    /// The tree must be up to date.
+    pub fn syntax_indent(&self, line: usize) -> Option<usize> {
+        self.syntax
+            .as_ref()?
+            .indent_column(&self.text, line, self.indent_params())
     }
 
     // Markers
@@ -200,6 +271,9 @@ impl Buffer {
     pub fn reset(&mut self, text: Text) {
         self.markers.on_delete(0..self.text.len());
         self.text = text;
+        if let Some(syntax) = &mut self.syntax {
+            syntax.reset();
+        }
         self.undo = UndoTree::new();
         self.pending = None;
         self.mark_set = false;
@@ -218,16 +292,13 @@ impl Buffer {
     }
 
     fn raw_insert(&mut self, pos: usize, s: &str) {
-        self.text.insert(pos, s);
-        self.markers.on_insert(pos, s.chars().count());
+        insert_into(&mut self.text, &mut self.markers, &mut self.syntax, pos, s);
         self.tick += 1;
     }
 
     fn raw_delete(&mut self, range: Range<usize>) -> String {
-        let deleted = self.text.remove(range.clone());
-        self.markers.on_delete(range);
         self.tick += 1;
-        deleted
+        delete_from(&mut self.text, &mut self.markers, &mut self.syntax, range)
     }
 
     // Undo
@@ -281,11 +352,9 @@ impl Buffer {
         };
         for edit in txn.edits.iter().rev() {
             let inserted = edit.inserted.chars().count();
-            self.text.remove(edit.pos..edit.pos + inserted);
-            self.markers.on_delete(edit.pos..edit.pos + inserted);
-            self.text.insert(edit.pos, &edit.deleted);
-            self.markers
-                .on_insert(edit.pos, edit.deleted.chars().count());
+            let (text, markers, syntax) = (&mut self.text, &mut self.markers, &mut self.syntax);
+            delete_from(text, markers, syntax, edit.pos..edit.pos + inserted);
+            insert_into(text, markers, syntax, edit.pos, &edit.deleted);
         }
         self.tick += 1;
         self.amalgamated = 0;
@@ -300,16 +369,44 @@ impl Buffer {
         };
         for edit in &txn.edits {
             let deleted = edit.deleted.chars().count();
-            self.text.remove(edit.pos..edit.pos + deleted);
-            self.markers.on_delete(edit.pos..edit.pos + deleted);
-            self.text.insert(edit.pos, &edit.inserted);
-            self.markers
-                .on_insert(edit.pos, edit.inserted.chars().count());
+            let (text, markers, syntax) = (&mut self.text, &mut self.markers, &mut self.syntax);
+            delete_from(text, markers, syntax, edit.pos..edit.pos + deleted);
+            insert_into(text, markers, syntax, edit.pos, &edit.inserted);
         }
         self.tick += 1;
         self.amalgamated = 0;
         Ok(Some(txn.point_after))
     }
+}
+
+/// Inserts text, keeping the markers and the syntax tree in step.
+fn insert_into(
+    text: &mut Text,
+    markers: &mut MarkerSet,
+    syntax: &mut Option<Syntax>,
+    pos: usize,
+    s: &str,
+) {
+    if let Some(syntax) = syntax {
+        syntax.before_insert(text, pos, s);
+    }
+    text.insert(pos, s);
+    markers.on_insert(pos, s.chars().count());
+}
+
+/// Removes text, keeping the markers and the syntax tree in step.
+fn delete_from(
+    text: &mut Text,
+    markers: &mut MarkerSet,
+    syntax: &mut Option<Syntax>,
+    range: Range<usize>,
+) -> String {
+    if let Some(syntax) = syntax {
+        syntax.before_delete(text, range.clone());
+    }
+    let deleted = text.remove(range.clone());
+    markers.on_delete(range);
+    deleted
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 amacs-text = { path = "crates/amacs-text" }
+amacs-treesit = { path = "crates/amacs-treesit" }
 amacs-proto = { path = "crates/amacs-proto" }
 amacs-client = { path = "crates/amacs-client" }
 amacs-core = { path = "crates/amacs-core" }

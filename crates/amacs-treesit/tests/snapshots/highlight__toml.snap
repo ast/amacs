@@ -1,0 +1,19 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"toml\", \"sample.toml\")"
+---
+«comment|# The package.»
+«bracket|[»«type|package»«bracket|]»
+«type|name»«property| »«operator|=»«property| »«string|"amacs"»
+«type|version»«property| »«operator|=»«property| »«string|"0.1.0"»
+«type|publish»«property| »«operator|=»«property| »«constant|false»
+
+«bracket|[»«type|dependencies»«bracket|]»
+«type|serde»«property| »«operator|=»«property| »«bracket|{»«property| »«type|version»«property| »«operator|=»«property| »«string|"1"»«delimiter|,»«property| »«type|features»«property| »«operator|=»«property| »«bracket|[»«string|"derive"»«bracket|]»«property| »«bracket|}»
+«type|members»«property| »«operator|=»«property| »«bracket|[»
+«property|  »«string|"a"»«delimiter|,»
+«property|  »«string|"b"»«delimiter|,»
+«bracket|]»
+
+«bracket|[[»«type|bin»«bracket|]]»
+«type|path»«property| »«operator|=»«property| »«string|'src/main.rs'»

@@ -1,0 +1,36 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"javascript\", \"sample.js\")"
+---
+«keyword|const» fs «operator|=» «builtin|require»«bracket|(»«string|"fs"»«bracket|)»«delimiter|;»
+
+«keyword|const» «constant|DEFAULTS» «operator|=» «bracket|{»
+  «property|verbose»: «constant|false»«delimiter|,»
+  «property|retries»: «number|3»«delimiter|,»
+«bracket|}»«delimiter|;»
+
+«keyword|class» «type|Runner» «bracket|{»
+  «function-name|constructor»«bracket|(»options«bracket|)» «bracket|{»
+    «builtin|this»«delimiter|.»«property|options» «operator|=» «bracket|{» ...«constant|DEFAULTS»«delimiter|,» ...options «bracket|}»«delimiter|;»
+  «bracket|}»
+
+  «function-name|run»«bracket|(»tasks«bracket|)» «bracket|{»
+    «keyword|return» tasks
+      «delimiter|.»«function-call|filter»«bracket|((»task«bracket|)» «operator|=>» task«delimiter|.»«property|enabled»«bracket|)»
+      «delimiter|.»«function-call|map»«bracket|((»task«bracket|)» «operator|=>» «bracket|{»
+        «keyword|return» task«delimiter|.»«property|name»«delimiter|.»«function-call|toUpperCase»«bracket|()»«delimiter|;»
+      «bracket|})»«delimiter|;»
+  «bracket|}»
+«bracket|}»
+
+«keyword|function» «function-name|main»«bracket|()» «bracket|{»
+  «keyword|const» runner «operator|=» «keyword|new» «type|Runner»«bracket|({» «property|verbose»: «constant|true» «bracket|})»«delimiter|;»
+  «keyword|for» «bracket|(»«keyword|const» name «keyword|of» runner«delimiter|.»«function-call|run»«bracket|([]))» «bracket|{»
+    «builtin|console»«delimiter|.»«function-call|log»«bracket|(»«string|`task: »«delimiter|${»name«delimiter|}»«string|`»«bracket|)»«delimiter|;»
+  «bracket|}»
+  «keyword|if» «bracket|(»«operator|/»«regexp|^\d+$»«operator|/»«delimiter|.»«function-call|test»«bracket|(»«string|"42"»«bracket|))» «bracket|{»
+    fs«delimiter|.»«function-call|writeFileSync»«bracket|(»«string|"out.txt"»«delimiter|,» «string|"done\n"»«bracket|)»«delimiter|;»
+  «bracket|}»
+«bracket|}»
+
+«builtin|module»«delimiter|.»«property|exports» «operator|=» «bracket|{» main «bracket|}»«delimiter|;»

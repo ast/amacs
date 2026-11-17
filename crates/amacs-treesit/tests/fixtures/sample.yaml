@@ -1,0 +1,13 @@
+# Compose file.
+version: "3"
+services:
+  web:
+    image: nginx:latest
+    ports:
+      - "80:80"
+      - 443
+    environment:
+      DEBUG: true
+      NAME: &name web
+    command: >
+      nginx -g 'daemon off;'

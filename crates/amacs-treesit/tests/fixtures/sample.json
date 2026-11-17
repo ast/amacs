@@ -1,0 +1,12 @@
+{
+  "name": "amacs",
+  "version": 1,
+  "private": true,
+  "tags": [
+    "editor",
+    null
+  ],
+  "nested": {
+    "ratio": 0.5
+  }
+}

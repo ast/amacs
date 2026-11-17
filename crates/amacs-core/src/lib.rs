@@ -19,14 +19,16 @@ mod kill_ring;
 mod minibuffer;
 mod redisplay;
 mod script;
+mod sexp;
 mod window;
 
-pub use buffer::{Buffer, BufferId};
+pub use buffer::{Buffer, BufferId, LineNumbers};
 pub use completion::{Candidate, Completion, Waker};
 pub use editor::{
     Clipboard, Command, CommandBody, Editor, EditorEvent, GLOBAL_MAP, MINIBUFFER_MAP, Prefix,
 };
 pub use error::{CmdError, CmdResult};
+pub use faces::{FaceSpec, Faces};
 pub use files::expand_path;
 pub use frame::FrameId;
 pub use keymap::{Keymap, Lookup};

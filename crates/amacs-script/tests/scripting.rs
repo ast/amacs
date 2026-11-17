@@ -342,6 +342,67 @@ fn files_get_their_major_mode_from_their_name() {
 }
 
 #[test]
+fn source_files_are_highlighted_and_indented_by_their_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("main.rs");
+    std::fs::write(&file, "fn main() {\n}\n").unwrap();
+    let mut h = Harness::new();
+    h.eval(
+        r#"(add-hook! 'prog-mode-hook (lambda () (set-local! 'line-numbers 'relative)))
+           (enable-mode! 'auto-pair-mode)
+           (global-set-key "C-c t" 'toggle-theme)"#,
+    );
+    h.eval(&format!("(find-file {:?})", file.display().to_string()));
+    assert!(h.mode_line().ends_with("(Rust)"), "{}", h.mode_line());
+    assert_eq!(h.screen.row(0), "1   fn main() {");
+    let keyword = h.screen.face_at(0, 4);
+    assert!(keyword.bold, "keywords are bold");
+    assert_ne!(keyword.fg, h.screen.face_at(0, 7).fg);
+
+    h.keys("C-e RET").type_text("vec![1");
+    assert_eq!(h.text(), "fn main() {\n    vec![1]\n}\n");
+
+    // A theme changes the colours of what is on the screen.
+    h.keys("C-c t");
+    assert_eq!(h.echo(), "Theme: modus-vivendi-tinted");
+    assert_ne!(h.screen.face_at(0, 4).fg, keyword.fg);
+    assert_ne!(h.screen.face_at(0, 4).bg, keyword.bg);
+
+    // So does changing a face or the palette.
+    let dark = h.screen.face_at(0, 4);
+    h.eval("(set-face! 'keyword 'fg \"#123456\" 'bold #f)");
+    let changed = h.screen.face_at(0, 4);
+    assert!(!changed.bold);
+    assert_ne!(changed.fg, dark.fg);
+    h.eval("(set-face! 'keyword 'fg 'keyword 'bold #t)");
+    h.eval("(set-palette-overrides! '((keyword red-intense)))");
+    assert_ne!(h.screen.face_at(0, 4).fg, dark.fg);
+    h.eval("(set-palette-overrides! '())");
+    assert_eq!(h.screen.face_at(0, 4), dark);
+}
+
+#[test]
+fn lisp_files_can_have_paredit_from_a_hook() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("init.scm");
+    std::fs::write(&file, "").unwrap();
+    let mut h = Harness::new();
+    h.eval("(add-hook! 'scheme-mode-hook (lambda () (enable-mode! 'paredit-mode)))");
+    h.eval(&format!("(find-file {:?})", file.display().to_string()));
+    assert!(
+        h.mode_line().ends_with("(Scheme Paredit)"),
+        "{}",
+        h.mode_line()
+    );
+    h.type_text("(define (f x)").keys("RET").type_text("(* x x");
+    assert_eq!(h.text(), "(define (f x)\n  (* x x))");
+    h.keys("M-x").type_text("paredit-mode").keys("RET");
+    assert_eq!(h.echo(), "Paredit mode disabled");
+    h.keys("M->").type_text("(");
+    assert_eq!(h.text(), "(define (f x)\n  (* x x))(");
+}
+
+#[test]
 fn minor_modes_show_in_the_mode_line() {
     let mut h = Harness::new();
     h.eval(r#"(define-minor-mode ruler-mode "Ruler" "Pretend to show a ruler.")"#);
@@ -419,7 +480,7 @@ fn the_scheme_test_suite_passes() {
         .load_file(std::path::Path::new(tests))
         .unwrap_or_else(|e| panic!("{}", e.report));
     let result = h.eval("(run-tests)");
-    assert_eq!(result, "(18)", "failures are listed after the pass count");
+    assert_eq!(result, "(22)", "failures are listed after the pass count");
     assert_eq!(h.mode_line(), " --  *scratch*   L1 C0  (Fundamental)");
 }
 

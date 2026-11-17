@@ -84,13 +84,14 @@ fn region_is_highlighted_and_killed() {
     h.keys("C-a M-f C-SPC M-f");
     assert_eq!(h.echo(), "");
     let region_bg = h.screen.face_at(0, 4).bg;
-    assert!(region_bg.is_some(), "selected text has a background");
-    assert_eq!(h.screen.face_at(0, 2).bg, None);
-    assert_eq!(h.screen.face_at(0, 8).bg, None);
+    let plain_bg = h.screen.face_at(1, 0).bg;
+    assert_ne!(region_bg, plain_bg, "selected text has a background");
+    assert_eq!(h.screen.face_at(0, 2).bg, plain_bg);
+    assert_eq!(h.screen.face_at(0, 8).bg, plain_bg);
 
     h.keys("C-w");
     assert_eq!(h.buffer_text(), "one three");
-    assert_eq!(h.screen.face_at(0, 4).bg, None);
+    assert_eq!(h.screen.face_at(0, 4).bg, plain_bg);
     h.keys("M-f C-w");
     assert_eq!(
         h.buffer_text(),
@@ -273,7 +274,7 @@ fn m_x_narrows_commands_as_words_are_typed() {
 fn the_selection_moves_through_the_candidates_and_onto_the_input() {
     let mut h = Harness::new(70, 16);
     h.keys("M-x").type_text("kill-");
-    assert_eq!(h.prompt(), "1/8 M-x kill-");
+    assert_eq!(h.prompt(), "1/10 M-x kill-");
     let mut names: Vec<String> = h
         .candidates()
         .iter()
@@ -283,30 +284,31 @@ fn the_selection_moves_through_the_candidates_and_onto_the_input() {
     assert_eq!(
         names,
         [
+            "backward-kill-sexp",
             "backward-kill-word",
             "kill-buffer",
             "kill-editor",
             "kill-line",
             "kill-region",
             "kill-ring-save",
+            "kill-sexp",
             "kill-word",
             "save-buffers-kill-terminal"
         ],
         "a word matches anywhere in a name"
     );
     // The selected candidate has the highlight.
-    assert!(h.screen.face_at(6, 0).bg.is_some());
-    assert!(h.screen.face_at(7, 0).bg.is_none());
+    assert_ne!(h.screen.face_at(6, 0).bg, h.screen.face_at(7, 0).bg);
 
     h.keys("C-n C-n");
-    assert_eq!(h.prompt(), "3/8 M-x kill-");
-    assert!(h.screen.face_at(8, 0).bg.is_some());
+    assert_eq!(h.prompt(), "3/10 M-x kill-");
+    assert_ne!(h.screen.face_at(8, 0).bg, h.screen.face_at(7, 0).bg);
     h.keys("M->");
-    assert_eq!(h.prompt(), "8/8 M-x kill-");
+    assert_eq!(h.prompt(), "10/10 M-x kill-");
     h.keys("M-< C-p");
     assert_eq!(
         h.prompt(),
-        "*/8 M-x kill-",
+        "*/10 M-x kill-",
         "above the first candidate, the input is selected"
     );
     h.keys("RET");

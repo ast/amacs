@@ -7,19 +7,21 @@ use std::collections::HashMap;
 
 use amacs_proto::{CursorShape, DisplayLine, DrawOp, FaceId, PaneId, PaneRect};
 
+use crate::buffer::{Buffer, LineNumbers};
 use crate::display::{
     char_cells, column_of, push_glyph, row_containing, rows_back, str_cells, walk_row,
 };
 use crate::editor::Editor;
 use crate::faces;
-use crate::window::{Rect, WindowId};
+use crate::window::{Rect, Window, WindowId};
 
 const ECHO_PANE: PaneId = PaneId(0);
 
 /// What the frontend currently shows.
 #[derive(Default)]
 pub(crate) struct RedisplayState {
-    faces_sent: bool,
+    /// Version of the face table that the frontend has.
+    faces: u64,
     size: (u16, u16),
     layout: Vec<PaneRect>,
     lines: HashMap<PaneId, Vec<DisplayLine>>,
@@ -43,6 +45,36 @@ fn pane_rect(id: PaneId, rect: Rect) -> PaneRect {
     }
 }
 
+/// The line-number cell for the row that starts at `row_start`: the number
+/// and a space, `gutter` columns in all. Rows that continue a line are blank.
+fn line_number(
+    buffer: &Buffer,
+    row_start: usize,
+    point_line: usize,
+    gutter: usize,
+) -> (String, FaceId) {
+    let text = buffer.text();
+    let line = text.line_of(row_start);
+    let digits = gutter - 1;
+    if text.line_start(line) != row_start {
+        return (" ".repeat(gutter), faces::LINE_NUMBER);
+    }
+    if line == point_line {
+        let number = if buffer.line_numbers == LineNumbers::Relative {
+            // The current line shows its own number, set apart to the left.
+            format!("{:<digits$} ", line + 1)
+        } else {
+            format!("{:>digits$} ", line + 1)
+        };
+        return (number, faces::LINE_NUMBER_CURRENT);
+    }
+    let number = match buffer.line_numbers {
+        LineNumbers::Relative => line.abs_diff(point_line),
+        _ => line + 1,
+    };
+    (format!("{number:>digits$} "), faces::LINE_NUMBER)
+}
+
 /// Cuts `s` to at most `width` cells.
 fn fit(s: &str, width: usize) -> &str {
     let mut cells = 0;
@@ -55,13 +87,36 @@ fn fit(s: &str, width: usize) -> &str {
     s
 }
 
+/// Columns that a window gives to line numbers, and those left for text.
+pub(crate) fn text_area(window: &Window, buffer: &Buffer) -> (usize, usize) {
+    let width = window.width();
+    if buffer.line_numbers == LineNumbers::Off {
+        return (0, width);
+    }
+    let digits = buffer.text().len_lines().to_string().len().max(3);
+    // A window too narrow for both shows text only.
+    if width < digits + 1 + 8 {
+        (0, width)
+    } else {
+        (digits + 1, width - digits - 1)
+    }
+}
+
 impl Editor {
+    /// Columns for text in a window: its width less the line numbers.
+    pub(crate) fn text_width(&self, id: WindowId) -> usize {
+        let window = &self.windows[id];
+        text_area(window, &self.buffers[window.buffer]).1
+    }
+
     /// Returns the operations that bring the frontend up to date. Empty if
     /// nothing changed.
     pub fn redisplay(&mut self) -> Vec<DrawOp> {
         self.relayout();
         let leaves = self.frame().layout.leaves();
         for id in &leaves {
+            let buffer = self.windows[*id].buffer;
+            self.buffers[buffer].update_syntax();
             self.scroll_to_point(*id);
         }
 
@@ -129,12 +184,15 @@ impl Editor {
         let size = self.frame().size;
         let state = &mut self.frames[self.current_frame].redisplay;
         let mut ops = Vec::new();
-        if !state.faces_sent {
-            ops.push(DrawOp::DefineFaces(faces::table()));
-            state.faces_sent = true;
+        // New faces change the look of what is already drawn, so everything
+        // is drawn again.
+        let new_faces = state.faces != self.faces.version();
+        if new_faces {
+            ops.push(DrawOp::DefineFaces(self.faces.table()));
+            state.faces = self.faces.version();
         }
         let layout: Vec<PaneRect> = panes.iter().map(|(rect, _)| *rect).collect();
-        if layout != state.layout || size != state.size {
+        if layout != state.layout || size != state.size || new_faces {
             ops.push(DrawOp::Layout {
                 cols: size.0,
                 rows: size.1,
@@ -192,7 +250,7 @@ impl Editor {
     pub(crate) fn scroll_to_point(&mut self, id: WindowId) {
         let window = &self.windows[id];
         let buffer = &self.buffers[window.buffer];
-        let (rows, width) = (window.text_rows(), window.width());
+        let (rows, width) = (window.text_rows(), text_area(window, buffer).1);
         if rows == 0 || width == 0 {
             return;
         }
@@ -230,9 +288,17 @@ impl Editor {
     fn window_lines(&self, id: WindowId) -> (Vec<DisplayLine>, Option<(u16, u16)>) {
         let window = &self.windows[id];
         let buffer = &self.buffers[window.buffer];
-        let (rows, width) = (window.text_rows(), window.width());
+        let rows = window.text_rows();
+        let (gutter, width) = text_area(window, buffer);
         let (text, tab) = (buffer.text(), buffer.tab_width);
         let point = buffer.marker(window.point);
+        let point_line = text.line_of(point);
+        let window_start = buffer.marker(window.start);
+        // Highlights for what the window can show at most: a char per cell.
+        let highlights = {
+            let end = (window_start + rows * width).min(text.len());
+            buffer.highlights(text.char_to_byte(window_start)..text.char_to_byte(end))
+        };
         let region = match buffer.mark() {
             Some(mark) if buffer.mark_active && id == self.selected() => {
                 mark.min(point)..mark.max(point)
@@ -242,7 +308,7 @@ impl Editor {
 
         let mut lines = Vec::with_capacity(rows);
         let mut cursor = None;
-        let mut pos = Some(buffer.marker(window.start));
+        let mut pos = Some(window_start);
         let mut glyph = String::new();
         for row_index in 0..rows {
             let Some(start) = pos else {
@@ -250,13 +316,20 @@ impl Editor {
                 continue;
             };
             let mut line = DisplayLine::default();
+            if gutter > 0 {
+                let (number, face) = line_number(buffer, start, point_line, gutter);
+                line.push(&number, face);
+            }
             let mut end_col = 0;
             let mut point_col = None;
+            let mut byte = text.char_to_byte(start);
             let row = walk_row(text, start, width, tab, |pos, c, col, cells| {
+                let highlight = highlights.as_ref().and_then(|found| found.get(byte));
+                byte += c.len_utf8();
                 let face = if region.contains(&pos) {
                     faces::REGION
                 } else {
-                    faces::DEFAULT
+                    highlight.map_or(faces::DEFAULT, faces::syntax)
                 };
                 // In a pane one or two cells wide, a wide char may not fit in
                 // the columns left of the continuation marker.
@@ -272,7 +345,7 @@ impl Editor {
             });
             if row.contains(point) {
                 let col = point_col.unwrap_or(end_col).min(width - 1);
-                cursor = Some((row_index as u16, col as u16));
+                cursor = Some((row_index as u16, (gutter + col) as u16));
             }
             if row.continued && width >= 2 {
                 let padding = (width - 1).saturating_sub(end_col.min(width));
@@ -289,6 +362,7 @@ impl Editor {
     }
 
     fn mode_line(&self, id: WindowId) -> DisplayLine {
+        // The mode line spans the whole window, line numbers included.
         let window = &self.windows[id];
         let buffer = &self.buffers[window.buffer];
         let point = buffer.marker(window.point);
@@ -437,7 +511,7 @@ impl Editor {
                 if !candidate.annotation.is_empty() && used + 2 < width {
                     let gap = column.saturating_sub(used).max(2);
                     line.push(&" ".repeat(gap), face);
-                    let annotation_face = if selected { face } else { faces::SHADOW };
+                    let annotation_face = if selected { face } else { faces::ANNOTATION };
                     line.push(
                         fit(&candidate.annotation, width - used - gap),
                         annotation_face,

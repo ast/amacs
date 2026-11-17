@@ -1,0 +1,21 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"markdown\", \"sample.md\")"
+---
+«delimiter|#» «heading|Title»
+
+Some *emphasis* and **strong** text with `code`.
+
+«delimiter|##» «heading|Section»
+
+«delimiter|- »an item
+«delimiter|- »[a link](https://example.com)
+
+«delimiter|```»«code|rust»
+«code|fn main() {}»
+«delimiter|```»
+
+«delimiter|> »A quote.
+
+«delimiter|1. »First
+«delimiter|2. »Second

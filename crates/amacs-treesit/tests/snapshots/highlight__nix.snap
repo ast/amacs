@@ -1,0 +1,33 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"nix\", \"sample.nix\")"
+---
+«bracket|{» «variable-name|config»«delimiter|,» «variable-name|pkgs»«delimiter|,» «variable-name|lib»«delimiter|,» ... «bracket|}»:
+
+«keyword|let»
+  «property|name» «delimiter|=» «string|"amacs"»«delimiter|;»
+  «property|ports» «delimiter|=» «bracket|[»
+    «number|80»
+    «number|443»
+  «bracket|]»«delimiter|;»
+«keyword|in»
+«bracket|{»
+  «property|imports» «delimiter|=» «bracket|[» «regexp|./hardware.nix» «bracket|]»«delimiter|;»
+
+  «property|services»«delimiter|.»«property|nginx» «delimiter|=» «bracket|{»
+    «property|enable» «delimiter|=» «builtin|true»«delimiter|;»
+    «property|virtualHosts»«delimiter|.${»name«bracket|}» «delimiter|=» «bracket|{»
+      «property|root» «delimiter|=» «string|"/var/www"»«delimiter|;»
+    «bracket|}»«delimiter|;»
+  «bracket|}»«delimiter|;»
+
+  «property|environment»«delimiter|.»«property|systemPackages» «delimiter|=» «keyword|with» pkgs«delimiter|;» «bracket|[»
+    git
+    ripgrep
+  «bracket|]»«delimiter|;»
+
+  «comment|# A comment.»
+  «property|users»«delimiter|.»«property|users»«delimiter|.»«property|albin» «delimiter|=» lib«delimiter|.»«property|mkIf» config«delimiter|.»«property|enable» «bracket|{»
+    «property|isNormalUser» «delimiter|=» «builtin|true»«delimiter|;»
+  «bracket|}»«delimiter|;»
+«bracket|}»

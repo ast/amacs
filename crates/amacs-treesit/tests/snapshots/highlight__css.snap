@@ -1,0 +1,21 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"css\", \"sample.css\")"
+---
+«keyword|@import» «function-name|url»«bracket|(»«string|"base.css"»«bracket|)»«delimiter|;»
+
+«delimiter|:»«preprocessor|root» «bracket|{»
+  «property|--accent»«delimiter|:» «delimiter|#»«regexp|0031a9»«delimiter|;»
+«bracket|}»
+
+«delimiter|.»«property|button»«delimiter|:»«preprocessor|hover»«delimiter|,»
+«function-name|a»«delimiter|.»«property|link» «bracket|{»
+  «property|color»«delimiter|:» «function-name|var»«bracket|(»--accent«bracket|)»«delimiter|;»
+  «property|margin»«delimiter|:» «number|0» auto «number|2»«type|px»«delimiter|;»
+«bracket|}»
+
+«keyword|@media» «bracket|(»«property|max-width»«delimiter|:» «number|600»«type|px»«bracket|)» «bracket|{»
+  «delimiter|.»«property|button» «bracket|{»
+    «property|display»«delimiter|:» none «keyword|!important»«delimiter|;»
+  «bracket|}»
+«bracket|}»

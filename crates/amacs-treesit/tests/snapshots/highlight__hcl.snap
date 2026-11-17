@@ -1,0 +1,22 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"hcl\", \"sample.tf\")"
+---
+«keyword|terraform» «bracket|{»
+  «property|required_version» = «string|">= 1.5"»
+«bracket|}»
+
+«comment|# The region to deploy to.»
+«keyword|variable» «type|"region"» «bracket|{»
+  «property|type»    = string
+  «property|default» = «string|"eu-north-1"»
+«bracket|}»
+
+«keyword|resource» «type|"aws_instance"» «type|"web"» «bracket|{»
+  «property|ami»           = var«delimiter|.»«property|ami»
+  «property|instance_type» = «string|"t3.micro"»
+  «property|tags» = «bracket|{»
+    «property|Name» = «string|"web-»«delimiter|${»«string|var»«delimiter|.»«property|region»«delimiter|}»«string|"»
+  «bracket|}»
+  «property|count» = «function-call|length»«bracket|(»var«delimiter|.»«property|zones»«bracket|)» > «number|0» ? «number|1» : «number|0»
+«bracket|}»

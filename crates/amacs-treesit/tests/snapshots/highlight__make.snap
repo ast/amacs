@@ -1,0 +1,18 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"make\", \"Makefile\")"
+---
+«constant|CC» «operator|:=» «string|gcc»
+«constant|CFLAGS» «operator|+=» «string|-Wall»
+
+«constant|.PHONY»«delimiter|:» all clean
+
+«constant|all»«delimiter|:» main.o util.o
+	«delimiter|$»«bracket|(»«constant|CC»«bracket|)» «delimiter|$»«bracket|(»«constant|CFLAGS»«bracket|)» -o app «delimiter|$^»
+
+«regexp|%.o»«delimiter|:» «regexp|%.c»
+	«delimiter|$»«bracket|(»«constant|CC»«bracket|)» -c «delimiter|$<»
+
+«comment|# Remove build output.»
+«constant|clean»«delimiter|:»
+	rm -f *.o app

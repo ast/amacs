@@ -20,6 +20,19 @@ const KEYS: &[&str] = &[
 /// No file commands, so nothing is written to disk.
 const MINIBUFFER_KEYS: &[&str] = &["M-x", "C-x b", "C-x k", "RET", "TAB", "C-g", "y", "n"];
 
+/// Keys for source code: delimiters, indentation, and the commands that
+/// work on whole expressions, with and without paredit.
+const CODE_KEYS: &[&str] = &[
+    "(", ")", "[", "]", "{", "}", "\"", "'", ";", "/", "#", "\\", "x", "SPC", "RET", "TAB", "DEL",
+    "C-d", "C-k", "C-f", "C-b", "C-n", "C-p", "C-a", "C-e", "M-<", "M->", "C-M-f", "C-M-b",
+    "C-M-k", "C-M-DEL", "C-M-u", "C-M-d", "C-M-n", "C-M-SPC", "C-w", "C-y", "C-/", "C-?", "M-(",
+    "M-s", "M-r", "C-)", "C-}", "C-(", "C-{", "C-x h", "C-M-\\", "C-g", "C-u",
+];
+
+fn code_key_sequences() -> impl Strategy<Value = Vec<&'static str>> {
+    prop::collection::vec(prop::sample::select(CODE_KEYS), 0..100)
+}
+
 fn key_sequences() -> impl Strategy<Value = Vec<&'static str>> {
     prop::collection::vec(prop::sample::select(KEYS), 0..120)
 }
@@ -80,5 +93,46 @@ proptest! {
             h.keys("C-?");
             prop_assert_eq!(h.buffer_text(), before);
         }
+    }
+
+    #[test]
+    fn code_keys_keep_the_syntax_tree_in_step(
+        keys in code_key_sequences(),
+        language in prop::sample::select(vec!["rust", "scheme", "python", "bash"]),
+        paredit in any::<bool>(),
+    ) {
+        let mut h = Harness::new(40, 10);
+        h.editor.set_language(Some(language)).unwrap();
+        h.editor
+            .set_local_option("line-numbers", amacs_core::Value::sym("relative"))
+            .unwrap();
+        let mode = if paredit { "paredit-mode" } else { "auto-pair-mode" };
+        h.editor.set_minor_mode(mode, false, true).unwrap();
+        for key in &keys {
+            h.keys(key);
+            let (width, height) = h.screen.size();
+            if let Some((row, col)) = h.screen.cursor() {
+                prop_assert!(row < height && col < width);
+            }
+            prop_assert!(h.editor.point() <= h.editor.text().len());
+
+            // The tree that followed the edits highlights the text exactly
+            // as a tree parsed from scratch does.
+            let buffer = h.editor.buffer();
+            let all = 0..buffer.text().len_bytes();
+            let mut fresh = amacs_core::Buffer::with_text("fresh", buffer.text().clone());
+            fresh.set_language(buffer.language());
+            fresh.update_syntax();
+            prop_assert_eq!(buffer.highlights(all.clone()), fresh.highlights(all));
+        }
+        // Everything typed can be undone.
+        h.keys("C-g C-g");
+        for _ in 0..keys.len() * 2 + 1 {
+            h.keys("C-/");
+            if h.echo() == "No further undo information" {
+                break;
+            }
+        }
+        prop_assert_eq!(h.buffer_text(), "");
     }
 }

@@ -1,0 +1,17 @@
+@import url("base.css");
+
+:root {
+  --accent: #0031a9;
+}
+
+.button:hover,
+a.link {
+  color: var(--accent);
+  margin: 0 auto 2px;
+}
+
+@media (max-width: 600px) {
+  .button {
+    display: none !important;
+  }
+}

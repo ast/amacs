@@ -1,0 +1,25 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"scheme\", \"sample.scm\")"
+---
+«comment|;;; A sample.»
+
+(«keyword|define» «variable-name|limit» «number|10»)
+
+(«keyword|define» («function-name|square» x)
+  «string|"Return X squared."»
+  (* x x))
+
+(«keyword|define-command» («function-name|insert-date»)
+  «string|"Insert today's date."»
+  («keyword|let» ((now (current-time))
+        (fmt «string|"%Y-%m-%d"»))
+    («keyword|when» (> limit «number|0»)
+      (insert (format-time fmt now) «constant|#\space»))
+    (for-each («keyword|lambda» (n)
+                (display n))
+              '(«number|1» «number|2» «number|3»))))
+
+(«keyword|cond»
+  [(null? xs) «constant|#f»]
+  [«keyword|else» '«constant|done»])

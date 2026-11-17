@@ -5,9 +5,9 @@ language. The goal is a daemon with thin terminal and Wayland frontends.
 
 ## Status
 
-Milestones M0 to M5 of the plan are done: the editor runs in a terminal or a
-Wayland window, alone or as a server with any number of clients, edits files,
-and is extended in Scheme.
+Milestones M0 to M6 of the plan are done: the editor runs in a terminal or a
+Wayland window, alone or as a server with any number of clients, edits files
+with syntax highlighting and indentation, and is extended in Scheme.
 
 Working now:
 
@@ -22,13 +22,15 @@ Working now:
 - Scheme: commands, key bindings, options, hooks, major and minor modes, an
   init file, prompts that suspend the command, and `C-g` to stop runaway code
 
+- Syntax highlighting and indentation for 22 languages, the Modus themes,
+  line numbers, paired delimiters and paredit (below)
 - A server (`amacs --daemon`) with `amacsclient` for frames, files and
   `--eval`; auto-save with recovery after a crash
 - A Wayland window (`amacs-gui`, or `amacsclient -c`) with shaped text,
   ligatures, colour emoji, fractional scaling and the system clipboard
 
-Not yet: syntax highlighting, LSP, and
-everything else in the later milestones.
+Not yet: LSP, the git interface, the file manager, and everything else in the
+later milestones.
 
 ## Building and running
 
@@ -62,6 +64,85 @@ kill ring). Scheme code gets the same with `(completing-read prompt list)`.
 
 After a prefix key such as `C-x`, a short pause shows the keys that can
 follow. Input history and recent files are kept in `$XDG_STATE_HOME/amacs`.
+
+## Languages
+
+A file's name selects its major mode, which sets the buffer's language. The
+language gives it highlighting from a tree-sitter grammar, kept up to date as
+you type, and indentation.
+
+Languages: Bash, C, C++, CMake, CSS, Devicetree, Emacs Lisp, Go, HCL and
+Terraform, HTML, JavaScript, JSON, Make, Markdown, Nix, Python, Rust, Scheme,
+TOML, TSX, TypeScript and YAML. The grammars are compiled into the binary.
+Dockerfiles have a mode but no grammar.
+
+| Key | Does |
+|---|---|
+| `TAB` | Indent the line, or the lines of the active region |
+| `RET` | Start a new line, indented; trailing blanks on the old line go |
+| `C-M-\` | Indent the region |
+| `C-M-f`, `C-M-b` | Move over a bracketed expression, string or word |
+| `C-M-u`, `C-M-d`, `C-M-n` | Out of the enclosing list backward, into the next list, out forward |
+| `C-M-k`, `C-M-DEL`, `C-M-SPC` | Kill the expression after or before point; mark it |
+
+How lines are indented depends on the language:
+
+- Languages with brackets are indented from the syntax tree: one level for
+  each bracket pair or similar construct that is open at the start of the
+  line. Arguments are not lined up under the opening bracket. Where a syntax
+  error breaks the tree, the line above decides.
+- Lisp is indented as in Emacs: bodies of special forms by two columns,
+  arguments under the first argument.
+- In Python and YAML the line above decides, and pressing `TAB` again steps
+  out one level at a time. `indent-region` refuses to guess there.
+- Elsewhere a new line starts where the last one did and `TAB` moves to the
+  next tab stop.
+
+The options `indent-offset` and `indent-tabs-mode` are set by each mode and
+can be changed in a mode hook. `line-numbers` is `#f`, `'absolute` or
+`'relative`.
+
+Two minor modes deal with delimiters:
+
+- `auto-pair-mode` (global) inserts brackets and quotes in pairs, steps over
+  a closing delimiter that is typed, deletes an empty pair as one, wraps the
+  active region, and opens a block when `RET` is pressed between brackets.
+- `paredit-mode` keeps Lisp code balanced. `(`, `[` and `"` insert pairs;
+  `)` leaves the list; `DEL`, `C-d` and `C-k` never delete half a pair;
+  `C-)` and `C-}` (also `C-<right>`, `C-<left>`) slurp and barf forward,
+  `C-(` and `C-{` backward; `M-s` splices, `M-r` raises, `M-(` wraps.
+
+```scheme
+(add-hook! 'prog-mode-hook (lambda () (set-local! 'line-numbers 'relative)))
+(enable-mode! 'auto-pair-mode)
+(add-hook! 'scheme-mode-hook (lambda () (enable-mode! 'paredit-mode)))
+```
+
+## Themes
+
+Faces take their colours from the palette of the current theme. The four
+Modus themes are built in: `modus-operandi`, `modus-vivendi` and their
+`-tinted` variants; `modus-operandi-tinted` is the default. The palettes are
+those of the modus-themes package for Emacs by Protesilaos Stavrou, which is
+licensed under the GPL, version 3 or later.
+
+```scheme
+(load-theme 'modus-vivendi-tinted)
+;; Replace palette entries in every theme.
+(set-palette-overrides! '((comment yellow-faint) (string green-warmer)))
+;; Change one face. Colours are palette names or "#rrggbb".
+(set-face! 'keyword 'fg 'magenta 'bold #f)
+;; A theme of your own, starting from another.
+(define-theme 'mine 'modus-vivendi '((bg-main "#101418")))
+```
+
+`M-x toggle-theme` switches between the themes in the `themes-to-toggle`
+option, and `M-x choose-theme` picks one by name. The faces are listed in
+`crates/amacs-core/src/faces.rs`; the syntax faces are `comment`, `doc`,
+`string`, `escape`, `regexp`, `constant`, `number`, `keyword`, `operator`,
+`bracket`, `delimiter`, `function-name`, `function-call`, `builtin`,
+`preprocessor`, `type`, `variable-name`, `property`, `heading`, `emphasis`,
+`strong`, `code` and `link`.
 
 ## Server and clients
 
@@ -109,8 +190,7 @@ window opens; changing them does not affect windows that are already open.
 
 The window draws on the CPU into shared memory, repainting only the rows that
 changed. Text is shaped per run, so programming ligatures form, and then
-placed on the cell grid. Colours are those of modus-operandi-tinted until
-themes arrive.
+placed on the cell grid.
 
 The server reaches the system clipboard through `wl-copy` and `wl-paste`, for
 terminal frames too: a kill is copied, and `C-y` yanks what another program
@@ -143,7 +223,8 @@ starting point:
 The primitives are listed with their documentation in
 `crates/amacs-script/src/api.rs`. The rest of the Scheme API (`define-command`,
 `define-major-mode`, `add-hook!`, `read-string`, `deftest` and so on) is
-written in Scheme under `runtime/core/`. Things to know:
+written in Scheme under `runtime/core/`, and the language modes under
+`runtime/modes/`. Things to know:
 
 - Buffer positions are zero-based.
 - A prompt such as `read-string` suspends the command until the user answers.
@@ -174,6 +255,7 @@ End-to-end tests drive the editor through a headless frontend
 |---|---|
 | `amacs-text` | Rope, markers, undo tree |
 | `amacs-proto` | Keys, input events and draw operations shared with frontends |
+| `amacs-treesit` | Grammars, highlighting queries and indentation rules |
 | `amacs-core` | Editor state, commands, keymaps, redisplay |
 | `amacs-tty` | Terminal frontend |
 | `amacs-server` | The `amacs` binary: standalone editor, server, batch mode |

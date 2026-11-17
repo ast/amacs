@@ -1,0 +1,40 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"go\", \"sample.go\")"
+---
+«keyword|package» main
+
+«keyword|import» (
+    «string|"fmt"»
+    «string|"os"»
+)
+
+«keyword|type» «type|Shape» «keyword|interface» {
+    «property|Area»() «type|float64»
+}
+
+«keyword|type» «type|Rect» «keyword|struct» {
+    «property|W», «property|H» «type|float64»
+}
+
+«keyword|func» (r «type|Rect») «function-name|Area»() «type|float64» {
+    «keyword|return» r.«property|W» «operator|*» r.«property|H»
+}
+
+«keyword|func» «function-name|main»() {
+    shapes «operator|:=» []«type|Shape»{
+        «type|Rect»{«number|1», «number|2»},
+        «type|Rect»{«number|3», «number|4»},
+    }
+    «keyword|for» i, s «operator|:=» «keyword|range» shapes {
+        «keyword|switch» {
+        «keyword|case» s.«function-call|Area»() «operator|>» «number|5»:
+            fmt.«function-call|Println»(i, «string|"big"»)
+        «keyword|default»:
+            fmt.«function-call|Println»(i, «string|"small"»)
+        }
+    }
+    «keyword|if» «builtin|len»(os.«property|Args») «operator|>» «number|1» {
+        fmt.«function-call|Printf»(«string|"%s»«escape|\n»«string|"», os.«property|Args»[«number|1»])
+    }
+}

@@ -1,0 +1,36 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"bash\", \"sample.sh\")"
+---
+«comment|#!/usr/bin/env bash»
+«function-name|set» «constant|-euo» pipefail
+
+«property|name»=«string|"${»«property|1»«string|:-world}"»
+
+«function-name|greet»() {
+    local «property|who»=«string|"»«operator|$»«property|1»«string|"»
+    «function-name|echo» «string|"Hello, »«operator|$»«property|who»«string|"»
+}
+
+«keyword|if» [[ -n «string|"»«operator|$»«property|name»«string|"» ]]; «keyword|then»
+    «function-name|greet» «string|"»«operator|$»«property|name»«string|"»
+«keyword|elif» [[ -z «string|"»«operator|$»«property|name»«string|"» ]]; «keyword|then»
+    «function-name|echo» «string|"empty"»
+«keyword|else»
+    «function-name|exit» 1
+«keyword|fi»
+
+«keyword|for» «property|file» «keyword|in» *.txt; «keyword|do»
+    «keyword|while» «function-name|read» «constant|-r» line; «keyword|do»
+        «function-name|echo» «string|"»«operator|$»«property|line»«string|"»
+    «keyword|done» «operator|<» «string|"»«operator|$»«property|file»«string|"»
+«keyword|done»
+
+«keyword|case» «string|"»«operator|$»«property|name»«string|"» «keyword|in»
+    a)
+        «function-name|echo» «string|"a"»
+        ;;
+    *)
+        «function-name|echo» «string|"other"»
+        ;;
+«keyword|esac»

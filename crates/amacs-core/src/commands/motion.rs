@@ -207,8 +207,8 @@ fn page_rows(ed: &Editor) -> usize {
 }
 
 fn window_geometry(ed: &Editor) -> (usize, usize, usize) {
-    let window = ed.window();
-    (window.text_rows(), window.width(), ed.buffer().tab_width)
+    let width = ed.text_width(ed.selected());
+    (ed.window().text_rows(), width, ed.buffer().tab_width)
 }
 
 fn window_start(ed: &Editor) -> usize {

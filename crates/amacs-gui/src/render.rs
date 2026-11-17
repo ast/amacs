@@ -20,8 +20,8 @@ use cosmic_text::{
 };
 use unicode_width::UnicodeWidthChar;
 
-/// Colours for faces that leave theirs unset. These are the foreground and
-/// background of modus-operandi-tinted, until themes are configurable.
+/// Colours for faces that leave theirs unset, and for the window before the
+/// server has sent its faces. The server's themes set both for every face.
 pub const DEFAULT_FG: Color = Color::rgb(0x00, 0x00, 0x00);
 pub const DEFAULT_BG: Color = Color::rgb(0xfb, 0xf7, 0xf0);
 
@@ -506,7 +506,9 @@ impl Renderer {
                 w: self.width,
                 h: self.height,
             };
-            self.fill(whole, pixel(DEFAULT_BG));
+            // The margin outside the panes has the default face's background.
+            let (_, background) = self.colors(0);
+            self.fill(whole, background);
             if self.width > 0 && self.height > 0 {
                 add(whole);
             }

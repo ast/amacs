@@ -1,0 +1,17 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"yaml\", \"sample.yaml\")"
+---
+«comment|# Compose file.»
+«property|version»«delimiter|:» «string|"3"»
+«property|services»«delimiter|:»
+  «property|web»«delimiter|:»
+    «property|image»«delimiter|:» «string|nginx:latest»
+    «property|ports»«delimiter|:»
+      «delimiter|-» «string|"80:80"»
+      «delimiter|-» «number|443»
+    «property|environment»«delimiter|:»
+      «property|DEBUG»«delimiter|:» «constant|true»
+      «property|NAME»«delimiter|:» «delimiter|&»«constant|name» «string|web»
+    «property|command»«delimiter|:» «delimiter|>»
+«string|      nginx -g 'daemon off;'»

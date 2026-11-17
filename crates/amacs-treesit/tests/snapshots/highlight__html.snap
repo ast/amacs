@@ -1,0 +1,14 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"html\", \"sample.html\")"
+---
+«constant|<!DOCTYPE html»«bracket|>»
+«bracket|<»«function-name|html» «preprocessor|lang»="«string|en»"«bracket|>»
+  «bracket|<»«function-name|head»«bracket|>»
+    «bracket|<»«function-name|title»«bracket|>»Sample«bracket|</»«function-name|title»«bracket|>»
+  «bracket|</»«function-name|head»«bracket|>»
+  «bracket|<»«function-name|body»«bracket|>»
+    «comment|<!-- A comment. -->»
+    «bracket|<»«function-name|a» «preprocessor|href»="«string|https://example.com»" «preprocessor|class»="«string|link»"«bracket|>»A link«bracket|</»«function-name|a»«bracket|>»
+  «bracket|</»«function-name|body»«bracket|>»
+«bracket|</»«function-name|html»«bracket|>»

@@ -1,0 +1,35 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"cpp\", \"sample.cpp\")"
+---
+«keyword|#include» «string|<string>»
+«keyword|#include» «string|<vector>»
+
+«keyword|namespace» shapes {
+
+«keyword|class» «type|Shape» {
+«keyword|public»:
+  «keyword|virtual» ~Shape() «operator|=» «keyword|default»;
+  «keyword|virtual» «type|double» «function-name|area»() «keyword|const» «operator|=» «number|0»;
+
+«keyword|private»:
+  std::«type|string» «property|name_»;
+};
+
+«keyword|template» «operator|<»«keyword|typename» «type|T»«operator|>»
+«type|T» «function-name|largest»(«keyword|const» std::«type|vector»«operator|<»«type|T»«operator|>» «operator|&»items) {
+  «type|T» best «operator|=» items.«function-call|front»();
+  «keyword|for» («keyword|const» «type|auto» «operator|&»item : items) {
+    «keyword|if» (item «operator|>» best) {
+      best «operator|=» item;
+    }
+  }
+  «keyword|return» best;
+}
+
+} «comment|// namespace shapes»
+
+«type|int» «function-name|main»() {
+  «type|auto» values «operator|=» std::«type|vector»«operator|<»«type|int»«operator|>»{«number|1», «number|2», «number|3»};
+  «keyword|return» shapes::«function-call|largest»(values) «operator|==» «number|3» ? «number|0» : «number|1»;
+}

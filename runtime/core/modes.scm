@@ -31,6 +31,18 @@
          body ...
          (%run-mode-hooks 'name)))]))
 
+;; Turns a minor mode on or off without saying so, for use in hooks and
+;; init files. A mode defined as global is switched everywhere.
+(define %global-modes '())
+
+(define (%switch-mode! mode on)
+  (unless (equal? on (minor-mode-enabled? mode))
+    (%set-minor-mode! mode (if (member mode %global-modes) #t #f) on)
+    (run-hooks (%mode-hook-name mode))))
+
+(define (enable-mode! mode) (%switch-mode! mode #t))
+(define (disable-mode! mode) (%switch-mode! mode #f))
+
 (define (%toggle-minor-mode name pretty global?)
   (let ((on (not (minor-mode-enabled? name))))
     (%set-minor-mode! name global? on)
@@ -55,6 +67,7 @@
     [(_ name pretty doc)
      (begin
        (%define-mode 'name #f pretty)
+       (set! %global-modes (cons 'name %global-modes))
        (define-command (name) doc (%toggle-minor-mode 'name pretty #t)))]))
 
 ;;; Choosing a major mode from the file name
@@ -96,8 +109,13 @@
 (define-major-mode conf-mode #f "Conf"
   "Parent of the major modes for configuration files.")
 
-(define-major-mode scheme-mode prog-mode "Scheme"
-  "Major mode for Scheme source.")
-
 (add-auto-mode! ".txt" 'text-mode)
-(add-auto-mode! ".scm" 'scheme-mode)
+
+;;; Built-in minor modes. Their behaviour is part of the editor; these
+;;; define the commands that switch them.
+
+(define-minor-mode paredit-mode "Paredit"
+  "Keep brackets balanced while editing Lisp code.")
+
+(define-global-minor-mode auto-pair-mode ""
+  "Insert brackets and quotes in pairs.")

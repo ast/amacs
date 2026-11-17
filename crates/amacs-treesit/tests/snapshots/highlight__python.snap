@@ -1,0 +1,35 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"python\", \"sample.py\")"
+---
+«doc|"""A small module."""»
+
+«keyword|import» os
+«keyword|from» dataclasses «keyword|import» dataclass
+
+«constant|LIMIT» «operator|=» «number|10»
+
+
+«function-name|@dataclass»
+«keyword|class» «type|Point»:
+    x: «type|float»
+    y: «type|float» «operator|=» «number|0.0»
+
+    «keyword|def» «function-name|norm»(self) «operator|->» «type|float»:
+        «doc|"""Distance from the origin."""»
+        «keyword|return» (self.«property|x»«operator|**»«number|2» «operator|+» self.«property|y»«operator|**»«number|2») «operator|**» «number|0.5»
+
+
+«keyword|def» «function-name|main»(args: list[«type|str»]) «operator|->» «type|int»:
+    points «operator|=» [«type|Point»(«builtin|float»(i)) «keyword|for» i «operator|in» «builtin|range»(«constant|LIMIT»)]
+    «keyword|for» point «operator|in» points:
+        «keyword|if» point.«function-call|norm»() «operator|>» «number|5»:
+            «builtin|print»(«string|f"big »«delimiter|{»point«string|.»«property|x»«delimiter|}»«string|"»)
+        «keyword|elif» point.«property|x» «operator|is» «constant|None»:
+            «keyword|raise» «type|ValueError»(«string|"no x"»)
+    «comment|# Done.»
+    «keyword|return» «builtin|len»(os.«property|environ») «operator|and» «number|0»
+
+
+«keyword|if» __name__ «operator|==» «string|"__main__"»:
+    «function-call|main»([])

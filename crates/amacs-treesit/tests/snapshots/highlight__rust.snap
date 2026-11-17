@@ -1,0 +1,55 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"rust\", \"sample.rs\")"
+---
+«keyword|use» std«delimiter|::»collections«delimiter|::»«bracket|{»
+    «type|HashMap»«delimiter|,»
+    «type|HashSet»«delimiter|,»
+«bracket|}»«delimiter|;»
+
+«doc|/// A point in the plane.»
+«preprocessor|#»«bracket|[»«preprocessor|derive»«bracket|(»«type|Debug»«delimiter|,»«preprocessor| »«type|Clone»«bracket|)]»
+«keyword|pub» «keyword|struct» «type|Point» «bracket|{»
+    «property|x»«delimiter|:» «type|f64»«delimiter|,»
+    «property|y»«delimiter|:» «type|f64»«delimiter|,»
+«bracket|}»
+
+«keyword|const» «constant|LIMIT»«delimiter|:» «type|usize» = «constant|10»«delimiter|;»
+
+«keyword|impl» «type|Point» «bracket|{»
+    «keyword|pub» «keyword|fn» «function-name|new»«bracket|(»«variable-name|x»«delimiter|:» «type|f64»«delimiter|,» «variable-name|y»«delimiter|:» «type|f64»«bracket|)» -> «type|Self» «bracket|{»
+        «type|Self» «bracket|{» x«delimiter|,» y «bracket|}»
+    «bracket|}»
+
+    «keyword|fn» «function-name|norm»«bracket|(»«operator|&»«builtin|self»«bracket|)» -> «type|f64»
+    «keyword|where»
+        «type|Self»«delimiter|:» «type|Sized»«delimiter|,»
+    «bracket|{»
+        «keyword|let» sum = «builtin|self»«delimiter|.»«property|x» «operator|*» «builtin|self»«delimiter|.»«property|x»
+            + «builtin|self»«delimiter|.»«property|y» «operator|*» «builtin|self»«delimiter|.»«property|y»«delimiter|;»
+        sum«delimiter|.»«function-call|sqrt»«bracket|()»
+    «bracket|}»
+«bracket|}»
+
+«keyword|fn» «function-name|main»«bracket|()» «bracket|{»
+    «keyword|let» points«delimiter|:» «type|Vec»«bracket|<»«type|Point»«bracket|>» = «bracket|(»«constant|0»..«constant|LIMIT»«bracket|)»
+        «delimiter|.»«function-call|map»«bracket|(»|i| «type|Point»«delimiter|::»«function-call|new»«bracket|(»i «keyword|as» «type|f64»«delimiter|,» «constant|1.0»«bracket|))»
+        «delimiter|.»«function-call|filter»«bracket|(»|p| «bracket|{»
+            p«delimiter|.»«function-call|norm»«bracket|()» > «constant|2.0»
+        «bracket|})»
+        «delimiter|.»«function-call|collect»«bracket|()»«delimiter|;»
+    «keyword|for» point «keyword|in» «operator|&»points «bracket|{»
+        «keyword|match» point«delimiter|.»«property|x» «keyword|as» «type|i32» «bracket|{»
+            «constant|0» => «preprocessor|println!»«bracket|(»«string|"zero"»«bracket|)»«delimiter|,»
+            n «keyword|if» n > «constant|5» => «bracket|{»
+                «preprocessor|println!»«bracket|(»«string|"big {n}"»«bracket|)»«delimiter|;»
+            «bracket|}»
+            _ => «bracket|{}»
+        «bracket|}»
+    «bracket|}»
+    «keyword|let» text = «function-call|describe»«bracket|(»
+        «string|"a string»«escape|\n»«string|"»«delimiter|,»
+        «string|'c'»«delimiter|,»
+    «bracket|)»«delimiter|;»
+    «comment|// The end.»
+«bracket|}»
