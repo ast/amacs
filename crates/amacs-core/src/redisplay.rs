@@ -133,7 +133,10 @@ impl Editor {
                 h: rect.h.saturating_sub(1),
                 ..rect
             };
-            let (lines, window_cursor) = self.window_lines(*id);
+            let (mut lines, window_cursor) = self.window_lines(*id);
+            if *id == self.selected() && self.completion_active() {
+                self.overlay_popup(&mut lines, window_cursor, window.width());
+            }
             if *id == self.selected()
                 && let Some((row, col)) = window_cursor
             {
@@ -305,6 +308,18 @@ impl Editor {
             }
             _ => 0..0,
         };
+        // The diagnostics that can be seen, each covering at least a char.
+        let visible_end = (window_start + rows * width).min(text.len());
+        let diagnostics: Vec<_> = buffer
+            .diagnostics()
+            .map(|(range, diagnostic)| {
+                (
+                    range.start..range.end.max(range.start + 1),
+                    diagnostic.severity,
+                )
+            })
+            .filter(|(range, _)| range.start <= visible_end && range.end > window_start)
+            .collect();
 
         let mut lines = Vec::with_capacity(rows);
         let mut cursor = None;
@@ -329,7 +344,17 @@ impl Editor {
                 let face = if region.contains(&pos) {
                     faces::REGION
                 } else {
-                    highlight.map_or(faces::DEFAULT, faces::syntax)
+                    let face = highlight.map_or(faces::DEFAULT, faces::syntax);
+                    // The most serious diagnostic on a char is the one shown.
+                    let severity = diagnostics
+                        .iter()
+                        .filter(|(range, _)| range.contains(&pos))
+                        .map(|(_, severity)| *severity)
+                        .min();
+                    match severity {
+                        Some(severity) => self.faces.diagnostic(face, severity),
+                        None => face,
+                    }
                 };
                 // In a pane one or two cells wide, a wide char may not fit in
                 // the columns left of the continuation marker.
@@ -376,7 +401,12 @@ impl Editor {
         let line = buffer.text().line_of(point) + 1;
         let col = column_of(buffer.text(), point, buffer.tab_width);
         let modes = self.mode_line_modes(window.buffer);
-        let text = format!(" {flags}  {}   L{line} C{col}  ({modes})", buffer.name);
+        let mut text = format!(" {flags}  {}   L{line} C{col}  ({modes})", buffer.name);
+        let servers = self.lsp_mode_line(window.buffer);
+        if !servers.is_empty() {
+            text.push(' ');
+            text.push_str(&servers);
+        }
         let face = if id == self.selected() {
             faces::MODE_LINE
         } else {

@@ -10,15 +10,20 @@ use slotmap::SlotMap;
 
 use crate::buffer::{Buffer, BufferId};
 use crate::commands;
+use crate::complete::CompletionState;
 use crate::completion::Waker;
+use crate::env::{EnvState, Environments};
 use crate::error::{CmdError, CmdResult};
 use crate::faces::Faces;
+use crate::format::Formatter;
 use crate::frame::{Frame, FrameId};
 use crate::history::History;
 use crate::keymap::{Keymap, Lookup, lookup_in};
 use crate::kill_ring::KillRing;
+use crate::lsp::LspState;
 use crate::minibuffer::MinibufferState;
 use crate::script::{ScriptCall, ScriptFn, ScriptState, ScriptTarget, Value};
+use crate::snippet::ActiveSnippet;
 use crate::window::{Rect, Window, WindowId};
 
 /// What running a command does.
@@ -131,6 +136,13 @@ pub struct Editor {
     keymaps: HashMap<String, Keymap>,
     pub(crate) script: ScriptState,
     pub(crate) faces: Faces,
+    pub(crate) lsp: LspState,
+    pub(crate) environments: Environments,
+    pub(crate) completion: CompletionState,
+    pub(crate) snippet: Option<ActiveSnippet>,
+    /// Snippets by the mode they belong to, each a name and its template.
+    pub(crate) snippets: HashMap<String, Vec<(String, Vec<Value>)>>,
+    pub(crate) formatters: HashMap<String, Formatter>,
     pending_keys: Vec<Key>,
     esc_pending: bool,
     /// Prefix argument for the next command.
@@ -185,6 +197,12 @@ impl Editor {
             keymaps: HashMap::new(),
             script: ScriptState::new(),
             faces: Faces::default(),
+            lsp: LspState::default(),
+            environments: Environments::default(),
+            completion: CompletionState::default(),
+            snippet: None,
+            snippets: HashMap::new(),
+            formatters: HashMap::new(),
             pending_keys: Vec::new(),
             esc_pending: false,
             prefix_arg: None,
@@ -296,6 +314,38 @@ impl Editor {
         const SELF_INSERT: &str = "self-insert-command";
         let amalgamate = self.this_command.as_deref() == Some(SELF_INSERT)
             && self.last_command.as_deref() == Some(SELF_INSERT);
+        self.end_undo_step(amalgamate);
+        if let Some(buf) = self.buffers.get_mut(buffer)
+            && buf.tick() != tick
+        {
+            buf.mark_active = false;
+        }
+        if !self.keep_goal {
+            self.window_mut().goal_col = None;
+        }
+        self.kill_ring.end_command();
+        self.export_kill();
+        self.sync_minibuffer(Instant::now());
+        // A command run from within another, as with M-x, has already been
+        // recorded as the last command.
+        let command = self.this_command.take();
+        if is_command {
+            self.snippet_after_command(command.as_deref());
+            self.completion_after_command(command.as_deref());
+        }
+        self.lsp_after_command();
+        if let Some(name) = command {
+            self.last_command = Some(name);
+        }
+        self.current_prefix = None;
+        if is_command {
+            self.run_hook("post-command-hook", Vec::new());
+        }
+    }
+
+    /// Closes the undo record of what has been done to every buffer. With
+    /// `amalgamate`, the current buffer's joins its previous record.
+    fn end_undo_step(&mut self, amalgamate: bool) {
         let current = self.window().buffer;
         // Point in each buffer, as its undo record should remember it: that
         // of the selected window, else of any window showing the buffer.
@@ -311,29 +361,54 @@ impl Editor {
             };
             buf.end_command(point, amalgamate && id == current);
         }
-        if let Some(buf) = self.buffers.get_mut(buffer)
-            && buf.tick() != tick
-        {
-            buf.mark_active = false;
-        }
-        if !self.keep_goal {
-            self.window_mut().goal_col = None;
-        }
-        self.kill_ring.end_command();
-        self.export_kill();
-        self.sync_minibuffer(Instant::now());
-        // A command run from within another, as with M-x, has already been
-        // recorded as the last command.
-        if let Some(name) = self.this_command.take() {
-            self.last_command = Some(name);
-        }
-        self.current_prefix = None;
-        if is_command {
-            self.run_hook("post-command-hook", Vec::new());
-        }
     }
 
-    fn report(&mut self, result: CmdResult) {
+    /// Makes the edits done outside any command, such as those a language
+    /// server asked for, an undo step of their own.
+    pub(crate) fn commit_undo(&mut self) {
+        self.end_undo_step(false);
+        self.lsp_flush_all();
+    }
+
+    /// The environment for programs run for files in `dir`, from its
+    /// `.envrc`, or `None` if there is none or direnv is not used.
+    pub(crate) fn environment(&mut self, dir: &std::path::Path) -> Option<EnvState> {
+        if matches!(self.option("use-direnv"), Ok(Value::Bool(false))) {
+            return None;
+        }
+        let program = match self.option("direnv-program") {
+            Ok(Value::Str(program)) => program,
+            _ => "direnv".to_owned(),
+        };
+        let waker = self.waker.clone();
+        self.environments.lookup(dir, &program, &waker)
+    }
+
+    /// Takes in the environments that have been worked out and starts what
+    /// was waiting for them.
+    pub(crate) fn environment_poll(&mut self) {
+        let finished = self.environments.poll();
+        if finished.is_empty() {
+            return;
+        }
+        for (root, problem) in finished {
+            if let Some(problem) = problem {
+                self.message(format!(
+                    "direnv: {problem} ({})",
+                    crate::files::abbreviate_path(&root)
+                ));
+            }
+        }
+        self.lsp_start_waiting();
+    }
+
+    /// Forgets the environments worked out so far, so that a changed
+    /// `.envrc` or flake is read again.
+    pub fn reload_environments(&mut self) {
+        self.environments.clear();
+    }
+
+    pub(crate) fn report(&mut self, result: CmdResult) {
         if let Err(error) = result {
             self.message(error.to_string());
         }
@@ -530,6 +605,9 @@ impl Editor {
     /// threads. The host calls this when woken and when a deadline passes.
     pub fn poll(&mut self, now: Instant) {
         self.sync_minibuffer(now);
+        self.environment_poll();
+        self.lsp_poll(now);
+        self.completion_poll(now);
         if self.key_hint_due.is_some_and(|due| due <= now) {
             self.key_hint_due = None;
             self.show_key_hint();
@@ -538,10 +616,15 @@ impl Editor {
 
     /// When [`Editor::poll`] next has something to do, if it does.
     pub fn next_deadline(&self) -> Option<Instant> {
-        [self.key_hint_due, self.minibuffer_deadline()]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            self.key_hint_due,
+            self.minibuffer_deadline(),
+            self.completion.due,
+            self.lsp.idle_due,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Shows the keys that can follow the pending prefix, which-key style.
@@ -675,7 +758,7 @@ impl Editor {
     /// Indents the line that point is on as its language says.
     pub fn indent_current_line(&mut self) -> CmdResult {
         let line = self.text().line_of(self.point());
-        crate::commands::indent_line(self, line)
+        crate::commands::indent::indent_line(self, line)
     }
 
     // Messages and exit
@@ -689,6 +772,7 @@ impl Editor {
     }
 
     pub fn request_exit(&mut self) {
+        self.lsp_shutdown_all();
         self.exit = true;
     }
 
@@ -859,6 +943,33 @@ impl Editor {
         self.set_window_buffer(self.selected(), id);
         self.buffer_order.retain(|other| *other != id);
         self.buffer_order.insert(0, id);
+        // A file read without being shown gets its mode now that it is.
+        if std::mem::take(&mut self.buffers[id].needs_file_hook) {
+            self.run_hook("find-file-hook", Vec::new());
+        }
+    }
+
+    /// Shows a buffer in a window other than the selected one, making one
+    /// if the frame has only one. The selection stays where it is.
+    pub(crate) fn show_in_other_window(&mut self, id: BufferId) -> CmdResult {
+        let leaves = self.frame().layout.leaves();
+        let selected = self.selected();
+        if let Some(other) = leaves.iter().find(|leaf| **leaf != selected)
+            && leaves.contains(&selected)
+        {
+            self.set_window_buffer(*other, id);
+            return Ok(());
+        }
+        let target = leaves[0];
+        if self.windows[target].rect.h < 6 {
+            return Err(CmdError::msg("No room for another window"));
+        }
+        let new = self.make_window(id);
+        self.frame_mut()
+            .layout
+            .split(target, crate::window::SplitDir::Below, new);
+        self.relayout();
+        Ok(())
     }
 
     /// The most recently selected buffer other than the current one.
@@ -869,6 +980,10 @@ impl Editor {
 
     /// Removes a buffer. Windows showing it switch to another buffer.
     pub fn kill_buffer(&mut self, id: BufferId) {
+        if !self.buffers.contains_key(id) {
+            return;
+        }
+        self.lsp_detach(id);
         self.buffer_order.retain(|other| *other != id);
         let replacement = match self.buffer_order.first() {
             Some(first) => *first,

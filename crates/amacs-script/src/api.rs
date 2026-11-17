@@ -9,7 +9,7 @@
 
 use amacs_core::{
     Buffer, BufferId, Candidate, CmdError, CmdResult, CommandBody, Completion, Editor, FaceSpec,
-    Value, expand_path,
+    Formatter, ServerConfig, Value, expand_path,
 };
 use amacs_proto::parse_keys;
 
@@ -113,6 +113,25 @@ fn completion(args: &[Value], index: usize) -> CmdResult<Completion> {
     }
 }
 
+/// A list of strings, or a single string standing for a list of one.
+fn strings(args: &[Value], index: usize) -> CmdResult<Vec<String>> {
+    let expected = "a list of strings";
+    match &args[index] {
+        Value::List(items) => items
+            .iter()
+            .map(|item| {
+                item.as_name()
+                    .map(str::to_owned)
+                    .ok_or_else(|| wrong_type(index, expected, item))
+            })
+            .collect(),
+        other => other
+            .as_name()
+            .map(|name| vec![name.to_owned()])
+            .ok_or_else(|| wrong_type(index, expected, other)),
+    }
+}
+
 /// A list of two-element lists of names, such as palette entries.
 fn name_pairs(args: &[Value], index: usize) -> CmdResult<Vec<(String, String)>> {
     let expected = "a list of (name value) lists";
@@ -154,9 +173,10 @@ fn apply_face_attributes(spec: &mut FaceSpec, attributes: &[Value]) -> CmdResult
             Some("bold") => spec.bold = on,
             Some("italic") => spec.italic = on,
             Some("underline") => spec.underline = on,
+            Some("underline-color") => spec.underline_color = color()?,
             _ => {
                 return Err(CmdError::msg(format!(
-                    "unknown face attribute {:?}; use fg, bg, bold, italic or underline",
+                    "unknown face attribute {:?}; use fg, bg, bold, italic, underline or underline-color",
                     pair[0]
                 )));
             }
@@ -499,6 +519,71 @@ pub const API: &[ApiFn] = api! {
             apply_face_attributes(&mut spec, &args[1..])?;
             ed.faces_mut().set_face(&face, spec);
             Ok(Value::Void)
+        };
+
+    // Language servers, formatters and snippets
+
+    "lsp-server!" (2, Some(3)) "Say which program is the language server for some languages: a language name or a list of them, the command as a list of strings, and optionally the server's initialization options as a string of JSON." =>
+        |ed, args| {
+            let command = strings(args, 1)?;
+            let (program, rest) = command
+                .split_first()
+                .ok_or_else(|| CmdError::msg("the command needs a program"))?;
+            let options = match args.get(2) {
+                Some(Value::Str(json)) => serde_json::from_str(json)
+                    .map_err(|error| CmdError::msg(format!("the options are not JSON: {error}")))?,
+                Some(Value::Bool(false)) | None => serde_json::Value::Null,
+                Some(other) => return Err(wrong_type(2, "a string of JSON", other)),
+            };
+            ed.lsp_define_server(ServerConfig {
+                languages: strings(args, 0)?,
+                program: program.clone(),
+                args: rest.to_vec(),
+                options,
+            });
+            Ok(Value::Void)
+        };
+    "lsp-ensure" (0, Some(0)) "Attach the current buffer to the language server for its language, starting the server if need be. Does nothing if there is none." =>
+        |ed, _| {
+            ed.lsp_ensure()?;
+            Ok(Value::Void)
+        };
+    "lsp-busy?" (0, Some(0)) "Whether a language server is starting or has yet to answer something." =>
+        |ed, _| Ok(ed.lsp_busy().into());
+    "buffer-diagnostics" (0, Some(0)) "The diagnostics of the current buffer: lists of start, end, severity ('error, 'warning or 'note) and message." =>
+        |ed, _| Ok(ed.diagnostics_value());
+    "define-formatter" (3, Some(3)) "Define a formatter: its name, the program, and its arguments as a list of strings, in which \"{file}\" stands for the buffer's file name. The program reads the text on standard input and writes it formatted to standard output." =>
+        |ed, args| {
+            let formatter = Formatter {
+                program: string(args, 1)?.to_owned(),
+                args: strings(args, 2)?,
+            };
+            ed.define_formatter(name(args, 0)?, formatter);
+            Ok(Value::Void)
+        };
+    "format-buffer" (0, Some(0)) "Format the current buffer with the formatter its `formatter` option names. Returns whether the text changed." =>
+        |ed, _| Ok(ed.format_buffer()?.into());
+    "%define-snippet" (3, Some(3)) "Define a snippet: mode, name, and the template as a list." =>
+        |ed, args| {
+            let Value::List(elements) = &args[2] else {
+                return Err(wrong_type(2, "a list", &args[2]));
+            };
+            let (mode, snippet) = (name(args, 0)?.to_owned(), name(args, 1)?.to_owned());
+            ed.define_snippet(&mode, &snippet, elements.clone());
+            Ok(Value::Void)
+        };
+    "%expand-snippet-data" (1, Some(1)) "Expand a template, given as a list without procedures, at point." =>
+        |ed, args| {
+            let Value::List(elements) = &args[0] else {
+                return Err(wrong_type(0, "a list", &args[0]));
+            };
+            ed.expand_snippet_elements(elements.clone())?;
+            Ok(Value::Void)
+        };
+    "snippet-names" (0, Some(0)) "Names of the snippets that apply in the current buffer." =>
+        |ed, _| {
+            let names = ed.snippets_here();
+            Ok(Value::List(names.into_iter().map(|(name, _)| Value::from(name)).collect()))
         };
 
     // The editor itself

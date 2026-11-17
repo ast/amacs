@@ -150,6 +150,26 @@ impl Screen {
     }
 }
 
+/// The language server for tests, built from this crate's `fake-lsp`
+/// example. It is found beside the test program that is running.
+///
+/// `cargo test` builds it, but not when only some test targets are asked
+/// for with `--test`; then `cargo build -p amacs-testkit --examples` does.
+///
+/// # Panics
+/// If it has not been built.
+pub fn fake_lsp_path() -> std::path::PathBuf {
+    let test_program = std::env::current_exe().expect("the test program has a path");
+    // target/debug/deps/test-xyz -> target/debug/examples/fake-lsp
+    let path = test_program
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("test programs are two levels down")
+        .join("examples/fake-lsp");
+    assert!(path.exists(), "{} is not built", path.display());
+    path
+}
+
 /// An editor attached to a [`Screen`].
 pub struct Harness {
     pub editor: Editor,
@@ -174,17 +194,34 @@ impl Harness {
         harness
     }
 
-    fn redisplay(&mut self) {
-        // Wait for the matcher's worker threads, so that what a test sees
-        // does not depend on timing.
+    /// Waits until nothing is in flight: the matcher's worker threads are
+    /// done and every language server has answered. What a test sees then
+    /// does not depend on timing.
+    fn settle(&mut self) {
         let start = std::time::Instant::now();
+        let mut asked = false;
         loop {
             self.editor.poll(std::time::Instant::now());
-            if !self.editor.is_matching() || start.elapsed().as_secs() >= 5 {
+            let busy = self.editor.is_matching() || self.editor.lsp_busy();
+            if start.elapsed().as_secs() >= 10 {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            if busy {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            } else if asked {
+                break;
+            } else {
+                // The servers may still be about to say something of their
+                // own accord, such as diagnostics. An answer to a question
+                // asked now comes after all of that.
+                self.editor.lsp_barrier();
+                asked = true;
+            }
         }
+    }
+
+    fn redisplay(&mut self) {
+        self.settle();
         let ops = self.editor.redisplay();
         self.screen.apply(&ops);
     }
@@ -263,8 +300,14 @@ impl Harness {
     /// Advances the editor's clock, for things that happen after a delay.
     pub fn wait(&mut self, duration: std::time::Duration) -> &mut Self {
         self.editor.poll(std::time::Instant::now() + duration);
-        let ops = self.editor.redisplay();
-        self.screen.apply(&ops);
+        self.redisplay();
+        self
+    }
+
+    /// Lets everything in flight finish and draws the result, for after
+    /// something was done to the editor directly rather than with keys.
+    pub fn sync(&mut self) -> &mut Self {
+        self.redisplay();
         self
     }
 }

@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 amacs-core.workspace = true
 amacs-proto.workspace = true
+serde_json.workspace = true
 steel-core.workspace = true
 
 [dev-dependencies]

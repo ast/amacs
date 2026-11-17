@@ -32,6 +32,8 @@ pub struct FaceAttrs {
     pub italic: bool,
     pub underline: bool,
     pub inverse: bool,
+    /// Colour of the underline, if it differs from the foreground.
+    pub underline_color: Option<Color>,
 }
 
 /// `len` bytes of a [`DisplayLine`]'s text drawn in one face.

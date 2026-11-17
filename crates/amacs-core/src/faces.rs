@@ -26,7 +26,22 @@ pub const SHADOW: FaceId = FaceId(7);
 pub const ANNOTATION: FaceId = FaceId(8);
 pub const LINE_NUMBER: FaceId = FaceId(9);
 pub const LINE_NUMBER_CURRENT: FaceId = FaceId(10);
-const FIRST_SYNTAX: u32 = 11;
+/// The list of completions that pops up at point.
+pub const POPUP: FaceId = FaceId(11);
+pub const POPUP_SELECTED: FaceId = FaceId(12);
+pub const POPUP_ANNOTATION: FaceId = FaceId(13);
+/// How text with an error, a warning or a note is marked. These are laid
+/// over the face the text has anyway; see [`Faces::diagnostic`].
+pub const DIAGNOSTIC_ERROR: FaceId = FaceId(14);
+const FIRST_SYNTAX: u32 = 17;
+
+/// How serious a diagnostic is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Severity {
+    Error,
+    Warning,
+    Note,
+}
 
 /// The face that draws a kind of syntax.
 pub fn syntax(highlight: Highlight) -> FaceId {
@@ -62,6 +77,8 @@ pub struct FaceSpec {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    /// Colour of the underline, if not that of the text.
+    pub underline_color: Option<String>,
 }
 
 impl FaceSpec {
@@ -86,6 +103,12 @@ impl FaceSpec {
 
     fn underline(mut self) -> Self {
         self.underline = true;
+        self
+    }
+
+    fn underlined_in(mut self, color: &str) -> Self {
+        self.underline = true;
+        self.underline_color = Some(color.to_owned());
         self
     }
 }
@@ -116,6 +139,21 @@ fn built_in_faces() -> Vec<(String, FaceSpec)> {
         (
             "line-number-current",
             face("fg-line-number-active", "bg-line-number-active").bold(),
+        ),
+        ("popup", face("", "bg-popup")),
+        ("popup-selected", face("", "bg-completion").bold()),
+        ("popup-annotation", face("fg-dim", "bg-popup")),
+        (
+            "diagnostic-error",
+            face("", "").underlined_in("underline-err"),
+        ),
+        (
+            "diagnostic-warning",
+            face("", "").underlined_in("underline-warning"),
+        ),
+        (
+            "diagnostic-note",
+            face("", "").underlined_in("underline-note"),
         ),
     ];
     for highlight in Highlight::ALL {
@@ -303,13 +341,23 @@ impl Faces {
         None
     }
 
+    /// The face for text in face `base` that has a diagnostic on it: the
+    /// same, with the diagnostic's underline.
+    pub fn diagnostic(&self, base: FaceId, severity: Severity) -> FaceId {
+        let block = severity as u32 + 1;
+        FaceId(block * self.faces.len() as u32 + base.0)
+    }
+
     /// The face table for a frontend, indexed by [`FaceId`]. A face without
-    /// a colour of its own has that of the default face.
+    /// a colour of its own has that of the default face. After the faces
+    /// themselves come three copies of them, one for each severity of
+    /// diagnostic, with that diagnostic's face laid over each.
     pub fn table(&self) -> Vec<FaceAttrs> {
         let resolve = |name: &Option<String>| name.as_deref().and_then(|name| self.color(name));
         let default = &self.faces[0].1;
         let (fg, bg) = (resolve(&default.fg), resolve(&default.bg));
-        self.faces
+        let mut table: Vec<FaceAttrs> = self
+            .faces
             .iter()
             .map(|(_, spec)| FaceAttrs {
                 fg: resolve(&spec.fg).or(fg),
@@ -318,8 +366,26 @@ impl Faces {
                 italic: spec.italic,
                 underline: spec.underline,
                 inverse: false,
+                underline_color: resolve(&spec.underline_color),
             })
-            .collect()
+            .collect();
+        let count = table.len();
+        for severity in 0..3 {
+            let over = &self.faces[DIAGNOSTIC_ERROR.0 as usize + severity].1;
+            for index in 0..count {
+                let base = table[index];
+                table.push(FaceAttrs {
+                    fg: resolve(&over.fg).or(base.fg),
+                    bg: resolve(&over.bg).or(base.bg),
+                    bold: base.bold || over.bold,
+                    italic: base.italic || over.italic,
+                    underline: base.underline || over.underline,
+                    inverse: false,
+                    underline_color: resolve(&over.underline_color).or(base.underline_color),
+                });
+            }
+        }
+        table
     }
 }
 
@@ -332,6 +398,8 @@ mod tests {
         let faces = Faces::default();
         assert_eq!(faces.face_id("default"), Some(DEFAULT));
         assert_eq!(faces.face_id("shadow"), Some(SHADOW));
+        assert_eq!(faces.face_id("popup-annotation"), Some(POPUP_ANNOTATION));
+        assert_eq!(faces.face_id("diagnostic-error"), Some(DIAGNOSTIC_ERROR));
         assert_eq!(
             faces.face_id("line-number-current"),
             Some(LINE_NUMBER_CURRENT)
@@ -348,7 +416,10 @@ mod tests {
         for theme in names {
             faces.load_theme(&theme).unwrap();
             for (name, spec) in &faces.faces {
-                for color in [&spec.fg, &spec.bg].into_iter().flatten() {
+                for color in [&spec.fg, &spec.bg, &spec.underline_color]
+                    .into_iter()
+                    .flatten()
+                {
                     let unset = matches!(color.as_str(), "bg-prompt" | "bg-prose-code");
                     assert!(
                         faces.color(color).is_some() || unset,
@@ -378,6 +449,20 @@ mod tests {
         let after = faces.table()[comment].fg;
         assert_ne!(before, after);
         assert_eq!(after, faces.color("yellow-faint"));
+    }
+
+    #[test]
+    fn diagnostics_are_laid_over_any_face() {
+        let faces = Faces::default();
+        let table = faces.table();
+        let keyword = syntax(Highlight::Keyword);
+        let marked = faces.diagnostic(keyword, Severity::Warning);
+        let (plain, marked) = (table[keyword.0 as usize], table[marked.0 as usize]);
+        assert!(marked.underline && !plain.underline);
+        assert_eq!(marked.underline_color, faces.color("underline-warning"));
+        assert_eq!((marked.fg, marked.bold), (plain.fg, plain.bold));
+        let error = table[faces.diagnostic(DEFAULT, Severity::Error).0 as usize];
+        assert_eq!(error.underline_color, faces.color("underline-err"));
     }
 
     #[test]

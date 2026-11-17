@@ -1,18 +1,37 @@
 //! Translation of terminal events into editor input.
 
 use amacs_proto::{InputEvent, Key, KeyCode, Mods, NamedKey};
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crossterm::event::{Event, KeyCode as TermKey, KeyEvent, KeyEventKind, KeyModifiers};
+
+/// Whether the terminal reports keys with the kitty keyboard protocol. Set
+/// when the terminal is taken over.
+pub(crate) static ENHANCED_KEYS: AtomicBool = AtomicBool::new(false);
 
 pub fn translate(event: Event) -> Option<InputEvent> {
     match event {
         Event::Key(key) if key.kind != KeyEventKind::Release => {
-            translate_key(key).map(InputEvent::Key)
+            let legacy = !ENHANCED_KEYS.load(Ordering::Relaxed);
+            translate_key(key)
+                .map(|key| if legacy { legacy_key(key) } else { key })
+                .map(InputEvent::Key)
         }
         Event::Resize(cols, rows) => Some(InputEvent::Resize { cols, rows }),
         Event::Paste(text) => Some(InputEvent::Paste(
             text.replace("\r\n", "\n").replace('\r', "\n"),
         )),
         _ => None,
+    }
+}
+
+/// Without the kitty protocol, `C-/` and `C-_` both arrive as the control
+/// char 0x1F, which reads as `C-7`. Emacs users mean undo by it.
+fn legacy_key(key: Key) -> Key {
+    if key == Key::ctrl('7') {
+        Key::ctrl('_')
+    } else {
+        key
     }
 }
 

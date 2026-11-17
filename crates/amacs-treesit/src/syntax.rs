@@ -12,6 +12,9 @@ use crate::languages::{Grammar, Language};
 /// would hold up the editor for too long.
 pub const MAX_PARSE_BYTES: usize = 8 << 20;
 
+/// Texts up to this size are parsed afresh while they have syntax errors.
+const REPARSE_BYTES: usize = 256 << 10;
+
 /// The highlights of a range of text, one entry per byte.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Highlights {
@@ -132,9 +135,21 @@ impl Syntax {
             return;
         }
         let mut read = |byte: usize, _: Point| text.chunk_at_byte(byte);
+        let reused = self.tree.is_some();
         self.tree = self
             .parser
             .parse_with_options(&mut read, self.tree.as_ref(), None);
+        // Reusing a tree across edits can recover from a syntax error in
+        // another way than parsing afresh does, in some grammars. Where
+        // parsing afresh is cheap, text with errors gets that, so that the
+        // tree depends on the text alone.
+        let broken = self
+            .tree
+            .as_ref()
+            .is_some_and(|tree| tree.root_node().has_error());
+        if reused && broken && text.len_bytes() <= REPARSE_BYTES {
+            self.tree = self.parser.parse_with_options(&mut read, None, None);
+        }
     }
 
     /// The tree as of the last [`Syntax::update`].

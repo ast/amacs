@@ -39,6 +39,110 @@
 (add-hook! 'scheme-mode-hook (lambda () (enable-mode! 'paredit-mode)))
 (add-hook! 'emacs-lisp-mode-hook (lambda () (enable-mode! 'paredit-mode)))
 
+;;; Language servers
+;;;
+;;; A server is started for a project when the first of its files is opened
+;;; in a mode with `lsp-ensure` on its hook. The program comes from the
+;;; project's .envrc if there is one, as everything run for a file does.
+
+(lsp-server! '("c" "cpp")
+             '("clangd" "--fallback-style=llvm" "--header-insertion=never"
+               "--background-index"))
+(lsp-server! "rust" '("rust-analyzer")
+             "{\"check\": {\"command\": \"clippy\"}}")
+;; The nixpkgs expression powers package names, the options expression
+;; NixOS option names and their documentation.
+(lsp-server! "nix" '("nixd")
+             "{\"nixpkgs\": {\"expr\": \"import <nixpkgs> { }\"},
+               \"options\": {\"nixos\": {\"expr\": \"(import <nixpkgs/nixos> { }).options\"}}}")
+
+(for-each (lambda (hook) (add-hook! hook lsp-ensure))
+          '(c-mode-hook c++-mode-hook python-mode-hook rust-mode-hook
+            typescript-mode-hook tsx-mode-hook go-mode-hook nix-mode-hook
+            terraform-mode-hook))
+
+;;; Formatting on save
+
+(define-formatter 'clang-format "clang-format"
+  '("--style=llvm" "--assume-filename" "{file}"))
+
+(format-on-save! 'rust-mode 'rustfmt)
+(format-on-save! 'c-mode 'clang-format)
+(format-on-save! 'c++-mode 'clang-format)
+(format-on-save! 'go-mode 'goimports)
+(format-on-save! 'typescript-mode 'prettier)
+(format-on-save! 'tsx-mode 'prettier)
+(format-on-save! 'nix-mode 'nixfmt)
+(format-on-save! 'terraform-mode 'tofu-fmt)
+(format-on-save! 'cmake-mode 'cmake-format)
+(use-formatter! 'python-mode 'black)
+
+;;; Snippets
+;;;
+;;; M-+ completes a snippet name at point and M-* inserts one by name.
+
+(define (comment-start)
+  (let ((language (buffer-language)))
+    (cond
+      [(member language '("scheme" "elisp")) ";; "]
+      [(member language '("c" "cpp" "rust" "go" "javascript" "typescript" "tsx")) "// "]
+      [else "# "])))
+
+(define-snippets 'fundamental-mode
+  `((today ,(lambda () (format-current-time "%Y-%m-%d")))
+    (now ,(lambda () (format-current-time "%Y-%m-%d %H:%M")))))
+
+(define-snippets 'prog-mode
+  `((todo ,comment-start "TODO " q)
+    (fixme ,comment-start "FIXME " q)
+    (note ,comment-start "NOTE " q)))
+
+(define-snippets 'emacs-lisp-mode
+  '((lam "(lambda (" p ")" n> r> ")")
+    (let "(let ((" p "))" n> r> ")")
+    (defun "(defun " p " (" p ")" n> "\"" p "\"" n> r> ")")
+    (usepkg "(use-package " p n> ":straight nil" n> r> ")")
+    (when "(when " p n> r> ")")
+    (dolist "(dolist (" p " " p ")" n> r> ")")))
+
+(define-snippets 'scheme-mode
+  '((lam "(lambda (" p ")" n> r> ")")
+    (let "(let ((" p "))" n> r> ")")
+    (def "(define (" p ")" n> r> ")")
+    (defcmd "(define-command (" p ")" n> "\"" p "\"" n> r> ")")
+    (when "(when " p n> r> ")")))
+
+(define-snippets 'rust-mode
+  '((fn "fn " p "(" p ") {" n> r> n "}")
+    (pfn "pub fn " p "(" p ") -> " p " {" n> r> n "}")
+    (struct "#[derive(Debug, Clone)]" n "pub struct " p " {" n> r> n "}")
+    (enum "#[derive(Debug, Clone)]" n "pub enum " p " {" n> r> n "}")
+    (imp "impl " p " {" n> r> n "}")
+    (test "#[cfg(test)]" n "mod tests {" n> "use super::*;" n n> "#[test]" n>
+          "fn " p "() {" n> r> n> "}" n "}")
+    (match "match " p " {" n> r> n "}")
+    (derive "#[derive(" p ")]" q)))
+
+(define-snippets 'c-mode
+  '((inc "#include <" p ">" q)
+    (incl "#include \"" p "\"" q)
+    (guard "#ifndef " (s name) n "#define " (s name) n n r> n n
+           "#endif /* " (s name) " */")
+    (fori "for (size_t i = 0; i < " p "; i++) {" n> r> n "}")
+    (main "int main(int argc, char **argv) {" n> r> n> "return 0;" n "}")
+    (st "typedef struct {" n> r> n "} " p ";")))
+
+(define-snippets 'go-mode
+  '((fn "func " p "(" p ") " p " {" n> r> n "}")
+    (iferr "if err != nil {" n> r> n "}")
+    (test "func Test" p "(t *testing.T) {" n> r> n "}")))
+
+(define-snippets 'nix-mode
+  '((let "let" n> p n "in" n> r>)
+    (mkopt "mkOption {" n> "type = types." p ";" n> "default = " p ";" n>
+           "description = \"" p "\";" n "};")
+    (pkg "{ config, pkgs, ... }:" n n "{" n> r> n "}")))
+
 ;;; Commands
 
 (define-command (kill-region-or-backward-kill-word)
@@ -55,17 +159,9 @@
   "Show the full path of the current buffer's file."
   (message (or (buffer-file-name) "This buffer is not visiting a file")))
 
-;; The comment prefix to use for a one-line comment in the current buffer.
-(define (comment-prefix)
-  (let ((language (buffer-language)))
-    (cond
-      [(member language '("scheme" "elisp")) ";;; "]
-      [(member language '("c" "cpp" "rust" "go" "javascript" "typescript" "tsx")) "// "]
-      [else "# "])))
-
 (define-command (copyright-sm6wjm)
   "Insert a copyright line. With a prefix argument, use the full name."
-  (insert (comment-prefix)
+  (insert (comment-start)
           "Copyright (c) "
           (if (prefix-arg-given?) "Albin Stigo" "SM6WJM")
           " "
@@ -122,6 +218,12 @@
 (global-set-key "H-o" 'find-file)
 (global-set-key "H-y" 'toggle-theme)
 
+(global-set-key "C-x C-." 'xref-find-definitions)
+(global-set-key "C-x C-," 'xref-go-back)
+(global-set-key "M-n" 'next-error)
+(global-set-key "M-p" 'previous-error)
+(global-set-key "C-c f" 'list-diagnostics)
+
 ;; These are bound by default the way the Emacs configuration binds them:
 ;;   C-s      search-lines        (consult-line)
 ;;   C-c /    search-files        (consult-ripgrep)
@@ -133,9 +235,18 @@
 ;;   C-M-f, C-M-b, C-M-k, C-M-u, C-M-d, C-M-SPC  work on whole expressions
 ;; With paredit-mode: C-) and C-} slurp and barf, M-s splices, M-r raises,
 ;; M-( wraps, and DEL, C-d and C-k keep the brackets balanced.
+;; With a language server:
+;;   C-c C-r  lsp-rename            (eglot-rename)
+;;   C-c C-a  lsp-code-actions      (eglot-code-actions)
+;;   C-c C-s  lsp-workspace-symbols (consult-eglot-symbols)
+;;   C-c C-d  lsp-hover             M-g i  lsp-document-symbols
+;;   M-.  M-,  M-?  definitions, back, references
+;;   C-M-i    completion-at-point; completions also pop up as you type
+;;   C-c C-f  format-buffer         C-x s  save-some-buffers
 
 ;;; Not available yet. These wait for later milestones:
 ;;;   bookmarks, ibuffer, window resizing and windmove
 ;;;   scrolling without moving point (H-p, H-n)
 ;;;   rainbow delimiters, matching-bracket highlight
-;;;   LSP, formatters, snippets, git, the file manager
+;;;   the breadcrumb header line, the debugger, Copilot
+;;;   git, the file manager

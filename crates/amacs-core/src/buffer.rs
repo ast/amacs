@@ -8,6 +8,8 @@ use amacs_treesit::{Highlights, IndentParams, Language, Syntax};
 use slotmap::new_key_type;
 
 use crate::error::{CmdError, CmdResult};
+use crate::faces::Severity;
+use crate::lsp::{Document, TextChange, lsp_position};
 use crate::script::{FUNDAMENTAL_MODE, Value};
 
 new_key_type! {
@@ -27,6 +29,29 @@ pub enum LineNumbers {
     Relative,
 }
 
+/// Something a language server has to say about a stretch of text.
+#[derive(Debug, Clone)]
+pub struct Diagnostic {
+    start: MarkerId,
+    end: MarkerId,
+    pub severity: Severity,
+    pub message: String,
+    /// Who says so, such as `rustc`.
+    pub source: String,
+    /// The diagnostic as the server sent it, which is how it wants to be
+    /// told about it again.
+    pub raw: serde_json::Value,
+}
+
+/// A diagnostic to put on a buffer, with its range in chars.
+pub struct NewDiagnostic {
+    pub range: Range<usize>,
+    pub severity: Severity,
+    pub message: String,
+    pub source: String,
+    pub raw: serde_json::Value,
+}
+
 /// Text being edited, with the state that belongs to the text rather than to
 /// any window showing it.
 #[derive(Debug)]
@@ -36,6 +61,9 @@ pub struct Buffer {
     /// Modification time of `file` when it was last read or written, to
     /// notice changes made by other programs.
     pub disk_mtime: Option<SystemTime>,
+    /// The buffer was read from its file without being shown, so the hooks
+    /// that choose its mode have yet to run.
+    pub(crate) needs_file_hook: bool,
     /// Tokens of the clients waiting for this buffer to be finished.
     pub waiters: Vec<u64>,
     /// The text's tick when it was last auto-saved, if it has been.
@@ -52,6 +80,9 @@ pub struct Buffer {
     /// The language of the text, which decides highlighting and indentation.
     language: Option<&'static Language>,
     syntax: Option<Syntax>,
+    /// The buffer's link to a language server, if it has one.
+    pub(crate) document: Option<Document>,
+    diagnostics: Vec<Diagnostic>,
     pub major_mode: String,
     /// Buffer-local minor modes, in the order they were enabled.
     pub minor_modes: Vec<String>,
@@ -86,6 +117,7 @@ impl Buffer {
             name: name.into(),
             file: None,
             disk_mtime: None,
+            needs_file_hook: false,
             waiters: Vec::new(),
             auto_saved_tick: None,
             read_only: false,
@@ -95,6 +127,8 @@ impl Buffer {
             indent_tabs: false,
             language: None,
             syntax: None,
+            document: None,
+            diagnostics: Vec::new(),
             major_mode: FUNDAMENTAL_MODE.to_owned(),
             minor_modes: Vec::new(),
             locals: HashMap::new(),
@@ -189,10 +223,61 @@ impl Buffer {
             .indent_column(&self.text, line, self.indent_params())
     }
 
+    // Diagnostics
+
+    /// Replaces the buffer's diagnostics.
+    pub fn set_diagnostics(&mut self, diagnostics: Vec<NewDiagnostic>) {
+        for old in std::mem::take(&mut self.diagnostics) {
+            self.markers.remove(old.start);
+            self.markers.remove(old.end);
+        }
+        let len = self.text.len();
+        self.diagnostics = diagnostics
+            .into_iter()
+            .map(|new| Diagnostic {
+                start: self.markers.create(new.range.start.min(len), true),
+                end: self.markers.create(new.range.end.min(len), false),
+                severity: new.severity,
+                message: new.message,
+                source: new.source,
+                raw: new.raw,
+            })
+            .collect();
+    }
+
+    /// The diagnostics with where they are now, in the order they came.
+    pub fn diagnostics(&self) -> impl Iterator<Item = (Range<usize>, &Diagnostic)> {
+        self.diagnostics.iter().map(|diagnostic| {
+            let start = self.markers.get(diagnostic.start);
+            // Text deleted around a diagnostic can leave its end before
+            // its start.
+            let end = self.markers.get(diagnostic.end).max(start);
+            (start..end, diagnostic)
+        })
+    }
+
+    /// The diagnostics that cover `pos`, most serious first. One with no
+    /// extent covers the char at its position.
+    pub fn diagnostics_at(&self, pos: usize) -> Vec<&Diagnostic> {
+        let mut found: Vec<&Diagnostic> = self
+            .diagnostics()
+            .filter(|(range, _)| range.start <= pos && pos < range.end.max(range.start + 1))
+            .map(|(_, diagnostic)| diagnostic)
+            .collect();
+        found.sort_by_key(|diagnostic| diagnostic.severity);
+        found
+    }
+
     // Markers
 
     pub fn create_marker(&mut self, pos: usize) -> MarkerId {
         self.markers.create(pos.min(self.len()), false)
+    }
+
+    /// Creates a marker that, with `advances`, stays after text inserted
+    /// exactly at it.
+    pub fn create_marker_with(&mut self, pos: usize, advances: bool) -> MarkerId {
+        self.markers.create(pos.min(self.len()), advances)
     }
 
     pub fn remove_marker(&mut self, id: MarkerId) {
@@ -274,6 +359,10 @@ impl Buffer {
         if let Some(syntax) = &mut self.syntax {
             syntax.reset();
         }
+        if let Some(document) = &mut self.document {
+            document.resend = true;
+        }
+        self.set_diagnostics(Vec::new());
         self.undo = UndoTree::new();
         self.pending = None;
         self.mark_set = false;
@@ -291,14 +380,23 @@ impl Buffer {
         }
     }
 
+    fn parts(&mut self) -> Parts<'_> {
+        Parts {
+            text: &mut self.text,
+            markers: &mut self.markers,
+            syntax: &mut self.syntax,
+            document: &mut self.document,
+        }
+    }
+
     fn raw_insert(&mut self, pos: usize, s: &str) {
-        insert_into(&mut self.text, &mut self.markers, &mut self.syntax, pos, s);
+        self.parts().insert(pos, s);
         self.tick += 1;
     }
 
     fn raw_delete(&mut self, range: Range<usize>) -> String {
         self.tick += 1;
-        delete_from(&mut self.text, &mut self.markers, &mut self.syntax, range)
+        self.parts().delete(range)
     }
 
     // Undo
@@ -352,9 +450,14 @@ impl Buffer {
         };
         for edit in txn.edits.iter().rev() {
             let inserted = edit.inserted.chars().count();
-            let (text, markers, syntax) = (&mut self.text, &mut self.markers, &mut self.syntax);
-            delete_from(text, markers, syntax, edit.pos..edit.pos + inserted);
-            insert_into(text, markers, syntax, edit.pos, &edit.deleted);
+            let mut parts = Parts {
+                text: &mut self.text,
+                markers: &mut self.markers,
+                syntax: &mut self.syntax,
+                document: &mut self.document,
+            };
+            parts.delete(edit.pos..edit.pos + inserted);
+            parts.insert(edit.pos, &edit.deleted);
         }
         self.tick += 1;
         self.amalgamated = 0;
@@ -369,9 +472,14 @@ impl Buffer {
         };
         for edit in &txn.edits {
             let deleted = edit.deleted.chars().count();
-            let (text, markers, syntax) = (&mut self.text, &mut self.markers, &mut self.syntax);
-            delete_from(text, markers, syntax, edit.pos..edit.pos + deleted);
-            insert_into(text, markers, syntax, edit.pos, &edit.inserted);
+            let mut parts = Parts {
+                text: &mut self.text,
+                markers: &mut self.markers,
+                syntax: &mut self.syntax,
+                document: &mut self.document,
+            };
+            parts.delete(edit.pos..edit.pos + deleted);
+            parts.insert(edit.pos, &edit.inserted);
         }
         self.tick += 1;
         self.amalgamated = 0;
@@ -379,34 +487,52 @@ impl Buffer {
     }
 }
 
-/// Inserts text, keeping the markers and the syntax tree in step.
-fn insert_into(
-    text: &mut Text,
-    markers: &mut MarkerSet,
-    syntax: &mut Option<Syntax>,
-    pos: usize,
-    s: &str,
-) {
-    if let Some(syntax) = syntax {
-        syntax.before_insert(text, pos, s);
-    }
-    text.insert(pos, s);
-    markers.on_insert(pos, s.chars().count());
+/// The parts of a buffer that every change to its text touches. Borrowed
+/// apart from the rest, so that the undo history can be read meanwhile.
+struct Parts<'a> {
+    text: &'a mut Text,
+    markers: &'a mut MarkerSet,
+    syntax: &'a mut Option<Syntax>,
+    document: &'a mut Option<Document>,
 }
 
-/// Removes text, keeping the markers and the syntax tree in step.
-fn delete_from(
-    text: &mut Text,
-    markers: &mut MarkerSet,
-    syntax: &mut Option<Syntax>,
-    range: Range<usize>,
-) -> String {
-    if let Some(syntax) = syntax {
-        syntax.before_delete(text, range.clone());
+impl Parts<'_> {
+    /// Notes a change for the language server, as positions in the text
+    /// before the change.
+    fn note_change(&mut self, range: Range<usize>, inserted: &str) {
+        if let Some(document) = self.document.as_mut().filter(|document| document.open) {
+            document.changes.push(TextChange {
+                start: lsp_position(self.text, range.start, document.encoding),
+                end: lsp_position(self.text, range.end, document.encoding),
+                text: inserted.to_owned(),
+            });
+        }
     }
-    let deleted = text.remove(range.clone());
-    markers.on_delete(range);
-    deleted
+
+    fn insert(&mut self, pos: usize, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        self.note_change(pos..pos, s);
+        if let Some(syntax) = self.syntax {
+            syntax.before_insert(self.text, pos, s);
+        }
+        self.text.insert(pos, s);
+        self.markers.on_insert(pos, s.chars().count());
+    }
+
+    fn delete(&mut self, range: Range<usize>) -> String {
+        if range.is_empty() {
+            return String::new();
+        }
+        self.note_change(range.clone(), "");
+        if let Some(syntax) = self.syntax {
+            syntax.before_delete(self.text, range.clone());
+        }
+        let deleted = self.text.remove(range.clone());
+        self.markers.on_delete(range);
+        deleted
+    }
 }
 
 #[cfg(test)]

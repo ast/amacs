@@ -2,7 +2,7 @@
 
 mod edit;
 mod files;
-mod indent;
+pub(crate) mod indent;
 mod motion;
 mod search;
 mod sexp;
@@ -12,9 +12,9 @@ use crate::completion::Completion;
 use crate::editor::{CommandBody, Editor, GLOBAL_MAP, MINIBUFFER_MAP, Prefix};
 use crate::error::{CmdError, CmdResult};
 use crate::minibuffer;
+use crate::{complete, diagnostics, format, snippet};
 
 pub(crate) use edit::delete_backward_char;
-pub(crate) use indent::indent_line;
 
 macro_rules! commands {
     ($editor:expr; $( $name:literal => $run:path, $doc:literal; )*) => {
@@ -74,6 +74,32 @@ pub fn install(ed: &mut Editor) {
         "paredit-backward-slurp-sexp" => sexp::paredit_backward_slurp, "Take the expression before the enclosing list into it.";
         "paredit-backward-barf-sexp" => sexp::paredit_backward_barf, "Put the first expression of the enclosing list before it.";
 
+        "completion-at-point" => complete::completion_at_point, "Show ways to complete the word before point.";
+        "completion-next" => complete::completion_next, "Select the next completion.";
+        "completion-previous" => complete::completion_previous, "Select the previous completion.";
+        "completion-accept" => complete::completion_accept, "Insert the selected completion.";
+        "completion-quit" => complete::completion_quit, "Close the list of completions.";
+        "snippet-complete" => complete::snippet_complete, "Expand the snippet named before point, or show those it could be.";
+        "snippet-insert" => snippet_insert, "Choose a snippet and insert it.";
+        "snippet-next-field" => snippet::next_field, "Move to the next field of the snippet.";
+        "snippet-previous-field" => snippet::previous_field, "Move to the previous field of the snippet.";
+        "format-buffer" => format::format_buffer, "Format the buffer with its formatter.";
+        "next-error" => diagnostics::next_error, "Move to the next diagnostic.";
+        "previous-error" => diagnostics::previous_error, "Move to the previous diagnostic.";
+        "list-diagnostics" => diagnostics::list_diagnostics, "Choose one of the buffer's diagnostics and go to it.";
+        "xref-find-definitions" => Editor::xref_find_definitions, "Go to the definition of the symbol at point.";
+        "xref-find-references" => Editor::xref_find_references, "List the places that refer to the symbol at point.";
+        "xref-go-back" => Editor::xref_go_back, "Return to where the last jump started.";
+        "lsp" => Editor::lsp_ensure_command, "Start the language server for this buffer.";
+        "lsp-restart" => Editor::lsp_restart, "Stop this buffer's language server and start it again.";
+        "lsp-shutdown" => Editor::lsp_shutdown, "Stop this buffer's language server.";
+        "lsp-hover" => Editor::lsp_hover, "Show what the language server knows about the symbol at point.";
+        "lsp-rename" => Editor::lsp_rename, "Rename the symbol at point everywhere it is used.";
+        "lsp-code-actions" => Editor::lsp_code_actions, "Choose among the fixes and refactorings offered at point.";
+        "lsp-document-symbols" => Editor::lsp_document_symbols, "Go to a symbol of this buffer.";
+        "lsp-workspace-symbols" => Editor::lsp_workspace_symbols, "Find a symbol of the project by name.";
+        "direnv-reload" => direnv_reload, "Read the project environments from direnv again.";
+
         "forward-char" => motion::forward_char, "Move point right one character.";
         "backward-char" => motion::backward_char, "Move point left one character.";
         "next-line" => motion::next_line, "Move point down one line.";
@@ -92,6 +118,7 @@ pub fn install(ed: &mut Editor) {
 
         "find-file" => files::find_file, "Visit a file in its own buffer.";
         "save-buffer" => files::save_buffer, "Save the current buffer in its file.";
+        "save-some-buffers" => files::save_some_buffers, "Save every modified buffer that visits a file.";
         "write-file" => files::write_file, "Write the current buffer to a file and visit that file.";
         "switch-to-buffer" => search::switch_to_buffer, "Show another buffer, or a recent file, in the selected window.";
         "kill-buffer" => files::kill_buffer, "Kill a buffer.";
@@ -165,6 +192,25 @@ pub fn install(ed: &mut Editor) {
         ("C-M-d", "down-list"),
         ("C-M-<down>", "down-list"),
         ("C-g", "keyboard-quit"),
+        ("C-M-i", "completion-at-point"),
+        ("M-TAB", "completion-at-point"),
+        ("M-+", "snippet-complete"),
+        ("M-*", "snippet-insert"),
+        ("M-.", "xref-find-definitions"),
+        ("M-,", "xref-go-back"),
+        ("M-?", "xref-find-references"),
+        ("M-g n", "next-error"),
+        ("M-g M-n", "next-error"),
+        ("M-g p", "previous-error"),
+        ("M-g M-p", "previous-error"),
+        ("M-g i", "lsp-document-symbols"),
+        ("C-c C-r", "lsp-rename"),
+        ("C-c C-a", "lsp-code-actions"),
+        ("C-c C-s", "lsp-workspace-symbols"),
+        ("C-c C-d", "lsp-hover"),
+        ("C-c C-f", "format-buffer"),
+        ("C-c !", "list-diagnostics"),
+        ("C-x s", "save-some-buffers"),
         ("C-u", "universal-argument"),
         ("M-x", "execute-extended-command"),
         ("M-:", "eval-expression"),
@@ -275,10 +321,57 @@ pub fn install(ed: &mut Editor) {
         paredit.bind_str(keys, command);
     }
 
+    const POPUP: &[(&str, &str)] = &[
+        ("C-n", "completion-next"),
+        ("<down>", "completion-next"),
+        ("C-p", "completion-previous"),
+        ("<up>", "completion-previous"),
+        ("RET", "completion-accept"),
+        ("C-m", "completion-accept"),
+        ("TAB", "completion-accept"),
+        ("C-i", "completion-accept"),
+        ("C-g", "completion-quit"),
+    ];
+    let popup = ed.keymap_mut(complete::POPUP_MAP);
+    for (keys, command) in POPUP {
+        popup.bind_str(keys, command);
+    }
+    let fields = ed.keymap_mut(snippet::SNIPPET_MAP);
+    for keys in ["TAB", "C-i"] {
+        fields.bind_str(keys, "snippet-next-field");
+    }
+    fields.bind_str("S-TAB", "snippet-previous-field");
+
     let minibuffer = ed.keymap_mut(MINIBUFFER_MAP);
     for (keys, command) in MINIBUFFER {
         minibuffer.bind_str(keys, command);
     }
+}
+
+fn direnv_reload(ed: &mut Editor) -> CmdResult {
+    ed.reload_environments();
+    ed.message("Environments will be read again when next needed");
+    Ok(())
+}
+
+/// Inserts a snippet chosen by name.
+fn snippet_insert(ed: &mut Editor) -> CmdResult {
+    ed.forbid_in_minibuffer()?;
+    let candidates: Vec<crate::completion::Candidate> = ed
+        .snippets_here()
+        .into_iter()
+        .map(|(name, _)| crate::completion::Candidate::new(name))
+        .collect();
+    if candidates.is_empty() {
+        return Err(CmdError::msg("No snippets are defined for this mode"));
+    }
+    let completion = Completion::Items {
+        candidates,
+        category: "snippet".to_owned(),
+    };
+    ed.read_string("Snippet: ", "", completion, |ed, name| {
+        ed.expand_snippet_named(&name)
+    })
 }
 
 fn keyboard_quit(ed: &mut Editor) -> CmdResult {

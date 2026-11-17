@@ -228,3 +228,35 @@
   (check-equal? (option 'line-numbers) 'relative)
   (set-local! 'line-numbers #f)
   (check-error (lambda () (set-local! 'line-numbers 'sideways))))
+
+(deftest snippets-expand-from-scheme
+  (define-snippets 'fundamental-mode
+    `((test-sum "(+ " p " " (p "2") ")")
+      (test-stamp "at " ,(lambda () "noon") q "!")))
+  (check-true (if (member "test-sum" (snippet-names)) #t #f))
+  (expand-snippet "let " 'p " = " '(p "0") ";")
+  (check-equal? (buffer-string) "let  = 0;")
+  (check-equal? (point) 4)
+  (erase-buffer)
+  (check-error (lambda () (expand-snippet 'no-such-element))))
+
+(deftest formatters-are-defined-and-run
+  (define-formatter 'test-upper "tr" '("a-z" "A-Z"))
+  (check-error (lambda () (format-buffer)))
+  (set-local! 'formatter 'test-upper)
+  (insert "shout\n")
+  (check-true (format-buffer))
+  (check-equal? (buffer-string) "SHOUT\n")
+  (check-false (format-buffer))
+  (set-local! 'formatter 'no-such-formatter)
+  (check-error (lambda () (format-buffer))))
+
+(deftest language-servers-are-configured
+  (lsp-server! "test-language" '("test-server" "--stdio") "{\"a\": [1, 2]}")
+  (lsp-server! '("test-a" "test-b") '("test-server"))
+  (check-error (lambda () (lsp-server! "test-language" '())))
+  (check-error (lambda () (lsp-server! "test-language" '("x") "{not json")))
+  ;; No file, so nothing to attach, and nothing in flight.
+  (lsp-ensure)
+  (check-false (lsp-busy?))
+  (check-equal? (buffer-diagnostics) '()))

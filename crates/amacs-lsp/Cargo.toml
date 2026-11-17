@@ -1,0 +1,13 @@
+[package]
+name = "amacs-lsp"
+description = "Language Server Protocol transport and helpers for amacs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

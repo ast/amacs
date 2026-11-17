@@ -5,9 +5,10 @@ language. The goal is a daemon with thin terminal and Wayland frontends.
 
 ## Status
 
-Milestones M0 to M6 of the plan are done: the editor runs in a terminal or a
+Milestones M0 to M7 of the plan are done: the editor runs in a terminal or a
 Wayland window, alone or as a server with any number of clients, edits files
-with syntax highlighting and indentation, and is extended in Scheme.
+with syntax highlighting, indentation and language servers, and is extended
+in Scheme.
 
 Working now:
 
@@ -24,12 +25,14 @@ Working now:
 
 - Syntax highlighting and indentation for 22 languages, the Modus themes,
   line numbers, paired delimiters and paredit (below)
+- Language servers: diagnostics, completion, definitions and references,
+  rename, code actions, symbols; snippets; formatting on save; direnv (below)
 - A server (`amacs --daemon`) with `amacsclient` for frames, files and
   `--eval`; auto-save with recovery after a crash
 - A Wayland window (`amacs-gui`, or `amacsclient -c`) with shaped text,
   ligatures, colour emoji, fractional scaling and the system clipboard
 
-Not yet: LSP, the git interface, the file manager, and everything else in the
+Not yet: the git interface, the file manager, and everything else in the
 later milestones.
 
 ## Building and running
@@ -117,6 +120,93 @@ Two minor modes deal with delimiters:
 (enable-mode! 'auto-pair-mode)
 (add-hook! 'scheme-mode-hook (lambda () (enable-mode! 'paredit-mode)))
 ```
+
+## Language servers
+
+A buffer is attached to a language server when its mode's hook calls
+`lsp-ensure`. Servers are started once per project, which is the nearest
+directory above the file with a `.git` or `.projectile`, and shared by its
+buffers. Programs are set with `lsp-server!`; clangd, rust-analyzer, nixd,
+gopls, pyright, terraform-ls and typescript-language-server are known by
+default.
+
+```scheme
+(lsp-server! "rust" '("rust-analyzer") "{\"check\": {\"command\": \"clippy\"}}")
+(add-hook! 'rust-mode-hook lsp-ensure)
+```
+
+The third argument is the server's initialization options, as JSON.
+
+| Key | Does |
+|---|---|
+| `M-.`, `M-,`, `M-?` | Go to the definition; go back; list references |
+| `C-M-i` | Complete at point (completions also pop up as you type) |
+| `C-c C-r` | Rename the symbol at point in every file |
+| `C-c C-a` | Code actions at point or for the region |
+| `C-c C-d` | Describe the symbol at point |
+| `M-g i`, `C-c C-s` | Go to a symbol of the buffer; find one in the project |
+| `M-g n`, `M-g p`, `C-c !` | Next and previous diagnostic; list them |
+| `C-x s` | Save every modified file, as after a rename |
+
+Diagnostics are underlined in the text and counted in the mode line, which
+also names the server and what it is busy with. When point rests on a
+diagnostic its message is shown in the echo area, and otherwise the
+signature of the symbol there. `M-x lsp-restart` and `M-x lsp-shutdown` do
+what they say; what a server writes to its log and standard error is in the
+`*lsp-log*` buffer.
+
+A rename or code action that touches files that are not open opens them.
+Nothing is saved until you save.
+
+### Completion
+
+The list of completions appears shortly after two chars of a word are typed,
+or at once after a char the server asks for, such as `.`. Typing narrows it;
+`C-n` and `C-p` move in it; `RET` or `TAB` inserts the selection; `C-g`
+closes it. Without a language server the candidates are the words of the
+buffer. The names of the snippets for the mode are always among them. The
+options `completion-delay` (milliseconds; negative for never) and
+`completion-min-prefix` tune it.
+
+### Snippets
+
+```scheme
+(define-snippets 'rust-mode
+  `((fn "fn " p "(" p ") {" n> r> n "}")
+    (today ,(lambda () (format-current-time "%Y-%m-%d")))))
+```
+
+A template is strings and symbols: `p` is a field, `(p "text")` a field
+with a placeholder, `(s name)` a field repeated wherever the same name
+appears, `q` where point ends up, `n` a line break, `n>` a line break with
+indentation and `>` indentation. A procedure is called for its text.
+`M-+` expands the snippet named before point or lists those it could be,
+and `M-*` inserts one by name. `TAB` and `S-TAB` move between the fields.
+Snippets that language servers send with their completions work the same.
+
+### Formatting
+
+```scheme
+(format-on-save! 'rust-mode 'rustfmt)
+(define-formatter 'clang-format "clang-format" '("--style=llvm" "--assume-filename" "{file}"))
+```
+
+A formatter reads the text on standard input and writes it formatted to
+standard output. `C-c C-f` formats the buffer; `format-on-save!` also does
+so on every save of a mode's buffers. Only the lines that change are
+replaced, in one undo step. If the formatter fails the buffer is saved as it
+is and the echo area says why. black, clang-format, cmake-format, gofmt,
+goimports, nixfmt, prettier, rustfmt, shfmt and tofu-fmt are defined.
+
+### direnv
+
+Language servers and formatters are started with the environment that
+`direnv` gives for the file's directory, so a project's `.envrc` (for
+example `use flake`) decides which rust-analyzer or clang-format runs. The
+editor's own environment does not change. The first file of a project waits
+for direnv before its server starts, and the mode line says so. A blocked
+`.envrc` is reported; run `direnv allow` and then `M-x direnv-reload` and
+`M-x lsp-restart`. Set the option `use-direnv` to `#f` to do without.
 
 ## Themes
 
@@ -248,6 +338,8 @@ Useful flags: `--init FILE`, `-q` (no init file), `-l FILE`, `--eval EXPR`, and
 
 End-to-end tests drive the editor through a headless frontend
 (`crates/amacs-testkit`): they press keys and assert on the resulting screen.
+The language server tests run against a small server of their own
+(`crates/amacs-testkit/examples/fake-lsp.rs`) that speaks the real protocol.
 
 ## Layout
 
@@ -256,6 +348,7 @@ End-to-end tests drive the editor through a headless frontend
 | `amacs-text` | Rope, markers, undo tree |
 | `amacs-proto` | Keys, input events and draw operations shared with frontends |
 | `amacs-treesit` | Grammars, highlighting queries and indentation rules |
+| `amacs-lsp` | Language Server Protocol transport, positions and URIs |
 | `amacs-core` | Editor state, commands, keymaps, redisplay |
 | `amacs-tty` | Terminal frontend |
 | `amacs-server` | The `amacs` binary: standalone editor, server, batch mode |

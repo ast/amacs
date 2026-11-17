@@ -403,6 +403,35 @@ fn lisp_files_can_have_paredit_from_a_hook() {
 }
 
 #[test]
+fn snippets_and_formatters_are_set_up_from_scheme() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("notes.txt");
+    std::fs::write(&file, "").unwrap();
+    let mut h = Harness::new();
+    h.eval(
+        r#"(define-snippets 'text-mode
+             `((sig "-- " (p "name") n ,(lambda () (string-append "sent " "today")) q)))
+           (define-formatter 'upper "tr" '("a-z" "A-Z"))
+           (format-on-save! 'text-mode 'upper)"#,
+    );
+    h.eval(&format!("(find-file {:?})", file.display().to_string()));
+    assert_eq!(h.eval("(option 'formatter)"), "upper");
+
+    // The procedure in the template is called when the snippet expands.
+    h.type_text("sig").keys("M-+");
+    assert_eq!(h.text(), "-- name\nsent today");
+    h.type_text("me").keys("TAB").type_text("!");
+    assert_eq!(h.text(), "-- me\nsent today!");
+
+    h.keys("C-x C-s");
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "-- ME\nSENT TODAY!"
+    );
+    assert_eq!(h.text(), "-- ME\nSENT TODAY!");
+}
+
+#[test]
 fn minor_modes_show_in_the_mode_line() {
     let mut h = Harness::new();
     h.eval(r#"(define-minor-mode ruler-mode "Ruler" "Pretend to show a ruler.")"#);
@@ -480,7 +509,7 @@ fn the_scheme_test_suite_passes() {
         .load_file(std::path::Path::new(tests))
         .unwrap_or_else(|e| panic!("{}", e.report));
     let result = h.eval("(run-tests)");
-    assert_eq!(result, "(22)", "failures are listed after the pass count");
+    assert_eq!(result, "(25)", "failures are listed after the pass count");
     assert_eq!(h.mode_line(), " --  *scratch*   L1 C0  (Fundamental)");
 }
 

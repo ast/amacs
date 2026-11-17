@@ -61,6 +61,10 @@ pub(crate) struct MinibufferState {
     synced_tick: Option<u64>,
     /// The candidate last passed to `on_select`.
     previewed: Option<Candidate>,
+    /// Where each window started when the prompt opened. The candidate
+    /// list takes rows from the windows, which scrolls them to keep point
+    /// in view; they go back when the prompt closes.
+    window_starts: Vec<(WindowId, crate::buffer::BufferId, usize)>,
 }
 
 impl Editor {
@@ -80,6 +84,17 @@ impl Editor {
         }
         let completion = self.resolve_completion(completion);
         let session = Session::new(completion, self.working_directory(), self.waker.clone());
+        let window_starts = self
+            .frame()
+            .layout
+            .leaves()
+            .into_iter()
+            .map(|id| {
+                let window = &self.windows[id];
+                let start = self.buffers[window.buffer].marker(window.start);
+                (id, window.buffer, start)
+            })
+            .collect();
         let history = session
             .as_ref()
             .map_or("string", |session| session.category.as_str())
@@ -96,6 +111,7 @@ impl Editor {
             history_index: None,
             synced_tick: None,
             previewed: None,
+            window_starts,
         });
         self.prompt_frame = Some(self.current_frame);
         let window = self.minibuffer_window();
@@ -322,6 +338,14 @@ impl Editor {
     fn leave_minibuffer(&mut self) -> Option<MinibufferState> {
         let state = self.minibuffer.take()?;
         self.prompt_frame = None;
+        for (id, buffer, start) in &state.window_starts {
+            if let Some(window) = self.windows.get(*id)
+                && window.buffer == *buffer
+            {
+                let marker = window.start;
+                self.buffers[*buffer].set_marker(marker, *start);
+            }
+        }
         self.frame_mut().selected = if self.windows.contains_key(state.previous) {
             state.previous
         } else {

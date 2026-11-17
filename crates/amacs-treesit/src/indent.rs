@@ -305,7 +305,12 @@ impl Syntax {
     ) -> bool {
         let mut node = Some(leaf);
         while let Some(current) = node {
-            if current.is_error() || current.is_missing() {
+            // An error just before something the line is in usually holds
+            // the brackets that should have enclosed it.
+            let after_error = current
+                .prev_sibling()
+                .is_some_and(|sibling| sibling.is_error());
+            if current.is_error() || current.is_missing() || after_error {
                 return true;
             }
             node = current.parent();

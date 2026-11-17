@@ -43,6 +43,38 @@ fn save_checking_disk(ed: &mut Editor, path: PathBuf) -> CmdResult {
     ed.write_buffer(&path)
 }
 
+/// Saves every modified buffer that visits a file, without asking.
+pub fn save_some_buffers(ed: &mut Editor) -> CmdResult {
+    ed.forbid_in_minibuffer()?;
+    let modified: Vec<(BufferId, PathBuf)> = ed
+        .buffer_ids()
+        .filter_map(|id| {
+            let buffer = ed.buffer_by_id(id)?;
+            let file = buffer.file.clone()?;
+            buffer.is_modified().then_some((id, file))
+        })
+        .collect();
+    // Saving acts on the buffer of the selected window, so each takes a
+    // turn there.
+    let (window, original) = (ed.selected(), ed.window().buffer);
+    let mut result = Ok(());
+    for (id, file) in &modified {
+        ed.set_window_buffer(window, *id);
+        result = ed.write_buffer(file);
+        if result.is_err() {
+            break;
+        }
+    }
+    ed.set_window_buffer(window, original);
+    result?;
+    ed.message(match modified.len() {
+        0 => "(No files need saving)".to_owned(),
+        1 => "Saved 1 file".to_owned(),
+        count => format!("Saved {count} files"),
+    });
+    Ok(())
+}
+
 pub fn write_file(ed: &mut Editor) -> CmdResult {
     ed.forbid_in_minibuffer()?;
     let dir = default_directory(ed);

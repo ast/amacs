@@ -103,6 +103,7 @@ fn insert_paired(ed: &mut Editor, c: char) -> CmdResult<bool> {
 
 pub fn self_insert(ed: &mut Editor) -> CmdResult {
     let c = typed_char(ed)?;
+    ed.snippet_before_insert()?;
     if count(ed) == 1 && pairing(ed) && insert_paired(ed, c)? {
         return Ok(());
     }

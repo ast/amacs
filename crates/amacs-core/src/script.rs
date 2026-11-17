@@ -223,6 +223,51 @@ impl ScriptState {
                 doc: "Whether indentation is made of tabs rather than spaces.".to_owned(),
             },
         );
+        for (name, default, doc) in [
+            (
+                "use-direnv",
+                Value::Bool(true),
+                "Whether programs run for a file get the environment of its .envrc.",
+            ),
+            (
+                "direnv-program",
+                Value::str("direnv"),
+                "The direnv program.",
+            ),
+            (
+                "formatter",
+                Value::Bool(false),
+                "Name of the formatter for the buffer's text, or #f.",
+            ),
+            (
+                "format-on-save",
+                Value::Bool(false),
+                "Whether saving a buffer formats it first.",
+            ),
+            (
+                "lsp-idle-delay",
+                Value::Int(300),
+                "Milliseconds point rests before what is under it is described; negative for never.",
+            ),
+            (
+                "completion-delay",
+                Value::Int(100),
+                "Milliseconds of rest after typing before completions appear; negative for never.",
+            ),
+            (
+                "completion-min-prefix",
+                Value::Int(2),
+                "Chars of a word that must be typed before completions appear.",
+            ),
+        ] {
+            state.options.insert(
+                name.to_owned(),
+                OptionDef {
+                    default,
+                    doc: doc.to_owned(),
+                },
+            );
+        }
         state.options.insert(
             FONT_FAMILY.to_owned(),
             OptionDef {
@@ -528,6 +573,13 @@ impl Editor {
         let mut names: Vec<&str> = Vec::new();
         if self.in_minibuffer() {
             names.push(crate::editor::MINIBUFFER_MAP);
+        }
+        // What is in progress at point comes before any mode.
+        if self.completion_active() {
+            names.push(crate::complete::POPUP_MAP);
+        }
+        if self.snippet_active() {
+            names.push(crate::snippet::SNIPPET_MAP);
         }
         names.extend(buffer.minor_modes.iter().rev().map(String::as_str));
         names.extend(

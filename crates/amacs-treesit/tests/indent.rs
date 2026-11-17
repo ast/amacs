@@ -170,3 +170,18 @@ fn print_tree() {
     syntax.update(&text);
     println!("{}", syntax.sexp().unwrap());
 }
+
+#[test]
+fn a_syntax_error_before_a_block_does_not_lose_its_indentation() {
+    // The function has no name, so the brackets around it end up in an
+    // error node and the tree alone would say one level.
+    let source = "mod m {\n    fn (args) {\n\n    }\n}";
+    let text = Text::from(source);
+    let mut syntax = Syntax::new(language("rust").unwrap()).unwrap();
+    syntax.update(&text);
+    let params = IndentParams {
+        offset: 4,
+        tab_width: 8,
+    };
+    assert_eq!(syntax.indent_column(&text, 2, params), Some(8));
+}

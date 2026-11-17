@@ -227,10 +227,31 @@ impl Editor {
     /// Shows `path` in the selected window, reading it if no buffer visits it
     /// yet. A path that does not exist gives an empty buffer for a new file.
     pub fn find_file(&mut self, path: &Path) -> CmdResult {
+        let (id, note) = self.visit_file(path)?;
+        self.switch_to_buffer(id);
+        if let Some(note) = note {
+            self.message(note);
+        }
+        if self.buffer().file.is_some() && self.newer_auto_save().is_some() {
+            self.message(format!(
+                "{} has auto-save data; use M-x recover-this-file",
+                self.buffer().name
+            ));
+        }
+        Ok(())
+    }
+
+    /// The buffer that visits `path`, reading the file if no buffer does
+    /// yet, without showing it. Also returns something to tell the user
+    /// about a file just read, if there is anything. The hooks that choose
+    /// the buffer's mode run when it is first shown.
+    pub(crate) fn visit_file(
+        &mut self,
+        path: &Path,
+    ) -> CmdResult<(BufferId, Option<&'static str>)> {
         let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         if let Some(id) = self.buffer_visiting(&path) {
-            self.switch_to_buffer(id);
-            return Ok(());
+            return Ok((id, None));
         }
         if path.is_dir() {
             return Err(CmdError::msg(format!(
@@ -258,21 +279,16 @@ impl Editor {
         self.history.visit(&path);
         buffer.file = Some(path);
         buffer.read_only = lossy;
+        buffer.needs_file_hook = true;
         let id = self.add_buffer(buffer);
-        self.switch_to_buffer(id);
-        if lossy {
-            self.message("File is not valid UTF-8; opened read-only with replacement characters");
+        let note = if lossy {
+            Some("File is not valid UTF-8; opened read-only with replacement characters")
         } else if is_new {
-            self.message("(New file)");
-        }
-        if self.newer_auto_save().is_some() {
-            self.message(format!(
-                "{} has auto-save data; use M-x recover-this-file",
-                self.buffer().name
-            ));
-        }
-        self.run_hook("find-file-hook", Vec::new());
-        Ok(())
+            Some("(New file)")
+        } else {
+            None
+        };
+        Ok((id, note))
     }
 
     fn buffer_visiting(&self, path: &Path) -> Option<BufferId> {
@@ -282,6 +298,7 @@ impl Editor {
 
     /// Writes the current buffer to `path` and makes it the buffer's file.
     pub fn write_buffer(&mut self, path: &Path) -> CmdResult {
+        let unformatted = self.format_before_save();
         write_atomically(path, self.text()).map_err(|error| {
             CmdError::msg(format!("Cannot write {}: {error}", abbreviate_path(path)))
         })?;
@@ -313,7 +330,12 @@ impl Editor {
         buffer.file = Some(path);
         buffer.auto_saved_tick = None;
         buffer.mark_saved();
-        self.message(format!("Wrote {shown}"));
+        match unformatted {
+            Some(problem) => self.message(format!("Wrote {shown}, not formatted: {problem}")),
+            None => self.message(format!("Wrote {shown}")),
+        }
+        let id = self.window().buffer;
+        self.lsp_did_save(id);
         self.run_hook("after-save-hook", Vec::new());
         Ok(())
     }

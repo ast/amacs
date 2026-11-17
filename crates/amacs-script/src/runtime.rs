@@ -33,6 +33,10 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../../../runtime/core/themes.scm"),
     ),
     (
+        "core/tools.scm",
+        include_str!("../../../runtime/core/tools.scm"),
+    ),
+    (
         "modes/languages.scm",
         include_str!("../../../runtime/modes/languages.scm"),
     ),

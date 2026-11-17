@@ -16,6 +16,7 @@ use crossterm::event::{
 };
 use crossterm::style::{
     Attribute, Color as TermColor, Print, SetAttribute, SetBackgroundColor, SetForegroundColor,
+    SetUnderlineColor,
 };
 use crossterm::terminal::{
     self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, EnterAlternateScreen,
@@ -77,6 +78,7 @@ impl Tty {
         // The kitty keyboard protocol lets the terminal report keys such as
         // C-ö, C-. and C-S-p that have no legacy encoding.
         let enhanced_keys = terminal::supports_keyboard_enhancement().unwrap_or(false);
+        input::ENHANCED_KEYS.store(enhanced_keys, std::sync::atomic::Ordering::Relaxed);
 
         let previous_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
@@ -199,6 +201,9 @@ impl Tty {
         }
         if let Some(color) = attrs.bg {
             queue!(self.out, SetBackgroundColor(term_color(color)))?;
+        }
+        if let Some(color) = attrs.underline_color.filter(|_| attrs.underline) {
+            queue!(self.out, SetUnderlineColor(term_color(color)))?;
         }
         for (enabled, attribute) in [
             (attrs.bold, Attribute::Bold),

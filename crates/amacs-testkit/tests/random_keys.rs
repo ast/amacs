@@ -10,7 +10,8 @@ const KEYS: &[&str] = &[
     "a", "b", "SPC", "ö", "日", "TAB", "RET", "C-o", "C-d", "DEL", "C-k", "M-d", "M-DEL", "C-w",
     "M-w", "C-y", "M-y", "C-/", "C-/", "C-?", "C-SPC", "C-x C-x", "C-x h", "C-g", "C-f", "C-b",
     "C-n", "C-p", "C-a", "C-e", "M-f", "M-b", "M-}", "M-{", "M-<", "M->", "C-v", "M-v", "C-l",
-    "C-u", "C-u 3", "M-2", "C-x 2", "C-x 3", "C-x 0", "C-x 1", "C-x o", "C-u -",
+    "C-u", "C-u 3", "M-2", "C-x 2", "C-x 3", "C-x 0", "C-x 1", "C-x o", "C-u -", "C-M-i", "M-+",
+    "S-TAB",
 ];
 // ESC is deliberately absent: it would turn the first key of the next entry
 // into a Meta key and leave the rest as a `C-x` prefix, which reaches
@@ -26,8 +27,38 @@ const CODE_KEYS: &[&str] = &[
     "(", ")", "[", "]", "{", "}", "\"", "'", ";", "/", "#", "\\", "x", "SPC", "RET", "TAB", "DEL",
     "C-d", "C-k", "C-f", "C-b", "C-n", "C-p", "C-a", "C-e", "M-<", "M->", "C-M-f", "C-M-b",
     "C-M-k", "C-M-DEL", "C-M-u", "C-M-d", "C-M-n", "C-M-SPC", "C-w", "C-y", "C-/", "C-?", "M-(",
-    "M-s", "M-r", "C-)", "C-}", "C-(", "C-{", "C-x h", "C-M-\\", "C-g", "C-u",
+    "M-s", "M-r", "C-)", "C-}", "C-(", "C-{", "C-x h", "C-M-\\", "C-g", "C-u", "C-M-i", "M-+",
+    "S-TAB", "f", "n",
 ];
+
+/// Snippets whose names the keys can type, with fields, a mirrored field,
+/// placeholders and indentation.
+fn define_snippets(h: &mut Harness) {
+    use amacs_core::Value;
+    let sym = Value::sym;
+    h.editor.define_snippet(
+        "fundamental-mode",
+        "a",
+        vec![
+            Value::str("a("),
+            sym("p"),
+            Value::List(vec![sym("p"), Value::str("日b")]),
+            Value::str(") {"),
+            sym("n>"),
+            Value::List(vec![sym("s"), sym("x")]),
+            sym("r>"),
+            sym("n"),
+            Value::List(vec![sym("s"), sym("x")]),
+            Value::str("}"),
+            sym("q"),
+        ],
+    );
+    h.editor.define_snippet(
+        "fundamental-mode",
+        "fn",
+        vec![Value::str("fn "), sym("p"), Value::str("()")],
+    );
+}
 
 fn code_key_sequences() -> impl Strategy<Value = Vec<&'static str>> {
     prop::collection::vec(prop::sample::select(CODE_KEYS), 0..100)
@@ -52,6 +83,7 @@ proptest! {
         rows in 1u16..14,
     ) {
         let mut h = Harness::new(cols, rows);
+        define_snippets(&mut h);
         for key in &keys {
             h.keys(key);
             let (width, height) = h.screen.size();
@@ -108,6 +140,7 @@ proptest! {
             .unwrap();
         let mode = if paredit { "paredit-mode" } else { "auto-pair-mode" };
         h.editor.set_minor_mode(mode, false, true).unwrap();
+        define_snippets(&mut h);
         for key in &keys {
             h.keys(key);
             let (width, height) = h.screen.size();

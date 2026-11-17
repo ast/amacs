@@ -436,8 +436,9 @@ impl Renderer {
             };
             let (fg, bg) = self.colors(index);
             self.fill(span, bg);
-            if self.face(index).underline {
-                underlines.push((span, fg));
+            let face = self.face(index);
+            if face.underline {
+                underlines.push((span, face.underline_color.map_or(fg, pixel)));
             }
             col += cells;
         }
