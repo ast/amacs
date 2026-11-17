@@ -34,6 +34,10 @@ pub struct FaceAttrs {
     pub inverse: bool,
     /// Colour of the underline, if it differs from the foreground.
     pub underline_color: Option<Color>,
+    /// Colour of a thin line along the top and bottom of the text's row,
+    /// which sets a mode line apart from the text above it. Frontends that
+    /// cannot draw lines ignore it.
+    pub box_color: Option<Color>,
 }
 
 /// `len` bytes of a [`DisplayLine`]'s text drawn in one face.

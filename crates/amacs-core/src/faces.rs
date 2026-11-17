@@ -79,6 +79,8 @@ pub struct FaceSpec {
     pub underline: bool,
     /// Colour of the underline, if not that of the text.
     pub underline_color: Option<String>,
+    /// Colour of a thin line along the top and bottom of the row.
+    pub box_color: Option<String>,
 }
 
 impl FaceSpec {
@@ -106,6 +108,11 @@ impl FaceSpec {
         self
     }
 
+    fn boxed_in(mut self, color: &str) -> Self {
+        self.box_color = Some(color.to_owned());
+        self
+    }
+
     fn underlined_in(mut self, color: &str) -> Self {
         self.underline = true;
         self.underline_color = Some(color.to_owned());
@@ -121,11 +128,12 @@ fn built_in_faces() -> Vec<(String, FaceSpec)> {
         ("region", face("fg-region", "bg-region")),
         (
             "mode-line",
-            face("fg-mode-line-active", "bg-mode-line-active"),
+            face("fg-mode-line-active", "bg-mode-line-active").boxed_in("border-mode-line-active"),
         ),
         (
             "mode-line-inactive",
-            face("fg-mode-line-inactive", "bg-mode-line-inactive"),
+            face("fg-mode-line-inactive", "bg-mode-line-inactive")
+                .boxed_in("border-mode-line-inactive"),
         ),
         ("minibuffer-prompt", face("fg-prompt", "bg-prompt")),
         ("vertical-border", face("border", "")),
@@ -367,6 +375,7 @@ impl Faces {
                 underline: spec.underline,
                 inverse: false,
                 underline_color: resolve(&spec.underline_color),
+                box_color: resolve(&spec.box_color),
             })
             .collect();
         let count = table.len();
@@ -382,6 +391,7 @@ impl Faces {
                     underline: base.underline || over.underline,
                     inverse: false,
                     underline_color: resolve(&over.underline_color).or(base.underline_color),
+                    box_color: base.box_color,
                 });
             }
         }
@@ -416,7 +426,7 @@ mod tests {
         for theme in names {
             faces.load_theme(&theme).unwrap();
             for (name, spec) in &faces.faces {
-                for color in [&spec.fg, &spec.bg, &spec.underline_color]
+                for color in [&spec.fg, &spec.bg, &spec.underline_color, &spec.box_color]
                     .into_iter()
                     .flatten()
                 {

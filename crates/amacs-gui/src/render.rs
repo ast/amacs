@@ -425,6 +425,8 @@ impl Renderer {
         // as ligatures do, is not painted over.
         let mut col = 0;
         let mut underlines = Vec::new();
+        // Thin lines along the top and bottom of boxed text.
+        let mut boxes: Vec<(Rect, u32)> = Vec::new();
         for (text, face) in line.segments() {
             let index = face.0 as usize;
             let cells: u32 = text.chars().map(|c| c.width().unwrap_or(1) as u32).sum();
@@ -440,6 +442,9 @@ impl Renderer {
             if face.underline {
                 underlines.push((span, face.underline_color.map_or(fg, pixel)));
             }
+            if let Some(color) = face.box_color {
+                boxes.push((span, pixel(color)));
+            }
             col += cells;
         }
         let rest = Rect {
@@ -449,6 +454,9 @@ impl Renderer {
         };
         let (_, fill_bg) = self.colors(line.fill.0 as usize);
         self.fill(rest, fill_bg);
+        if let Some(color) = self.face(line.fill.0 as usize).box_color {
+            boxes.push((rest, pixel(color)));
+        }
 
         let glyphs = self.shape(line);
         let baseline = area.y as i32 + self.baseline;
@@ -456,6 +464,18 @@ impl Renderer {
             let (fg, _) = self.colors(glyph.face);
             let x = (area.x + glyph.col * self.cell_w) as i32 + glyph.dx;
             self.draw_glyph(glyph.cache_key, x, baseline + glyph.dy, fg, area);
+        }
+        let border = (self.cell_h / 20).max(1).min(area.h);
+        for (span, color) in boxes {
+            self.fill(Rect { h: border, ..span }, color);
+            self.fill(
+                Rect {
+                    y: span.y + span.h - border,
+                    h: border,
+                    ..span
+                },
+                color,
+            );
         }
         for (span, color) in underlines {
             let thickness = (self.cell_h / 14).max(1);

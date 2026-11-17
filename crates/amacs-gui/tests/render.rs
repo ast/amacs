@@ -168,8 +168,14 @@ fn faces_colour_the_mode_line_and_the_region() {
     let mut h = Harness::new("faces", 40, 6);
     h.type_text("select this");
     let mode_line_bg = Color::rgb(0xca, 0xb9, 0xb2);
+    // Apart from the thin lines along its top and bottom.
+    let filled = h
+        .cell(39, 4)
+        .iter()
+        .filter(|pixel| **pixel == rgb(mode_line_bg))
+        .count();
     assert!(
-        h.cell_is(39, 4, mode_line_bg),
+        filled * 10 >= h.cell(39, 4).len() * 8,
         "the mode line fills its row"
     );
     assert!(h.ink(2, 4) > 0.0, "and has text");
@@ -305,4 +311,24 @@ fn timing_of_a_keystroke_at_full_hd() {
         copy / rounds,
         scroll,
     );
+}
+
+#[test]
+fn the_mode_line_has_a_line_above_and_below() {
+    let h = Harness::new("mode-line-box", 60, 6);
+    let border = rgb(h.editor.faces().color("border-mode-line-active").unwrap());
+    let fill = rgb(h.editor.faces().color("bg-mode-line-active").unwrap());
+    let (cell_w, cell_h) = h.renderer.cell_size();
+    // The mode line is the row above the echo area. Look at a cell with no
+    // text on it, far to the right.
+    let cell = h.cell(58, 4);
+    let row = |y: u32| &cell[(y * cell_w) as usize..((y + 1) * cell_w) as usize];
+    assert!(row(0).iter().all(|pixel| *pixel == border), "top line");
+    assert!(
+        row(cell_h - 1).iter().all(|pixel| *pixel == border),
+        "bottom line"
+    );
+    assert!(row(cell_h / 2).iter().all(|pixel| *pixel == fill));
+    // The text rows have no such lines.
+    assert!(h.cell_is(58, 1, DEFAULT_BG));
 }

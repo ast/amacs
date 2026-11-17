@@ -174,9 +174,10 @@ fn apply_face_attributes(spec: &mut FaceSpec, attributes: &[Value]) -> CmdResult
             Some("italic") => spec.italic = on,
             Some("underline") => spec.underline = on,
             Some("underline-color") => spec.underline_color = color()?,
+            Some("box") => spec.box_color = color()?,
             _ => {
                 return Err(CmdError::msg(format!(
-                    "unknown face attribute {:?}; use fg, bg, bold, italic, underline or underline-color",
+                    "unknown face attribute {:?}; use fg, bg, bold, italic, underline, underline-color or box",
                     pair[0]
                 )));
             }
