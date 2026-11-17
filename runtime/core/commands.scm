@@ -11,7 +11,7 @@
   (syntax-rules ()
     [(_ (name) doc body ...)
      (begin
-       (define (name) body ...)
+       (define (name) doc body ...)
        (%define-command 'name doc name))]))
 
 ;; Runs a command by name, whether it is built in or defined in Scheme.

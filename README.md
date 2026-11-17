@@ -1,7 +1,11 @@
 # amacs
 
-An Emacs-like editor with a Rust core and Scheme (Steel) as its extension
-language. The goal is a daemon with thin terminal and Wayland frontends.
+An Emacs-like editor with a Rust core and Scheme as its extension language.
+The goal is a daemon with thin terminal and Wayland frontends.
+
+The Scheme is Steel by default. The editor is moving to a Scheme of its own,
+made to be changed while it runs; `AMACS_ENGINE=own` selects it. See
+`docs/scheme.md`.
 
 ## Status
 
@@ -423,9 +427,11 @@ The language server tests run against a small server of their own
 | `amacs-server` | The `amacs` binary: standalone editor, server, batch mode |
 | `amacs-client` | The `amacsclient` binary and the connection code |
 | `amacs-gui` | The `amacs-gui` binary: the Wayland window and its renderer |
-| `amacs-script` | Editor primitives for Scheme and the Steel backend |
+| `amacs-scheme` | The editor's own Scheme: reader, compiler, virtual machine |
+| `amacs-script` | Editor primitives for Scheme and the two engines that run it |
 | `amacs-testkit` | Headless frontend for tests |
 
 `runtime/` holds the part of the editor written in Scheme, and its tests.
 
-`docs/steel-spike.md` records the Steel feasibility results.
+`docs/scheme.md` describes the editor's own Scheme. `docs/steel-spike.md`
+records the Steel feasibility results.

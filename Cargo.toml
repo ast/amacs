@@ -16,6 +16,7 @@ amacs-client = { path = "crates/amacs-client" }
 amacs-core = { path = "crates/amacs-core" }
 amacs-lsp = { path = "crates/amacs-lsp" }
 amacs-tty = { path = "crates/amacs-tty" }
+amacs-scheme = { path = "crates/amacs-scheme" }
 amacs-script = { path = "crates/amacs-script" }
 amacs-testkit = { path = "crates/amacs-testkit" }
 
@@ -23,7 +24,9 @@ anyhow = "1"
 bitflags = { version = "2", features = ["serde"] }
 cosmic-text = "0.19"
 crossterm = "0.29"
+indexmap = "2"
 insta = "1"
+jiff = "0.2"
 listenfd = "1"
 nucleo = "0.5"
 png = "0.18"
@@ -32,6 +35,7 @@ proptest = "1"
 # Line breaks are LF only, as in Emacs: no default `unicode_lines`/`cr_lines`.
 ropey = { version = "1.6", default-features = false, features = ["simd"] }
 sd-notify = "0.5"
+stacker = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 signal-hook = "0.4"
@@ -55,4 +59,9 @@ debug = "line-tables-only"
 
 # Snapshot and property tests are much faster with optimised dependencies.
 [profile.dev.package."*"]
+opt-level = 2
+
+# The Scheme interpreter runs everything written in Scheme, also in a debug
+# build of the editor.
+[profile.dev.package.amacs-scheme]
 opt-level = 2

@@ -5,7 +5,54 @@ use std::rc::Rc;
 use amacs_core::{Editor, FrameId, ScriptCall, ScriptOutcome, ScriptTarget, Value};
 use amacs_proto::{DrawOp, InputEvent};
 
-use crate::steel::{EvalError, EvalResult, InterruptHandle, SteelHost};
+use crate::host::{Engine, EvalError, EvalResult, InterruptHandle};
+use crate::scheme::SchemeHost;
+use crate::steel::SteelHost;
+
+/// The engine that runs the Scheme code.
+enum Host {
+    Steel(Box<SteelHost>),
+    Own(Box<SchemeHost>),
+}
+
+impl Host {
+    fn interrupt_handle(&self) -> InterruptHandle {
+        match self {
+            Host::Steel(host) => host.interrupt_handle(),
+            Host::Own(host) => host.interrupt_handle(),
+        }
+    }
+
+    fn eval(
+        &mut self,
+        editor: &Rc<RefCell<Editor>>,
+        source: &str,
+        path: Option<&Path>,
+    ) -> EvalResult {
+        match self {
+            Host::Steel(host) => host.eval(editor, source, path),
+            Host::Own(host) => host.eval(editor, source, path),
+        }
+    }
+
+    fn eval_value(
+        &mut self,
+        editor: &Rc<RefCell<Editor>>,
+        source: &str,
+    ) -> Result<Value, EvalError> {
+        match self {
+            Host::Steel(host) => host.eval_value(editor, source),
+            Host::Own(host) => host.eval_value(editor, source),
+        }
+    }
+
+    fn run(&mut self, editor: &Rc<RefCell<Editor>>, call: &ScriptCall) -> ScriptOutcome {
+        match self {
+            Host::Steel(host) => host.run(editor, call),
+            Host::Own(host) => host.run(editor, call),
+        }
+    }
+}
 
 /// An editor together with the Scheme engine that extends it.
 ///
@@ -14,17 +61,25 @@ use crate::steel::{EvalError, EvalResult, InterruptHandle, SteelHost};
 /// event, when nothing holds a borrow of the editor.
 pub struct Session {
     editor: Rc<RefCell<Editor>>,
-    host: SteelHost,
+    host: Host,
 }
 
 impl Session {
     /// Creates an editor with a frame of the given size and loads the Scheme
-    /// runtime. Fails only if the runtime itself is broken.
+    /// runtime, on the engine that the environment names. Fails only if
+    /// the runtime itself is broken.
     pub fn new(cols: u16, rows: u16) -> Result<Self, EvalError> {
+        Self::with_engine(cols, rows, Engine::from_env())
+    }
+
+    pub fn with_engine(cols: u16, rows: u16, engine: Engine) -> Result<Self, EvalError> {
         let mut editor = Editor::new(cols, rows);
         editor.attach_script_host();
         let editor = Rc::new(RefCell::new(editor));
-        let host = SteelHost::new(&editor)?;
+        let host = match engine {
+            Engine::Steel => Host::Steel(Box::new(SteelHost::new(&editor)?)),
+            Engine::Own => Host::Own(Box::new(SchemeHost::new(&editor)?)),
+        };
         let mut session = Self { editor, host };
         session.pump();
         Ok(session)

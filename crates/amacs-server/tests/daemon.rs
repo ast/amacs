@@ -208,7 +208,11 @@ fn evaluates_scheme_for_programs() {
     );
 
     let error = client.eval("(car 1)").unwrap_err();
-    assert!(error.contains("car expected a list or pair"), "{error}");
+    // The wording of either Scheme engine, for as long as there are two.
+    assert!(
+        error.contains("car expected a list or pair") || error.contains("car: expected a pair"),
+        "{error}"
+    );
     assert_eq!(
         client.eval("(+ 2 2)").unwrap(),
         "4",

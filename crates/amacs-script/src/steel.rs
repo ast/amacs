@@ -13,30 +13,8 @@ use steel::steel_vm::engine::Engine;
 use steel::{SteelErr, SteelVal};
 
 use crate::api::{API, ApiFn};
+use crate::host::{CurrentEditor, EvalError, EvalResult, InterruptHandle, current_editor};
 use crate::runtime;
-
-thread_local! {
-    /// The editor that primitives act on while Scheme code runs on this thread.
-    static CURRENT: RefCell<Option<Rc<RefCell<Editor>>>> = const { RefCell::new(None) };
-}
-
-/// Makes `editor` the target of primitives until the guard is dropped.
-struct CurrentEditor {
-    previous: Option<Rc<RefCell<Editor>>>,
-}
-
-impl CurrentEditor {
-    fn enter(editor: &Rc<RefCell<Editor>>) -> Self {
-        let previous = CURRENT.with(|current| current.replace(Some(editor.clone())));
-        Self { previous }
-    }
-}
-
-impl Drop for CurrentEditor {
-    fn drop(&mut self) {
-        CURRENT.with(|current| current.replace(self.previous.take()));
-    }
-}
 
 fn error(message: impl Into<String>) -> SteelErr {
     SteelErr::new(ErrorKind::Generic, message.into())
@@ -109,8 +87,7 @@ fn primitive(api: &'static ApiFn) -> SteelVal {
             ));
         }
         let args: Vec<Value> = args.iter().map(from_steel).collect::<Result<_, _>>()?;
-        let editor = CURRENT
-            .with(|current| current.borrow().clone())
+        let editor = current_editor()
             .ok_or_else(|| error(format!("{}: no editor is attached", api.name)))?;
         let mut editor = editor
             .try_borrow_mut()
@@ -121,39 +98,10 @@ fn primitive(api: &'static ApiFn) -> SteelVal {
     }))
 }
 
-/// Lets another thread stop Scheme code that is running, for `C-g`.
-#[derive(Clone)]
-pub struct InterruptHandle {
-    running: Arc<AtomicBool>,
-    controller: ThreadStateController,
-}
-
-impl InterruptHandle {
-    /// Interrupts the running Scheme code. Does nothing, and returns false,
-    /// if none is running.
-    pub fn interrupt(&self) -> bool {
-        let running = self.running.load(Ordering::SeqCst);
-        if running {
-            self.controller.interrupt();
-        }
-        running
-    }
-}
-
-/// What evaluating Scheme code produced.
-pub type EvalResult = Result<String, EvalError>;
-
-#[derive(Debug, Clone)]
-pub struct EvalError {
-    /// One line.
-    pub summary: String,
-    /// The full report with the source location.
-    pub report: String,
-}
-
 pub struct SteelHost {
     engine: Engine,
-    interrupt: InterruptHandle,
+    running: Arc<AtomicBool>,
+    controller: ThreadStateController,
 }
 
 impl SteelHost {
@@ -165,12 +113,13 @@ impl SteelHost {
         for api in API {
             engine.register_value(api.name, primitive(api));
         }
-        let interrupt = InterruptHandle {
-            running: Arc::new(AtomicBool::new(false)),
-            controller: engine.get_thread_state_controller(),
+        let controller = engine.get_thread_state_controller();
+        let mut host = Self {
+            engine,
+            running: Arc::default(),
+            controller,
         };
-        let mut host = Self { engine, interrupt };
-        for (name, source) in runtime::sources() {
+        for (name, source) in runtime::sources(crate::host::Engine::Steel) {
             // The engine wants a path that exists, and embedded files have
             // none, so the file name goes into the error instead.
             host.eval(editor, &source, None)
@@ -183,7 +132,8 @@ impl SteelHost {
     }
 
     pub fn interrupt_handle(&self) -> InterruptHandle {
-        self.interrupt.clone()
+        let controller = self.controller.clone();
+        InterruptHandle::new(self.running.clone(), move || controller.interrupt())
     }
 
     /// Runs `body` with the engine marked as running and interruptible.
@@ -195,11 +145,11 @@ impl SteelHost {
         let _current = CurrentEditor::enter(editor);
         // An interrupt that arrived just after the previous run ended must
         // not stop this one.
-        self.interrupt.controller.resume();
-        self.interrupt.running.store(true, Ordering::SeqCst);
+        self.controller.resume();
+        self.running.store(true, Ordering::SeqCst);
         let result = body(&mut self.engine);
-        self.interrupt.running.store(false, Ordering::SeqCst);
-        self.interrupt.controller.resume();
+        self.running.store(false, Ordering::SeqCst);
+        self.controller.resume();
         result.map_err(|error| {
             let summary = error.to_string();
             let report = self
