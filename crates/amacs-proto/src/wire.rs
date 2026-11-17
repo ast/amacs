@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{DrawOp, InputEvent};
 
 /// Changes whenever a message changes shape. Client and server must agree.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Larger messages are refused, so that a corrupt length cannot make the
 /// reader allocate without bound.
@@ -52,12 +52,21 @@ pub enum FrameRequest {
     New { cols: u16, rows: u16 },
     /// Open a frame for the client only if no client has one.
     NewIfNone { cols: u16, rows: u16 },
+    /// Open a frame that no person looks at, for a program that drives the
+    /// editor and reads what is drawn. It does not count as a frame when
+    /// others ask whether there is one, and does not become the frame that
+    /// clients without one act in.
+    Headless { cols: u16, rows: u16 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMsg {
     /// Always the first message.
     Hello { version: u32 },
+    /// Ask to be told when everything sent before this has been handled
+    /// and what it changed on the client's frame has been sent. Answered
+    /// with [`ServerMsg::Synced`], after the draw.
+    Sync,
     /// Evaluate Scheme source. Answered with [`ServerMsg::EvalResult`].
     Eval { source: String },
     /// Visit files. Answered with [`ServerMsg::Attached`] if the client is to
@@ -93,6 +102,8 @@ pub enum ServerMsg {
         /// The error taken apart, for programs.
         failure: Option<EvalFailure>,
     },
+    /// The answer to [`ClientMsg::Sync`].
+    Synced,
     /// The client is done and should exit with this status.
     Exit {
         message: Option<String>,

@@ -22,7 +22,8 @@ Defines a test, which `run-tests` runs in a new, empty buffer.")
 (define (check-equal? actual expected)
   "Fails the running test unless the two values are equal?."
   (unless (equal? actual expected)
-    (error "check-equal? failed: got" actual "but expected" expected)))
+    (error (string-append "check-equal? failed: got " (write->string actual)
+                          " but expected " (write->string expected)))))
 
 (define (check-true value)
   "Fails the running test if the value is #f."

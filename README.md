@@ -428,9 +428,11 @@ The language server tests run against a small server of their own
 | `amacs-gui` | The `amacs-gui` binary: the Wayland window and its renderer |
 | `amacs-scheme` | The editor's own Scheme: reader, compiler, virtual machine |
 | `amacs-script` | Editor primitives for Scheme, and the session that runs the two together |
+| `amacs-mcp` | The `amacs-mcp` binary: a Model Context Protocol server for language models |
 | `amacs-testkit` | Headless frontend for tests |
 
 `runtime/` holds the part of the editor written in Scheme, and its tests.
 
-`docs/scheme.md` describes the editor's own Scheme, and `docs/extending.md`
-how to extend the editor with it.
+`docs/scheme.md` describes the editor's own Scheme, `docs/extending.md` how
+to extend the editor with it, and `docs/ai.md` how language models use,
+inspect and change the running editor.

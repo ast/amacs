@@ -30,6 +30,7 @@ const FILES: &[(&str, &str)] = &[
     file!("lib/menu.scm"),
     file!("lib/git.scm"),
     file!("core/test.scm"),
+    file!("core/debug.scm"),
 ];
 
 /// Name and source of each runtime file, in load order.

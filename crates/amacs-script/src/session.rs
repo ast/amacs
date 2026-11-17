@@ -92,6 +92,7 @@ impl Session {
             args: Vec::new(),
             command: None,
             echo_result: false,
+            frame: None,
         };
         self.editor
             .borrow_mut()
@@ -126,6 +127,7 @@ impl Session {
             args: Vec::new(),
             command: None,
             echo_result: false,
+            frame: None,
         };
         self.editor
             .borrow_mut()
@@ -159,6 +161,7 @@ impl Session {
             args: Vec::new(),
             command: None,
             echo_result: false,
+            frame: None,
         };
         self.editor.borrow_mut().begin_script();
         let result = self.host.eval(&self.editor, source, path);

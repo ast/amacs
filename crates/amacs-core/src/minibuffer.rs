@@ -271,7 +271,7 @@ impl Editor {
     /// Narrows the candidates to the current input if it has changed, takes
     /// in results from the matcher, and previews the selection.
     pub(crate) fn sync_minibuffer(&mut self, now: Instant) {
-        let buffer = self.minibuffer_buffer;
+        let buffer = self.frame().minibuffer_buffer;
         let tick = self.buffers[buffer].tick();
         let input = self.buffers[buffer].text().to_string();
         let Some(state) = &mut self.minibuffer else {

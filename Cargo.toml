@@ -15,6 +15,8 @@ amacs-proto = { path = "crates/amacs-proto" }
 amacs-client = { path = "crates/amacs-client" }
 amacs-core = { path = "crates/amacs-core" }
 amacs-lsp = { path = "crates/amacs-lsp" }
+amacs-gui = { path = "crates/amacs-gui" }
+amacs-mcp = { path = "crates/amacs-mcp" }
 amacs-tty = { path = "crates/amacs-tty" }
 amacs-scheme = { path = "crates/amacs-scheme" }
 amacs-script = { path = "crates/amacs-script" }

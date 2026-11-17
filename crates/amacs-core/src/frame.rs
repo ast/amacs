@@ -6,8 +6,8 @@
 use amacs_proto::{DrawOp, InputEvent};
 use slotmap::new_key_type;
 
-use crate::buffer::BufferId;
-use crate::editor::Editor;
+use crate::buffer::{Buffer, BufferId};
+use crate::editor::{Editor, InputState};
 use crate::error::{CmdError, CmdResult};
 use crate::redisplay::RedisplayState;
 use crate::window::{Layout, WindowId};
@@ -29,6 +29,10 @@ pub(crate) struct Frame {
     /// Lines shown under the echo area until the next key, such as the keys
     /// that can follow a prefix.
     pub hint: Vec<String>,
+    /// The buffer that the minibuffer window shows.
+    pub minibuffer_buffer: BufferId,
+    /// The input in progress here, while another frame is the current one.
+    pub input: InputState,
 }
 
 impl Editor {
@@ -50,8 +54,12 @@ impl Editor {
 
     pub(crate) fn new_frame(&mut self, buffer: BufferId, cols: u16, rows: u16) -> FrameId {
         let selected = self.make_window(buffer);
-        let minibuffer_window = self.make_window(self.minibuffer_buffer);
+        // Not in the list of buffers: nobody switches to it.
+        let minibuffer_buffer = self.buffers.insert(Buffer::new(" *Minibuf*"));
+        let minibuffer_window = self.make_window(minibuffer_buffer);
         self.frames.insert(Frame {
+            minibuffer_buffer,
+            input: InputState::default(),
             layout: Layout::Leaf(selected),
             selected,
             minibuffer_window,
@@ -63,6 +71,10 @@ impl Editor {
     }
 
     /// The frame that commands act on: the one that last received input.
+    pub fn has_frame(&self, id: FrameId) -> bool {
+        self.frames.contains_key(id)
+    }
+
     pub fn current_frame(&self) -> FrameId {
         self.current_frame
     }
@@ -86,14 +98,17 @@ impl Editor {
         self.new_frame(buffer, cols, rows)
     }
 
-    /// Makes a frame current. A prompt or key sequence in progress on
-    /// another frame is cancelled, since its user has gone elsewhere.
+    /// Makes a frame current. A prompt or key sequence in progress stays
+    /// with the frame it is in, and is there again when that frame is.
     pub fn select_frame(&mut self, id: FrameId) {
         if id == self.current_frame || !self.frames.contains_key(id) {
             return;
         }
-        self.cancel_input();
+        let input = self.stash_input();
+        self.frame_mut().input = input;
         self.current_frame = id;
+        let input = std::mem::take(&mut self.frame_mut().input);
+        self.restore_input(input);
     }
 
     /// Removes a frame and its windows. The base frame cannot be removed.
@@ -104,20 +119,27 @@ impl Editor {
         if !self.frames.contains_key(id) {
             return Ok(());
         }
-        if id == self.current_frame {
-            self.cancel_input();
+        // What was being asked in the frame is given up, there.
+        let back = self.current_frame;
+        self.select_frame(id);
+        self.cancel_input();
+        let next = if back == id {
             // Prefer another frame that someone is looking at.
-            self.current_frame = self
-                .frames
+            self.frames
                 .keys()
                 .find(|other| *other != id && *other != self.base_frame)
-                .unwrap_or(self.base_frame);
-        }
+                .unwrap_or(self.base_frame)
+        } else {
+            back
+        };
+        self.select_frame(next);
         let frame = self.frames.remove(id).expect("the frame exists");
+
         for window in frame.layout.leaves() {
             self.remove_window(window);
         }
         self.remove_window(frame.minibuffer_window);
+        self.buffers.remove(frame.minibuffer_buffer);
         Ok(())
     }
 
@@ -136,9 +158,10 @@ impl Editor {
         }
         // Drawing reads the same state that commands do, so the frame is
         // made current for the duration.
-        let current = std::mem::replace(&mut self.current_frame, frame);
+        let current = self.current_frame;
+        self.select_frame(frame);
         let ops = self.redisplay();
-        self.current_frame = current;
+        self.select_frame(current);
         ops
     }
 }

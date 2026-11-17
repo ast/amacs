@@ -29,6 +29,19 @@ use crate::snippet::ActiveSnippet;
 use crate::undo_view::UndoView;
 use crate::window::{Rect, Window, WindowId};
 
+/// The input in progress in a frame that is not the current one.
+#[derive(Default)]
+pub(crate) struct InputState {
+    pending_keys: Vec<Key>,
+    esc_pending: bool,
+    prefix_arg: Option<Prefix>,
+    minibuffer: Option<MinibufferState>,
+    minibuffer_hint: Option<String>,
+    key_prompt: Option<KeyPrompt>,
+    labels: Option<Labels>,
+    key_hint_due: Option<Instant>,
+}
+
 /// What running a command does.
 #[derive(Clone)]
 pub enum CommandBody {
@@ -132,8 +145,6 @@ pub struct Editor {
     pub(crate) frames: SlotMap<FrameId, Frame>,
     pub(crate) current_frame: FrameId,
     pub(crate) base_frame: FrameId,
-    /// The buffer that every frame's minibuffer window shows.
-    pub(crate) minibuffer_buffer: BufferId,
     /// The frame whose echo area shows the active prompt, if there is one.
     pub(crate) prompt_frame: Option<FrameId>,
     pub(crate) minibuffer: Option<MinibufferState>,
@@ -207,7 +218,6 @@ impl Editor {
     pub fn new(cols: u16, rows: u16) -> Self {
         let mut buffers = SlotMap::with_key();
         let scratch = buffers.insert(Buffer::new(SCRATCH));
-        let minibuffer = buffers.insert(Buffer::new(" *Minibuf*"));
 
         let mut editor = Self {
             buffers,
@@ -216,7 +226,6 @@ impl Editor {
             frames: SlotMap::with_key(),
             current_frame: FrameId::default(),
             base_frame: FrameId::default(),
-            minibuffer_buffer: minibuffer,
             prompt_frame: None,
             minibuffer: None,
             minibuffer_hint: None,
@@ -338,6 +347,7 @@ impl Editor {
                 args: vec![Value::sym(name)],
                 command: Some(name.to_owned()),
                 echo_result: false,
+                frame: None,
             });
             self.report(queued);
             return;
@@ -351,6 +361,7 @@ impl Editor {
                     args: Vec::new(),
                     command: Some(name.to_owned()),
                     echo_result: false,
+                    frame: None,
                 });
                 self.report(queued);
                 return;
@@ -685,6 +696,36 @@ impl Editor {
         let result = body(self);
         self.finish_command(buffer, tick, true);
         self.report(result);
+    }
+
+    /// Takes out the input that is in progress in the current frame: a key
+    /// sequence, a prefix argument, a prompt. Each frame has its own, and
+    /// the editor's fields hold that of the current frame.
+    pub(crate) fn stash_input(&mut self) -> InputState {
+        InputState {
+            pending_keys: std::mem::take(&mut self.pending_keys),
+            esc_pending: std::mem::take(&mut self.esc_pending),
+            prefix_arg: self.prefix_arg.take(),
+            minibuffer: self.minibuffer.take(),
+            minibuffer_hint: self.minibuffer_hint.take(),
+            key_prompt: self.key_prompt.take(),
+            labels: self.labels.take(),
+            key_hint_due: self.key_hint_due.take(),
+        }
+    }
+
+    /// Puts back input that was in progress in the frame that is now current.
+    pub(crate) fn restore_input(&mut self, input: InputState) {
+        self.pending_keys = input.pending_keys;
+        self.esc_pending = input.esc_pending;
+        self.prefix_arg = input.prefix_arg;
+        self.minibuffer = input.minibuffer;
+        self.minibuffer_hint = input.minibuffer_hint;
+        self.key_prompt = input.key_prompt;
+        self.labels = input.labels;
+        self.key_hint_due = input.key_hint_due;
+        let prompting = self.minibuffer.is_some() || self.key_prompt.is_some();
+        self.prompt_frame = prompting.then_some(self.current_frame);
     }
 
     fn cancel_pending(&mut self) {

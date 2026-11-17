@@ -66,6 +66,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "amacs-mcp"
+version = "0.1.0"
+dependencies = [
+ "amacs-client",
+ "amacs-gui",
+ "amacs-proto",
+ "anyhow",
+ "png",
+ "serde_json",
+]
+
+[[package]]
 name = "amacs-proto"
 version = "0.1.0"
 dependencies = [
@@ -74,6 +86,7 @@ dependencies = [
  "proptest",
  "serde",
  "thiserror",
+ "unicode-width",
 ]
 
 [[package]]
@@ -103,6 +116,7 @@ name = "amacs-server"
 version = "0.1.0"
 dependencies = [
  "amacs-core",
+ "amacs-mcp",
  "amacs-proto",
  "amacs-script",
  "amacs-testkit",
@@ -110,6 +124,7 @@ dependencies = [
  "anyhow",
  "listenfd",
  "sd-notify",
+ "serde_json",
  "signal-hook 0.4.6",
  "tempfile",
 ]

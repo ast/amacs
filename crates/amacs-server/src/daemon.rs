@@ -53,6 +53,10 @@ struct Conn {
     writer: JoinHandle<()>,
     greeted: bool,
     frame: Option<FrameId>,
+    /// The frame is one that no person looks at: a program's.
+    headless: bool,
+    /// The client asked to be told when what it sent has been drawn.
+    sync_wanted: bool,
     /// Buffers this client is still waiting for, if it waits at all.
     waiting: Option<usize>,
 }
@@ -302,6 +306,8 @@ impl Server {
                 writer,
                 greeted: false,
                 frame: None,
+                headless: false,
+                sync_wanted: false,
                 waiting: None,
             },
         );
@@ -337,6 +343,18 @@ impl Server {
         self.finish(id, None, 0);
     }
 
+    fn current_frame(&self) -> FrameId {
+        self.session.editor().current_frame()
+    }
+
+    /// Makes a frame the current one again, if it is still there.
+    fn restore_frame(&mut self, frame: FrameId) {
+        let mut editor = self.session.editor_mut();
+        if editor.has_frame(frame) {
+            editor.select_frame(frame);
+        }
+    }
+
     fn handle_message(&mut self, id: ConnId, message: ClientMsg) {
         let Some(conn) = self.conns.get_mut(&id) else {
             return;
@@ -362,11 +380,21 @@ impl Server {
             }
             return;
         }
+        let (frame, headless) = (conn.frame, conn.headless);
         match message {
             ClientMsg::Hello { .. } => {}
+            ClientMsg::Sync => conn.sync_wanted = true,
             ClientMsg::Eval { source } => {
                 self.session.take_output();
+                // A program with a frame of its own asks about that frame.
+                let (own, before) = (frame.filter(|_| headless), self.current_frame());
+                if let Some(frame) = own {
+                    self.session.editor_mut().select_frame(frame);
+                }
                 let result = self.session.eval_quietly(&source);
+                if own.is_some() {
+                    self.restore_frame(before);
+                }
                 let output = self.session.take_output();
                 let reply = match result {
                     Ok(text) => ServerMsg::EvalResult {
@@ -390,17 +418,30 @@ impl Server {
             }
             ClientMsg::Edit { files, wait, frame } => self.edit(id, &files, wait, frame),
             ClientMsg::Input(event) => {
-                if let Some(frame) = conn.frame {
+                if let Some(frame) = frame {
+                    let before = self.current_frame();
                     self.session.handle_frame_event(frame, event);
+                    // What a program does in its frame does not make that
+                    // the frame the user's other clients act in.
+                    if headless {
+                        self.restore_frame(before);
+                    }
                 }
             }
         }
     }
 
     fn edit(&mut self, id: ConnId, files: &[FileSpec], wait: bool, request: FrameRequest) {
-        let has_client_frame = self.conns.values().any(|conn| conn.frame.is_some());
+        let has_client_frame = self
+            .conns
+            .values()
+            .any(|conn| conn.frame.is_some() && !conn.headless);
+        let headless = matches!(request, FrameRequest::Headless { .. });
+        let before = self.current_frame();
         let size = match request {
-            FrameRequest::New { cols, rows } => Some((cols, rows)),
+            FrameRequest::New { cols, rows } | FrameRequest::Headless { cols, rows } => {
+                Some((cols, rows))
+            }
             FrameRequest::NewIfNone { cols, rows } if !has_client_frame => Some((cols, rows)),
             FrameRequest::NewIfNone { .. } | FrameRequest::None => None,
         };
@@ -441,11 +482,15 @@ impl Server {
             }
         }
         self.session.run_pending();
+        if headless {
+            self.restore_frame(before);
+        }
 
         let Some(conn) = self.conns.get_mut(&id) else {
             return;
         };
         conn.frame = frame;
+        conn.headless = headless;
         conn.waiting = (wait && waiting > 0).then_some(waiting);
         // A client with neither a frame nor anything to wait for is done.
         if conn.frame.is_none() && conn.waiting.is_none() {
@@ -494,6 +539,15 @@ impl Server {
             if !ops.is_empty() {
                 self.send(id, ServerMsg::Draw(ops));
             }
+        }
+        // Whoever asked has now been sent what its input came to.
+        let waiting: Vec<ConnId> = self
+            .conns
+            .iter_mut()
+            .filter_map(|(id, conn)| std::mem::take(&mut conn.sync_wanted).then_some(*id))
+            .collect();
+        for id in waiting {
+            self.send(id, ServerMsg::Synced);
         }
     }
 

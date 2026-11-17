@@ -121,6 +121,9 @@ pub struct ScriptCall {
     pub command: Option<String>,
     /// Show the result in the echo area, as `eval-expression` does.
     pub echo_result: bool,
+    /// The frame to run the call in, if it matters: code that waited goes
+    /// on in the frame it was started from, whichever is current by then.
+    pub frame: Option<crate::frame::FrameId>,
 }
 
 /// How a script call ended, as reported by the host.
@@ -155,6 +158,10 @@ pub(crate) struct ScriptState {
     /// Buffer and its tick when the running call started.
     frame: Option<(BufferId, u64)>,
     next_promise: u64,
+    /// The frame each promise was made in.
+    promise_frames: HashMap<u64, crate::frame::FrameId>,
+    /// The frame to go back to when the running call is done.
+    restore_frame: Option<crate::frame::FrameId>,
     /// Hooks that have functions, so that others cost nothing to run.
     active_hooks: std::collections::HashSet<String>,
     options: HashMap<String, OptionDef>,
@@ -329,6 +336,7 @@ impl Editor {
             args,
             command: None,
             echo_result: false,
+            frame: None,
         });
     }
 
@@ -339,6 +347,7 @@ impl Editor {
             args: Vec::new(),
             command: None,
             echo_result,
+            frame: None,
         })
     }
 
@@ -346,7 +355,15 @@ impl Editor {
     /// [`Editor::begin_script`] before running it and [`Editor::end_script`]
     /// after.
     pub fn take_script_call(&mut self) -> Option<ScriptCall> {
-        self.script.queue.pop_front()
+        let call = self.script.queue.pop_front()?;
+        if let Some(frame) = call.frame
+            && frame != self.current_frame()
+            && self.has_frame(frame)
+        {
+            self.script.restore_frame = Some(self.current_frame());
+            self.select_frame(frame);
+        }
+        Some(call)
     }
 
     pub fn begin_script(&mut self) {
@@ -359,6 +376,11 @@ impl Editor {
     pub fn end_script(&mut self, call: &ScriptCall, outcome: ScriptOutcome) {
         if let Some((buffer, tick)) = self.script.frame.take() {
             self.finish_command(buffer, tick, call.command.is_some());
+        }
+        if let Some(frame) = self.script.restore_frame.take()
+            && self.has_frame(frame)
+        {
+            self.select_frame(frame);
         }
         match outcome {
             ScriptOutcome::Returned(printed) if call.echo_result => self.message(printed),
@@ -375,18 +397,35 @@ impl Editor {
     /// Allocates an id that Scheme code can `await`.
     pub fn new_promise(&mut self) -> u64 {
         self.script.next_promise += 1;
+        let frame = self.current_frame();
+        self.script
+            .promise_frames
+            .insert(self.script.next_promise, frame);
         self.script.next_promise
+    }
+
+    fn settle_promise(&mut self, name: &'static str, id: u64, mut args: Vec<Value>) {
+        args.insert(0, Value::Int(id as i64));
+        let frame = self.script.promise_frames.remove(&id);
+        // Without a host there is nobody to call, which is not an error.
+        let _ = self.queue_script(ScriptCall {
+            target: ScriptTarget::Named(name),
+            args,
+            command: None,
+            echo_result: false,
+            frame,
+        });
     }
 
     /// Resumes the Scheme code waiting on a promise with its value.
     pub fn resolve_promise(&mut self, id: u64, value: Value) {
-        self.queue_named("%promise-resolve", vec![Value::Int(id as i64), value]);
+        self.settle_promise("%promise-resolve", id, vec![value]);
     }
 
     /// Abandons the Scheme code waiting on a promise, as when the user quits
     /// a prompt.
     pub fn reject_promise(&mut self, id: u64) {
-        self.queue_named("%promise-reject", vec![Value::Int(id as i64)]);
+        self.settle_promise("%promise-reject", id, Vec::new());
     }
 
     // Hooks

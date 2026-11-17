@@ -17,6 +17,8 @@ sd-notify.workspace = true
 signal-hook.workspace = true
 
 [dev-dependencies]
+amacs-mcp.workspace = true
+serde_json.workspace = true
 amacs-testkit.workspace = true
 tempfile.workspace = true
 

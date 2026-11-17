@@ -97,10 +97,22 @@ fn messages_and_prompts_belong_to_one_frame() {
         "the other frame does not show the prompt"
     );
 
-    // Typing in the other frame abandons the first frame's minibuffer.
+    // Typing in the other frame leaves the first frame's prompt as it is:
+    // each frame has its own input in progress.
     t.type_text(1, "x");
-    assert_eq!(t.screens[0].row(5), "");
+    assert_eq!(t.screens[0].row(5), "Goto line: 12");
     assert_eq!(t.screens[0].row(0), "x");
+    assert_eq!(t.screens[1].row(4), "");
+    // A key sequence begun in one frame is not continued by the other.
+    t.keys(1, "C-x");
+    assert_eq!(t.screens[1].row(4), "C-x-");
+    t.type_text(0, "3");
+    assert_eq!(t.screens[0].row(5), "Goto line: 123");
+    assert_eq!(t.screens[1].row(4), "C-x-");
+    t.keys(1, "C-g");
+    // The prompt is answered, or given up, where it was asked.
+    t.keys(0, "C-g");
+    assert_eq!(t.screens[0].row(5), "Quit");
     t.type_text(0, "y");
     // Its point was at the start, before the x typed in the other frame.
     assert_eq!(

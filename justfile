@@ -34,7 +34,9 @@ start:
     #!/usr/bin/env bash
     set -eu
     mkdir -p "$(dirname "$AMACS_SOCKET")"
-    setsid nohup target/release/amacs --daemon >"{{log}}" 2>&1 </dev/null &
+    # The Scheme that is part of the editor is read from this checkout,
+    # so that a restart picks up changes to it without a build.
+    AMACS_RUNTIME="$PWD/runtime" setsid nohup target/release/amacs --daemon >"{{log}}" 2>&1 </dev/null &
     for _ in $(seq 50); do
         if [ -S "$AMACS_SOCKET" ]; then
             echo "amacs is running on $AMACS_SOCKET (log: {{log}})"

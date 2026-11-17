@@ -133,12 +133,13 @@ impl Client {
     }
 
     /// Waits until the server has handled everything sent so far and this
-    /// client has applied the resulting draws. The server draws after each
-    /// batch of messages, so the draw for earlier input is sure to precede
-    /// the reply to a second request.
+    /// client has applied the resulting draws.
     fn sync(&mut self) {
-        self.eval("1").unwrap();
-        self.eval("1").unwrap();
+        self.send(ClientMsg::Sync);
+        match self.receive() {
+            Some(ServerMsg::Synced) => {}
+            other => panic!("unexpected reply: {other:?}"),
+        }
     }
 
     fn edit(&mut self, files: &[&Path], wait: bool, frame: FrameRequest) -> ServerMsg {
