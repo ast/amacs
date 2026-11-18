@@ -24,6 +24,10 @@ use driver::{Driver, Evaluated, eval_for_user};
 /// The frame that the model drives, when it does not ask for another size.
 const DEFAULT_SIZE: (u16, u16) = (100, 30);
 
+/// Said before the answer of the first call after the server was replaced.
+const RECONNECTED: &str = "(The amacs server was started anew since the last call. This is a \
+new frame, and what was only defined or opened in the old server is gone.)";
+
 const INSTRUCTIONS: &str = "\
 amacs is an Emacs-like editor with a Rust core, extended in its own Scheme. This server \
 connects you to a running amacs. You have a frame of your own, which no person sees, with \
@@ -327,15 +331,27 @@ impl Mcp {
             .get("arguments")
             .cloned()
             .unwrap_or_else(|| json!({}));
+        // A connection from an earlier call may be to a server that has
+        // gone since, as after a restart. Asking it for nothing tells, and
+        // the tool then connects again.
+        let reconnected = self
+            .driver
+            .as_mut()
+            .is_some_and(|driver| driver.sync().is_err());
+        if reconnected {
+            self.driver = None;
+        }
         let answer = self.tool(name, &args);
-        // After a lost connection, as when the server was started anew,
-        // the next call connects again.
+        // A connection lost during the call is left for the next one.
         if self.driver.as_ref().is_some_and(|driver| driver.lost) {
             self.driver = None;
         }
         match answer {
             Ok(Answer::Text(text)) => json!({
-                "content": [{ "type": "text", "text": text }],
+                "content": [{
+                    "type": "text",
+                    "text": if reconnected { format!("{RECONNECTED}\n{text}") } else { text },
+                }],
                 "isError": false,
             }),
             Ok(Answer::Image(png)) => json!({

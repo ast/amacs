@@ -408,9 +408,10 @@ fn a_models_frame_stays_out_of_the_users_way() {
     ok(&mut mcp, "keys", json!({ "keys": "C-g" }));
 
     // When the server is started anew, as after a rebuild, the next call
-    // finds it again.
+    // finds it again, and says so.
     server.restart();
-    let (_, failed) = call(&mut mcp, "eval", json!({ "code": "(+ 1 1)" }));
-    assert!(failed, "the connection was lost");
+    let answer = ok(&mut mcp, "eval", json!({ "code": "(+ 1 1)" }));
+    assert!(answer.contains("started anew"), "{answer}");
+    assert!(answer.ends_with("\n2"), "{answer}");
     assert_eq!(ok(&mut mcp, "eval", json!({ "code": "(+ 1 1)" })), "2");
 }

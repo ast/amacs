@@ -2,7 +2,9 @@
 ;;;
 ;;; The editor runs these hooks itself:
 ;;;   find-file-hook     after a file is first visited, in its buffer
-;;;   after-save-hook    after a buffer is written to its file
+;;;   before-save-hook   before a buffer is written to its file, in it
+;;;   after-save-hook    after a buffer is written to its file, in it
+;;;   pre-command-hook   before every command
 ;;;   post-command-hook  after every command
 ;;; Every mode also has a hook named after it, such as `rust-mode-hook`.
 
@@ -32,3 +34,25 @@
 ;; The editor's entry point.
 (define (%run-hook name . args)
   (apply run-hooks name args))
+
+;; The same for a hook of one buffer, which may no longer be the current
+;; one, or be there at all.
+(define (%run-hook-in buffer name)
+  (when (member buffer (buffer-list))
+    (%call-in-buffer buffer (lambda () (run-hooks name)))))
+
+;; The editor's entry point for saving while before-save-hook has functions.
+;; A function that fails is reported and the buffer is saved all the same.
+(define (%save-buffer buffer path kill?)
+  (%call-in-buffer
+   buffer
+   (lambda ()
+     (let ((problem (guard (e (#t (if (error-object? e)
+                                      (error-object->string e)
+                                      (write->string e))))
+                      (run-hooks 'before-save-hook)
+                      #f)))
+       (%write-buffer path)
+       (when problem
+         (message "Saved, but before-save-hook failed: " problem))
+       (when kill? (kill-buffer))))))

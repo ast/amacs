@@ -198,12 +198,10 @@ fn ask_save_then_finish(ed: &mut Editor, name: String, id: BufferId) {
         format!("Save {name} before finishing? (y or n) "),
         move |ed, key| {
             match key.self_insert_char() {
-                Some('y' | 'Y') => {
-                    if let Some(path) = ed.buffer().file.clone() {
-                        ed.write_buffer(&path)?;
-                    }
-                    ed.kill_buffer(id);
-                }
+                Some('y' | 'Y') => match ed.buffer().file.clone() {
+                    Some(path) => ed.write_buffer_and_kill(&path)?,
+                    None => ed.kill_buffer(id),
+                },
                 Some('n' | 'N') => ed.kill_buffer(id),
                 _ if key == amacs_proto::Key::ctrl('g') => return Err(CmdError::Quit),
                 _ => ask_save_then_finish(ed, name, id),

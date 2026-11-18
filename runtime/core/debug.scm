@@ -99,12 +99,20 @@ value in the current buffer."
 
 (define (apropos-lines pattern)
   "What has a text in its name, a line for each with the start of its
-documentation: procedures, macros and variables, then commands."
+documentation: procedures, macros and variables, then commands. A command
+is listed once, as a command. The names that start with %, which are the
+inner parts of things, are only counted, unless the text has a % in it."
   (define (line kind name doc)
     (string-append kind " " name (if doc (string-append " — " (%first-line doc)) "")))
-  (let* ((names (apropos pattern))
-         (commands (filter (lambda (command) (string-contains? command pattern))
-                           (command-names))))
+  (define (inner? name)
+    (and (not (string-contains? pattern "%"))
+         (string-prefix? "%" (symbol->string name))))
+  (let* ((commands (filter (lambda (command) (string-contains? command pattern))
+                           (command-names)))
+         (found (filter (lambda (name) (not (member (symbol->string name) commands)))
+                        (apropos pattern)))
+         (names (filter (lambda (name) (not (inner? name))) found))
+         (inner (- (length found) (length names))))
     (string-join
      (append
       (map (lambda (name)
@@ -116,7 +124,11 @@ documentation: procedures, macros and variables, then commands."
            names)
       (map (lambda (command)
              (line "command  " command (command-documentation command)))
-           commands))
+           commands)
+      (if (> inner 0)
+          (list (string-append "(and " (number->string inner)
+                               " whose names start with %; put a % in the text to see them)"))
+          '()))
      "\n")))
 
 (define (buffer-lines)

@@ -547,6 +547,19 @@ impl Buffer {
         self.undo.push(txn);
     }
 
+    /// Moves the edits that the running command has made so far into the
+    /// undo tree, as a step of their own, so that the state they lead to
+    /// can be marked as saved.
+    pub fn commit_edits(&mut self, point: usize) {
+        if self.pending.is_some() {
+            let in_command = self.undo_point.is_some();
+            self.end_command(point, false);
+            if in_command {
+                self.undo_point = Some(point);
+            }
+        }
+    }
+
     /// Undoes one transaction. Returns where point should go.
     pub fn undo(&mut self) -> CmdResult<Option<usize>> {
         self.check_writable()?;

@@ -298,6 +298,7 @@ fn saving_formats_when_asked_and_survives_a_formatter_that_fails() {
     h.type_text("b").keys("C-x C-s");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "CAB BABC\n");
     assert!(h.echo().starts_with("Wrote "));
+    assert!(!h.editor.buffer().is_modified());
     assert_eq!(h.screen.cursor(), Some((0, 5)));
 
     // The text is saved as it is when the formatter fails, and says why.

@@ -34,9 +34,23 @@ Advice changes a command without replacing it, whoever defined it:
 
 `(add-hook! 'name procedure)` and `(remove-hook! 'name procedure)`. The
 editor runs `pre-command-hook` and `post-command-hook` around every command,
-`find-file-hook` when a file is first visited, `after-save-hook` after a
-buffer is written, and a hook named after each mode when the mode is
-switched. There is no hook before saving yet.
+`find-file-hook` when a file is first visited, `before-save-hook` and
+`after-save-hook` around the writing of a buffer to its file, and a hook
+named after each mode when the mode is switched.
+
+The functions of `before-save-hook` run in the buffer that is about to be
+saved, and what they change is written. They run before the formatter of
+`format-on-save!`. One that fails is reported and the buffer is saved all
+the same:
+
+```scheme
+(define (ensure-final-newline)
+  "End the text of the buffer with a line break."
+  (let ((end (point-max)))
+    (unless (or (= end 0) (equal? (buffer-substring (- end 1) end) "\n"))
+      (save-excursion (goto-char end) (insert "\n")))))
+(add-hook! 'before-save-hook ensure-final-newline)
+```
 
 ## Buffers and windows
 

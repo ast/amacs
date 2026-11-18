@@ -332,6 +332,12 @@ pub const API: &[ApiFn] = api! {
             ed.find_file(&path)?;
             Ok(Value::Void)
         };
+    "%write-buffer" (1, Some(1)) "Write the current buffer to a file and make that its file, without running before-save-hook." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            ed.write_buffer_now(&path)?;
+            Ok(Value::Void)
+        };
     "read-file" (1, Some(1)) "The contents of a file, as a string. A relative name is taken from the working directory, and a leading ~ is the home directory." =>
         |ed, args| {
             let path = expand_path(string(args, 0)?, ed.working_directory());

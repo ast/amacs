@@ -374,8 +374,37 @@ impl Editor {
             .find(|id| self.buffers[*id].file.as_deref() == Some(path))
     }
 
-    /// Writes the current buffer to `path` and makes it the buffer's file.
+    /// Saves the current buffer to `path` and makes it the buffer's file.
     pub fn write_buffer(&mut self, path: &Path) -> CmdResult {
+        self.save_to(path, false)
+    }
+
+    /// Saves the current buffer to `path` and kills it once it is written.
+    pub fn write_buffer_and_kill(&mut self, path: &Path) -> CmdResult {
+        self.save_to(path, true)
+    }
+
+    fn save_to(&mut self, path: &Path, kill: bool) -> CmdResult {
+        // With functions on the hook that runs before saving, Scheme runs
+        // them and then asks for the write. They may wait for something, so
+        // the buffer is named: another may be current by then.
+        if self.hook_active("before-save-hook") && self.has_script_host() {
+            let name = self.buffer().name.as_str().into();
+            let path = path.display().to_string().into();
+            self.queue_named("%save-buffer", vec![name, path, kill.into()]);
+            return Ok(());
+        }
+        self.write_buffer_now(path)?;
+        if kill {
+            let id = self.window().buffer;
+            self.kill_buffer(id);
+        }
+        Ok(())
+    }
+
+    /// Writes the current buffer to `path`, without the hook that runs
+    /// before saving.
+    pub fn write_buffer_now(&mut self, path: &Path) -> CmdResult {
         let unformatted = self.format_before_save();
         write_atomically(path, self.text()).map_err(|error| {
             CmdError::msg(format!("Cannot write {}: {error}", abbreviate_path(path)))
@@ -403,7 +432,11 @@ impl Editor {
             self.buffer_mut().name = unique;
         }
         self.remove_auto_save(&path);
+        let point = self.point();
         let buffer = self.buffer_mut();
+        // What a formatter or a hook changed just now is part of what was
+        // written.
+        buffer.commit_edits(point);
         buffer.disk_mtime = modified_time(&path);
         buffer.file = Some(path);
         buffer.auto_saved_tick = None;
@@ -414,7 +447,11 @@ impl Editor {
         }
         let id = self.window().buffer;
         self.lsp_did_save(id);
-        self.run_hook("after-save-hook", Vec::new());
+        // The hook runs later, when another buffer may be current.
+        if self.hook_active("after-save-hook") {
+            let name = self.buffer().name.as_str().into();
+            self.queue_named("%run-hook-in", vec![name, Value::sym("after-save-hook")]);
+        }
         Ok(())
     }
 }

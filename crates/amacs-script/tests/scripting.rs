@@ -403,6 +403,59 @@ fn after_save_hook_runs_after_saving() {
 }
 
 #[test]
+fn before_save_hook_changes_what_is_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("saved.txt");
+    let mut h = Harness::new(70, 8);
+    h.eval(
+        r#"(add-hook! 'before-save-hook
+             (lambda () (save-excursion (goto-char (point-max)) (insert "\n"))))"#,
+    );
+    h.eval(&format!("(find-file {:?})", path.to_str().unwrap()));
+    h.type_text("data").keys("C-x C-s");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "data\n");
+    assert_eq!(h.mode_line(), " --  saved.txt   L1 C4  (Text)");
+    assert!(h.echo().starts_with("Wrote "), "{}", h.echo());
+}
+
+#[test]
+fn before_save_hook_that_fails_does_not_stop_the_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("saved.txt");
+    let mut h = Harness::new(70, 8);
+    h.eval(r#"(add-hook! 'before-save-hook (lambda () (error "no good")))"#);
+    h.eval(&format!("(find-file {:?})", path.to_str().unwrap()));
+    h.type_text("data").keys("C-x C-s");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "data");
+    assert_eq!(h.echo(), "Saved, but before-save-hook failed: no good");
+}
+
+#[test]
+fn save_hooks_run_in_the_buffer_that_is_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let (one, two) = (dir.path().join("one.txt"), dir.path().join("two.txt"));
+    let mut h = Harness::new(70, 8);
+    h.eval(
+        r#"(add-hook! 'before-save-hook
+             (lambda () (goto-char (point-max)) (insert " in " (buffer-name))))
+           (add-hook! 'after-save-hook
+             (lambda () (log-message (string-append "saved " (buffer-name)))))"#,
+    );
+    h.eval(&format!("(find-file {:?})", one.to_str().unwrap()));
+    h.type_text("1");
+    h.eval(&format!("(find-file {:?})", two.to_str().unwrap()));
+    h.type_text("2");
+    h.eval(r#"(switch-to-buffer "*scratch*")"#);
+    h.keys("C-x s");
+    assert_eq!(std::fs::read_to_string(&one).unwrap(), "1 in one.txt");
+    assert_eq!(std::fs::read_to_string(&two).unwrap(), "2 in two.txt");
+    assert_eq!(h.mode_line(), " --  *scratch*   L1 C0  (Fundamental)");
+    let log = h.eval(r#"(buffer-string "*Messages*")"#);
+    assert!(log.contains("saved one.txt"), "{log}");
+    assert!(log.contains("saved two.txt"), "{log}");
+}
+
+#[test]
 fn init_file_errors_are_reported_and_earlier_forms_take_effect() {
     let dir = tempfile::tempdir().unwrap();
     let init = dir.path().join("init.scm");
@@ -627,7 +680,7 @@ fn the_editor_can_be_asked_about_itself() {
     );
     assert_eq!(
         h.eval("(procedure-location add-hook!)"),
-        "\"runtime/core/hooks.scm:19:1\""
+        "\"runtime/core/hooks.scm:21:1\""
     );
     assert_eq!(
         h.eval("(describe 'read-string)"),

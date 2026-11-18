@@ -8,10 +8,11 @@ it runs: see `docs/scheme.md`.
 
 ## Status
 
-Milestones M0 to M8 of the plan are done: the editor runs in a terminal or a
-Wayland window, alone or as a server with any number of clients, edits files
-with syntax highlighting, indentation and language servers, and is extended
-in Scheme.
+Milestones M0 to M10 of the plan are done: the editor runs in a terminal or
+a Wayland window, alone or as a server with any number of clients, edits
+files with syntax highlighting, indentation and language servers, has a file
+manager and a git interface, and is extended in Scheme while it runs, by
+people and by language models.
 
 Working now:
 
@@ -36,9 +37,14 @@ Working now:
   `--eval`; auto-save with recovery after a crash
 - A Wayland window (`amacs-gui`, or `amacsclient -c`) with shaped text,
   ligatures, colour emoji, fractional scaling and the system clipboard
+- A file manager (`C-x d`) and git views (`C-x g`): status, staging by file
+  or hunk, commits, branches, stashes, logs, blame, marks in the gutter
+  (below)
+- A Model Context Protocol server (`amacs-mcp`) through which a language
+  model uses, inspects and changes the running editor: see `docs/ai.md`
 
-Not yet: the git interface, the file manager, and everything else in the
-later milestones.
+Not yet: a terminal emulator, Org, spelling, remote files, and the rest of
+the later milestones. `TODO.md` lists what is left.
 
 ## Building and running
 
@@ -248,6 +254,29 @@ yanks the last one.
 **Bookmarks**: `C-x r m` names a place in a file and `C-x r b` returns to
 one. They are kept across sessions.
 
+## Files and git
+
+**The file manager**: `C-x d`, or visiting a directory, lists it, with the
+keys of dired. `RET` visits, `^` goes up, `TAB` opens a directory in place,
+`/` narrows to the names that contain a text, `.` hides the dot files and
+`s` changes the order. `m`, `u`, `U` and `t` mark; `C` copies, `R` moves or
+renames and `D` deletes the marked files or the one at point, and with two
+listings side by side the other one is offered as where to. `+` makes a
+directory, `b` goes to a directory of the `dired-quick-access` option and
+`r` to one shown before.
+
+**Git**: `C-x g` shows the status of the repository of the current buffer,
+in sections that `TAB` folds. `s` and `u` stage and unstage the file or hunk
+at point, `k` discards it, and `RET` goes to the change. `c` commits, `b`
+is for branches, `P`, `F` and `f` push, pull and fetch, `z` stashes, `r`
+rebases and `l` shows the log; each opens a menu of what it can do.
+`M-x git-blame` shows who last changed each line, and `git-gutter-mode`
+marks the changed lines of a file beside their numbers.
+
+Both are written in Scheme, in `runtime/lib/dired.scm` and
+`runtime/lib/git.scm`; `docs/extending.md` has all their keys and the parts
+that other code can use.
+
 ## Smaller things
 
 Four minor modes lay marks over the text. Turn them on in a mode hook with
@@ -358,8 +387,11 @@ The server reaches the system clipboard through `wl-copy` and `wl-paste`, for
 terminal frames too: a kill is copied, and `C-y` yanks what another program
 copied last. This needs `WAYLAND_DISPLAY` in the server's environment.
 
-Not there yet: the mouse, input methods and compose sequences, and a native
-clipboard without the helper programs.
+A click puts point there and selects the window, and the wheel scrolls the
+window under the pointer.
+
+Not there yet: selecting by dragging, input methods and compose sequences,
+and a native clipboard without the helper programs.
 
 ## Scheme
 
@@ -391,10 +423,11 @@ written in Scheme under `runtime/core/`, and the language modes under
 - Buffer positions are zero-based.
 - A prompt such as `read-string` suspends the command until the user answers.
   It works inside commands and hooks, not at the top level of a file.
-- There is no `with-current-buffer` yet. Primitives act on the buffer of the
-  selected window; some take a buffer name.
-- Hooks run after the event that triggered them, not in the middle of it. A
-  hook that must run before a save does not exist yet.
+- Primitives act on the current buffer, which is that of the selected window
+  unless `(with-current-buffer name ...)` says otherwise.
+- Hooks run after the event that triggered them, not in the middle of it,
+  except `pre-command-hook` and `before-save-hook`, which the command or the
+  save waits for.
 - Options hold data (numbers, strings, symbols, lists), not procedures.
 
 Useful flags: `--init FILE`, `-q` (no init file), `-l FILE`, `--eval EXPR`, and
