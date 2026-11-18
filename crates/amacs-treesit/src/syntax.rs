@@ -336,8 +336,10 @@ fn paint_injected(
     };
     let shown = out.start..out.start + out.bytes.len();
     let within = |range: &tree_sitter::Range| {
-        let from = range.start_byte.max(shown.start) - shown.start;
-        let to = range.end_byte.min(shown.end).saturating_sub(shown.start);
+        // The part of it that is among the highlights asked for, which may
+        // be none.
+        let from = range.start_byte.clamp(shown.start, shown.end) - shown.start;
+        let to = range.end_byte.clamp(shown.start, shown.end) - shown.start;
         from..to.max(from)
     };
     // A node of the injected language can span what was left out of it,

@@ -97,3 +97,32 @@ fn highlights_of_a_range_match_those_of_the_whole() {
     assert_eq!(part.get(end), None);
     assert_eq!(part.get(start - 1), None);
 }
+
+#[test]
+fn highlights_of_any_lines_of_text_in_other_languages_match_those_of_the_whole() {
+    let mut syntax = Syntax::new(language("markdown").unwrap()).unwrap();
+    let text = Text::from(fixture("sample.md").as_str());
+    syntax.update(&text);
+    let whole = syntax.highlights(&text, 0..text.len_bytes());
+    let lines = text.len_lines();
+    let start_of = |line: usize| {
+        if line >= lines {
+            text.len_bytes()
+        } else {
+            text.line_to_byte(line)
+        }
+    };
+    for first in 0..lines {
+        for last in first..=lines {
+            let (start, end) = (start_of(first), start_of(last));
+            let part = syntax.highlights(&text, start..end);
+            for byte in start..end {
+                assert_eq!(
+                    part.get(byte),
+                    whole.get(byte),
+                    "byte {byte} of lines {first} to {last}"
+                );
+            }
+        }
+    }
+}
