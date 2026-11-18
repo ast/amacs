@@ -93,6 +93,7 @@ Terraform, HTML, JavaScript, JSON, Make, Markdown, Nix, Python, Rust, Scheme,
 TOML, TSX, TypeScript and YAML. The grammars are compiled into the binary.
 Dockerfiles have a mode but no grammar.
 
+
 | Key | Does |
 |---|---|
 | `TAB` | Indent the line, or the lines of the active region |
@@ -418,6 +419,12 @@ window opens; changing them does not affect windows that are already open.
 The window draws on the CPU into shared memory, repainting only the rows that
 changed. Text is shaped per run, so programming ligatures form, and then
 placed on the cell grid.
+
+Drawing is in parts (`crates/amacs-gui/src/render/`): what the server said
+to show, the fonts, a list of the rectangles and glyphs that each row is
+made of, and a backend that puts the list on screen. The one backend there
+is draws on the CPU; one for the GPU would be another implementation of the
+`Backend` trait, drawing from the same list.
 
 The server reaches the system clipboard through `wl-copy` and `wl-paste`, for
 terminal frames too: a kill is copied, and `C-y` yanks what another program

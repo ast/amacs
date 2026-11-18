@@ -3,6 +3,8 @@
 //! The window is a thin client. It sends key presses and its size in
 //! character cells to the server and draws what the server sends back.
 
+mod present;
+
 use std::ffi::OsString;
 use std::io::BufWriter;
 use std::os::unix::net::UnixStream;
@@ -18,6 +20,7 @@ use amacs_proto::{
     write_msg,
 };
 use anyhow::{Context, Result, anyhow, bail};
+use present::ShmPresenter;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, FrameCallbackData};
 use smithay_client_toolkit::dispatch2::Dispatch2;
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
@@ -26,7 +29,7 @@ use smithay_client_toolkit::reexports::calloop::{EventLoop, LoopHandle};
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
 use smithay_client_toolkit::reexports::client::protocol::{
-    wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface,
+    wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
 };
 use smithay_client_toolkit::reexports::client::{Connection as WaylandConnection, QueueHandle};
 use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::{
@@ -47,7 +50,6 @@ use smithay_client_toolkit::shell::xdg::XdgShell;
 use smithay_client_toolkit::shell::xdg::window::{
     Window, WindowConfigure, WindowDecorations, WindowHandler,
 };
-use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_registry, registry_handlers};
 
@@ -169,7 +171,7 @@ struct App {
     seat_state: SeatState,
     output_state: OutputState,
     shm: Shm,
-    pool: SlotPool,
+    presenter: ShmPresenter,
     window: Window,
     /// Present if the compositor supports fractional scaling.
     viewport: Option<WpViewport>,
@@ -273,24 +275,6 @@ impl App {
             return;
         };
 
-        let stride = width as i32 * 4;
-        let Ok((buffer, canvas)) = self.pool.create_buffer(
-            width as i32,
-            height as i32,
-            stride,
-            wl_shm::Format::Xrgb8888,
-        ) else {
-            return;
-        };
-        for (bytes, pixel) in canvas
-            .as_chunks_mut::<4>()
-            .0
-            .iter_mut()
-            .zip(self.renderer.pixels())
-        {
-            *bytes = pixel.to_le_bytes();
-        }
-
         let surface = self.window.wl_surface();
         match (&self.viewport, self.size) {
             // The buffer is in device pixels; the viewport says how large
@@ -301,13 +285,10 @@ impl App {
             }
             _ => surface.set_buffer_scale((self.scale / SCALE_DENOMINATOR).max(1) as i32),
         }
-        surface.damage_buffer(
-            damage.x as i32,
-            damage.y as i32,
-            damage.w as i32,
-            damage.h as i32,
-        );
-        if buffer.attach_to(surface).is_err() {
+        if !self
+            .presenter
+            .present(surface, (width, height), self.renderer.pixels(), damage)
+        {
             return;
         }
         // The compositor answers when it wants the next frame. Until then
@@ -431,8 +412,7 @@ fn run() -> Result<ExitCode> {
         u32::from(INITIAL_GRID.0) * cell_w,
         u32::from(INITIAL_GRID.1) * cell_h,
     );
-    let pool = SlotPool::new((initial.0 * initial.1 * 4) as usize, &shm)
-        .context("cannot create shared memory")?;
+    let presenter = ShmPresenter::new(&shm, initial)?;
 
     // The server is read on its own thread and its messages are handed to
     // the event loop.
@@ -458,7 +438,7 @@ fn run() -> Result<ExitCode> {
         seat_state: SeatState::new(&globals, &qh),
         output_state: OutputState::new(&globals, &qh),
         shm,
-        pool,
+        presenter,
         window,
         viewport,
         keyboard: None,
