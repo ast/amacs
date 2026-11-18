@@ -1,0 +1,22 @@
+[package]
+name = "amacs-gpu-surface"
+description = "The one unsafe call of amacs: a GPU surface on a Wayland window"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+raw-window-handle.workspace = true
+wayland-backend.workspace = true
+wayland-client.workspace = true
+wgpu.workspace = true
+
+# Not the workspace's lints: those forbid unsafe code, and this crate exists
+# to hold the one piece of it that the editor cannot do without.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

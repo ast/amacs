@@ -19,9 +19,13 @@
           version = "0.1.0";
           src = self;
           cargoLock.lockFile = ./Cargo.lock;
-          # The Wayland client reads keymaps with libxkbcommon.
+          # The Wayland client reads keymaps with libxkbcommon, and talks to
+          # the compositor through libwayland, as the drivers of GPUs do.
           nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = [ pkgs.libxkbcommon ];
+          buildInputs = [
+            pkgs.libxkbcommon
+            pkgs.wayland
+          ];
           # Searching a project's files runs ripgrep, and so do its tests.
           nativeCheckInputs = [
             pkgs.ripgrep
@@ -33,6 +37,10 @@
           preCheck = "export HOME=$TMPDIR";
           # User units for running the server under systemd, with or without
           # socket activation.
+          # Drawing with the GPU loads Vulkan when it is asked for, by name.
+          postFixup = ''
+            patchelf --add-rpath ${pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ]} $out/bin/amacs-gui
+          '';
           postInstall = ''
             install -Dm644 -t $out/lib/systemd/user contrib/systemd/amacs.socket
             substitute contrib/systemd/amacs.service $out/lib/systemd/user/amacs.service \
@@ -58,6 +66,8 @@
             buildPhase = "cargo clippy --workspace --all-targets --offline -- -D warnings";
             doCheck = false;
             installPhase = "touch $out";
+            # Nothing is installed, so there is nothing to fix up.
+            dontFixup = true;
           });
 
           fmt = amacs.overrideAttrs (old: {
@@ -66,6 +76,8 @@
             buildPhase = "cargo fmt --all --check";
             doCheck = false;
             installPhase = "touch $out";
+            # Nothing is installed, so there is nothing to fix up.
+            dontFixup = true;
           });
         }
       );
@@ -74,6 +86,9 @@
         default = pkgs.mkShell {
           inputsFrom = [ self.packages.${pkgs.stdenv.hostPlatform.system}.amacs ];
           AMACS_TEST_FONTS = "${pkgs.jetbrains-mono}/share/fonts";
+          # What is built here finds Vulkan the way the installed program
+          # does through its rpath.
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ];
           packages = with pkgs; [
             clippy
             rustfmt

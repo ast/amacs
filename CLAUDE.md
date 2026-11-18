@@ -36,6 +36,12 @@ none is running. Use it instead of guessing:
 Only changes to Rust need `just restart`. After a restart the MCP server
 reconnects by itself on the next call.
 
+## Building
+
+Builds, tests and flake checks use six cores, not all of them:
+`CARGO_BUILD_JOBS=6` for cargo and `just`, and `nix flake check --cores 6
+--max-jobs 1`.
+
 ## Before a commit
 
 `just check` runs what is needed short of the flake: format, clippy with
@@ -50,7 +56,10 @@ the MCP server are in `crates/amacs-server/tests`.
 
 ## Constraints
 
-- `unsafe` is forbidden in the workspace.
+- `unsafe` is forbidden in the workspace, with one exception that is not to
+  grow: `crates/amacs-gpu-surface` holds the single call that hands a GPU's
+  driver the pointers of a Wayland window. Anything else that seems to need
+  `unsafe` needs another way.
 - `~/src/nixos`, the Emacs configuration that the editor is modelled on, is
   for reading only.
 - `.envrc` is not committed.

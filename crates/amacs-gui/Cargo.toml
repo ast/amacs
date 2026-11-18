@@ -8,11 +8,17 @@ publish.workspace = true
 
 [dependencies]
 amacs-client.workspace = true
+amacs-gpu-surface.workspace = true
 amacs-proto.workspace = true
 anyhow.workspace = true
 cosmic-text.workspace = true
 smithay-client-toolkit.workspace = true
 unicode-width.workspace = true
+# Makes the window's connection one of the system's libwayland.
+wayland-backend.workspace = true
+wayland-client.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
 
 [dev-dependencies]
 amacs-core.workspace = true

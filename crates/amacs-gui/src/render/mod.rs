@@ -27,6 +27,7 @@
 //! so that programming ligatures form, and each glyph is then placed in
 //! the cell of the character it came from.
 
+mod gpu;
 pub mod list;
 mod scene;
 mod software;
@@ -36,6 +37,7 @@ use std::path::Path;
 
 use amacs_proto::{Color, DrawOp};
 
+pub use gpu::Gpu;
 pub use list::{Frame, GlyphQuad, Quad, Row};
 pub use scene::Scene;
 pub use software::Software;

@@ -416,15 +416,24 @@ The font comes from two options, for example in `init.scm`:
 `monospace`, is whatever fontconfig says it is. The options are read when a
 window opens; changing them does not affect windows that are already open.
 
-The window draws on the CPU into shared memory, repainting only the rows that
-changed. Text is shaped per run, so programming ligatures form, and then
-placed on the cell grid.
+Text is shaped per run, so programming ligatures form, and then placed on
+the cell grid.
 
 Drawing is in parts (`crates/amacs-gui/src/render/`): what the server said
 to show, the fonts, a list of the rectangles and glyphs that each row is
-made of, and a backend that puts the list on screen. The one backend there
-is draws on the CPU; one for the GPU would be another implementation of the
-`Backend` trait, drawing from the same list.
+made of, and a backend that puts the list on screen. There are two
+backends, which give the same picture.
+
+The one that is used unless another is asked for draws on the CPU into
+memory shared with the compositor, repainting only what changed. The other
+draws with the GPU, through Vulkan, the whole frame each time from an atlas
+of glyphs:
+
+    amacs-gui --renderer gpu FILE
+    AMACS_RENDERER=gpu amacsclient -c FILE
+
+It says on standard error which GPU it draws with, or that it draws on the
+CPU after all and why, as when there is no Vulkan.
 
 The server reaches the system clipboard through `wl-copy` and `wl-paste`, for
 terminal frames too: a kill is copied, and `C-y` yanks what another program

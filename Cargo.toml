@@ -15,6 +15,7 @@ amacs-proto = { path = "crates/amacs-proto" }
 amacs-client = { path = "crates/amacs-client" }
 amacs-core = { path = "crates/amacs-core" }
 amacs-lsp = { path = "crates/amacs-lsp" }
+amacs-gpu-surface = { path = "crates/amacs-gpu-surface" }
 amacs-gui = { path = "crates/amacs-gui" }
 amacs-mcp = { path = "crates/amacs-mcp" }
 amacs-tty = { path = "crates/amacs-tty" }
@@ -46,6 +47,14 @@ smithay-client-toolkit = "0.21"
 tempfile = "3"
 thiserror = "2"
 unicode-width = "0.2"
+# The driver of a GPU talks to the system's libwayland, so the window's
+# connection has to be libwayland's too.
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+# Vulkan only: the window is a Wayland one.
+wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "vulkan", "wgsl"] }
+pollster = "0.4"
+raw-window-handle = "0.6"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

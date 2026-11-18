@@ -3,6 +3,7 @@
 //! The window is a thin client. It sends key presses and its size in
 //! character cells to the server and draws what the server sends back.
 
+mod output;
 mod present;
 
 use std::ffi::OsString;
@@ -14,13 +15,13 @@ use std::time::Duration;
 
 use amacs_client::{Connection, parse_position};
 use amacs_gui::keys;
-use amacs_gui::render::Renderer;
+use amacs_gui::render::Fonts;
 use amacs_proto::{
     ClientMsg, FileSpec, FrameRequest, InputEvent, MouseEvent, ServerMsg, read_msg, socket_path,
     write_msg,
 };
 use anyhow::{Context, Result, anyhow, bail};
-use present::ShmPresenter;
+use output::{Output, RendererKind};
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, FrameCallbackData};
 use smithay_client_toolkit::dispatch2::Dispatch2;
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
@@ -62,6 +63,8 @@ Options:
   -n, --no-wait           Keep the window when the files are finished
       --font FAMILY       Font family, instead of the `font-family` option
       --font-size PIXELS  Font size, instead of the `font-size` option
+      --renderer KIND     Draw with the `cpu` (the default) or the `gpu`;
+                          AMACS_RENDERER in the environment says the same
   -s, --socket-name PATH  Use this socket instead of the default
   -h, --help              Show this help
   -V, --version           Show the version";
@@ -77,6 +80,7 @@ struct Options {
     no_wait: bool,
     font: Option<String>,
     font_size: Option<u16>,
+    renderer: Option<RendererKind>,
     socket: Option<PathBuf>,
 }
 
@@ -136,6 +140,12 @@ fn parse_args() -> Result<Option<Options>> {
                 options.font_size =
                     Some(size.ok_or_else(|| anyhow!("--font-size needs a number from 4 to 200"))?);
             }
+            "--renderer" => {
+                let kind = value("cpu or gpu")?;
+                let kind = kind.to_str().and_then(RendererKind::parse);
+                options.renderer =
+                    Some(kind.ok_or_else(|| anyhow!("--renderer needs cpu or gpu"))?);
+            }
             _ => bail!("unknown option `{flag}`\n{USAGE}"),
         }
     }
@@ -167,11 +177,13 @@ struct Quiet;
 struct ScaleListener;
 
 struct App {
+    /// Before the window, so that it is dropped first: a GPU's surface
+    /// must be gone before the surface of the window that it is on.
+    output: Output,
     registry_state: RegistryState,
     seat_state: SeatState,
     output_state: OutputState,
     shm: Shm,
-    presenter: ShmPresenter,
     window: Window,
     /// Present if the compositor supports fractional scaling.
     viewport: Option<WpViewport>,
@@ -188,7 +200,6 @@ struct App {
     modifiers: Modifiers,
     loop_handle: LoopHandle<'static, App>,
 
-    renderer: Renderer,
     /// Font size at scale 1, in pixels.
     font_size: f32,
     /// Output scale in 120ths.
@@ -235,8 +246,8 @@ impl App {
         let Some((width, height)) = self.buffer_size() else {
             return;
         };
-        self.renderer.resize(width, height);
-        let grid = self.renderer.grid_size(width, height);
+        self.output.resize(width, height);
+        let grid = self.output.grid_size(width, height);
         if grid != self.grid {
             self.grid = grid;
             self.send(InputEvent::Resize {
@@ -252,7 +263,7 @@ impl App {
             return;
         }
         self.scale = scale;
-        self.renderer
+        self.output
             .set_font_size(self.font_size * scale as f32 / SCALE_DENOMINATOR as f32);
         self.relayout();
     }
@@ -268,13 +279,9 @@ impl App {
 
     fn draw(&mut self) {
         self.needs_draw = false;
-        let Some((width, height)) = self.buffer_size() else {
+        if self.buffer_size().is_none() {
             return;
-        };
-        let Some(damage) = self.renderer.paint() else {
-            return;
-        };
-
+        }
         let surface = self.window.wl_surface();
         match (&self.viewport, self.size) {
             // The buffer is in device pixels; the viewport says how large
@@ -285,16 +292,27 @@ impl App {
             }
             _ => surface.set_buffer_scale((self.scale / SCALE_DENOMINATOR).max(1) as i32),
         }
-        if !self
-            .presenter
-            .present(surface, (width, height), self.renderer.pixels(), damage)
-        {
+        // The compositor answers a frame callback when it wants the next
+        // frame. Until then further changes are collected rather than
+        // drawn. The callback is part of what a commit carries.
+        let commits = self.output.commits();
+        if commits {
+            surface.frame(&self.qh, FrameCallbackData(surface.clone()));
+        }
+        let shown = match self.output.show(&self.shm, surface) {
+            Ok(shown) => shown,
+            Err(error) => {
+                eprintln!("amacs-gui: {error:#}");
+                false
+            }
+        };
+        if !shown {
             return;
         }
-        // The compositor answers when it wants the next frame. Until then
-        // further changes are collected rather than drawn.
-        surface.frame(&self.qh, FrameCallbackData(surface.clone()));
-        self.window.commit();
+        if !commits {
+            surface.frame(&self.qh, FrameCallbackData(surface.clone()));
+            self.window.commit();
+        }
         self.frame_pending = true;
     }
 
@@ -307,7 +325,7 @@ impl App {
     fn handle_server(&mut self, message: FromServer) {
         match message {
             FromServer::Message(ServerMsg::Draw(ops)) => {
-                if self.renderer.apply(&ops) {
+                if self.output.apply(&ops) {
                     self.request_draw();
                 }
             }
@@ -406,13 +424,21 @@ fn run() -> Result<ExitCode> {
     window.set_app_id("amacs");
     window.commit();
 
-    let renderer = Renderer::new(&family, font_size);
-    let (cell_w, cell_h) = renderer.cell_size();
+    let kind = options
+        .renderer
+        .or_else(|| RendererKind::parse(&std::env::var("AMACS_RENDERER").ok()?))
+        .unwrap_or_default();
+    let output = Output::new(
+        kind,
+        Fonts::new(&family, font_size),
+        &wayland,
+        window.wl_surface(),
+    );
+    let (cell_w, cell_h) = output.cell_size();
     let initial = (
         u32::from(INITIAL_GRID.0) * cell_w,
         u32::from(INITIAL_GRID.1) * cell_h,
     );
-    let presenter = ShmPresenter::new(&shm, initial)?;
 
     // The server is read on its own thread and its messages are handed to
     // the event loop.
@@ -434,11 +460,11 @@ fn run() -> Result<ExitCode> {
         .map_err(|error| anyhow!("cannot watch the server connection: {error}"))?;
 
     let mut app = App {
+        output,
         registry_state: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
         output_state: OutputState::new(&globals, &qh),
         shm,
-        presenter,
         window,
         viewport,
         keyboard: None,
@@ -448,7 +474,6 @@ fn run() -> Result<ExitCode> {
         dragging: None,
         modifiers: Modifiers::default(),
         loop_handle,
-        renderer,
         font_size,
         scale: SCALE_DENOMINATOR,
         size: None,
@@ -668,7 +693,7 @@ impl PointerHandler for App {
         for event in events {
             // The pointer is in surface units; cells are in buffer pixels.
             let scale = f64::from(self.scale) / f64::from(SCALE_DENOMINATOR);
-            let (cell_w, cell_h) = self.renderer.cell_size();
+            let (cell_w, cell_h) = self.output.cell_size();
             let cell = |position: f64, size: u32, count: u16| {
                 let index = (position.max(0.0) * scale / f64::from(size.max(1))) as u32;
                 index.min(u32::from(count.saturating_sub(1))) as u16

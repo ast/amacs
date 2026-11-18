@@ -17,6 +17,8 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
+    # libloading, through which Vulkan and libwayland are loaded.
+    "ISC",
     "MIT",
     "MPL-2.0",
     "Unicode-3.0",
