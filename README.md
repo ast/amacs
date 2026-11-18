@@ -290,7 +290,9 @@ directory, `b` goes to a directory of the `dired-quick-access` option and
 It works with the pointer too: a second press on a file opens it,
 `C-<mouse-1>` and `S-<mouse-1>` mark, the button for menus lists what can be
 done, and files are dragged into a directory of a listing or over to
-another listing, which moves them, or copies them with Control held.
+another listing, which moves them, or copies them with Control held. A
+press on a part of the directory's name in the first line goes up to that
+directory, and so does the back button of a mouse, one level at a time.
 
 **Git**: `C-x g` shows the status of the repository of the current buffer,
 in sections that `TAB` folds. `s` and `u` stage and unstage the file or hunk

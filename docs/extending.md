@@ -95,6 +95,7 @@ What is done with the pointer becomes keys, bound like any others:
 | Key | When |
 |---|---|
 | `<mouse-1>`, `<mouse-2>`, `<mouse-3>` | A button is pressed: the main one, the middle one, the one for menus |
+| `<mouse-8>`, `<mouse-9>` | The buttons at the side of a mouse, for going back and forward |
 | `<double-mouse-1>`, `<triple-mouse-1>` | It is pressed again in quick succession at the same place |
 | `<motion-mouse-1>` | The pointer comes to another char cell with the button held |
 | `<drag-mouse-1>` | The button is let go after the pointer has moved |
@@ -184,6 +185,11 @@ directory in a listing, or a listing itself, in this window or another.
 They are moved, or copied if Control is held when the button is let go,
 after a question that the `dired-confirm-drop` option turns off. A file
 let go over a window that shows something else is visited there.
+
+The first line, which names the directory, leads upward: a press on a part
+of the name shows that directory, and files let go over a part are moved
+there. The button at the side of a mouse that goes back, `<mouse-8>`, shows
+the directory above.
 
 Its parts are there for other code: `(dired-open dir)`,
 `(dired-file-at-point)`, `(dired-marked-files)`, `(dired-refresh)`.

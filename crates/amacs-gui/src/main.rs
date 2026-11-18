@@ -660,12 +660,16 @@ impl SeatHandler for App {
 const WHEEL_LINES: i32 = 3;
 /// The number that the editor gives a button of a mouse, from the one
 /// that Linux gives it: 1 for the main button, 2 for the middle one and 3
-/// for the one for menus.
+/// for the one for menus, 8 and 9 for those at the side that go back and
+/// forward.
 fn button_number(button: u32) -> Option<u8> {
     match button {
         0x110 => Some(1),
         0x112 => Some(2),
         0x111 => Some(3),
+        // The buttons at the side, numbered as X numbers them.
+        0x113 => Some(8),
+        0x114 => Some(9),
         _ => None,
     }
 }

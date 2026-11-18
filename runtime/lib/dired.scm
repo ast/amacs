@@ -23,6 +23,7 @@ directory and a name for it.")
 were dragged with the pointer.")
 
 (set-face! 'dired-header 'bold #t)
+(set-face! 'dired-header-part 'bold #t 'underline #t)
 (set-face! 'dired-directory 'fg 'blue 'bold #t)
 (set-face! 'dired-symlink 'fg 'cyan)
 (set-face! 'dired-executable 'fg 'green)
@@ -190,7 +191,15 @@ the buffer is not one of its own."
         (when face (set! faces (cons (list at end face) faces)))
         (set! parts (cons text parts))
         (set! at end)))
-    (emit! (abbreviate-file-name (dired-state-directory state)) 'dired-header)
+    ;; The parts of the directory's name are places to go with the pointer,
+    ;; and look it.
+    (let loop ((parts (string-split (abbreviate-file-name (dired-state-directory state))
+                                    #\/))
+               (first? #t))
+      (unless (null? parts)
+        (unless first? (emit! "/" 'dired-header))
+        (unless (string-null? (car parts)) (emit! (car parts) 'dired-header-part))
+        (loop (cdr parts) #f)))
     (emit! (string-append
             ":"
             (if (dired-state-filter state)
@@ -642,6 +651,39 @@ of the file manager is offered as where to."
          (< index (vector-length (dired-state-rows state)))
          index)))
 
+;; The directory that a part of the first line names, which shows the
+;; directory of the listing: for a position in `~/src/amacs`, that is ~,
+;; ~/src or ~/src/amacs. #f for positions that are not in a part.
+(define (%dired-header-directory state pos)
+  (let* ((text (abbreviate-file-name (dired-state-directory state)))
+         (length (string-length text)))
+    (and (< pos length)
+         (let* ((end (or (string-search text "/" pos) length))
+                ;; The bar after a part belongs to it; the first one of a
+                ;; full name is the top directory.
+                (end (if (and (= end pos) (> pos 0)) pos end)))
+           (expand-file-name (if (= end 0) "/" (substring text 0 end)))))))
+
+;; Shows the directory that the part of the first line under a position
+;; names, with point on where one came from. Returns whether the position
+;; is in the first line.
+(define (%dired-follow-header pos)
+  (let* ((state (dired-state))
+         (from (dired-state-directory state))
+         (to (and (= (line-number-at-pos pos) 1)
+                  (%dired-header-directory state pos))))
+    (when (and to (not (equal? (%dired-without-slash to) (%dired-without-slash from))))
+      (let* ((to (%dired-without-slash to))
+             (prefix (if (equal? to "/") "/" (string-append to "/")))
+             (below (and (string-prefix? prefix from)
+                         (car (string-split
+                               (substring from (string-length prefix) (string-length from))
+                               #\/)))))
+        (if below
+            (dired-open to (%dired-join to below))
+            (dired-open to))))
+    (= (line-number-at-pos pos) 1)))
+
 ;; Puts point on the file where the button was pressed. Returns whether
 ;; there is a file there.
 (define (%dired-goto-press)
@@ -654,9 +696,12 @@ of the file manager is offered as where to."
     index))
 
 (define-command (dired-mouse-select)
-  "Go to the file that the pointer is at."
+  "Go to the file that the pointer is at. On the first line, which names
+the directory, show the directory that the part under the pointer names."
   (set! %dired-drag #f)
-  (%dired-goto-press))
+  (let ((press (mouse-press-position)))
+    (unless (and press (%dired-follow-header (cadr press)))
+      (%dired-goto-press))))
 
 (define-command (dired-mouse-open)
   "Visit the file that the pointer is at; a directory is shown in the file
@@ -736,6 +781,12 @@ marked files if it is one of them."
                                (%dired-row-index-at state (cadr at))))
                       (row (and index (vector-ref (dired-state-rows state) index))))
                  (cond
+                  ;; The parts of the first line stand for the directories
+                  ;; above this one.
+                  [(with-selected-window window
+                     (and (= (line-number-at-pos (cadr at)) 1)
+                          (%dired-header-directory state (cadr at))))
+                   => (lambda (directory) (list window directory #f))]
                   [(not row) (list window (dired-state-directory state) #f)]
                   [(eq? (dired-row-kind row) 'directory)
                    (list window (dired-row-path row) index)]
@@ -837,7 +888,7 @@ shows something else is visited there."
    ("<double-mouse-1>" dired-mouse-open)
    ("<mouse-2>" dired-mouse-open-other-window)
    ("C-<mouse-1>" dired-mouse-toggle-mark) ("S-<mouse-1>" dired-mouse-mark-range)
-   ("<mouse-3>" dired-mouse-menu)
+   ("<mouse-3>" dired-mouse-menu) ("<mouse-8>" dired-up-directory)
    ("<motion-mouse-1>" dired-mouse-drag) ("<drag-mouse-1>" dired-mouse-drop)))
 
 (global-set-key "C-x d" 'dired)

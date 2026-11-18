@@ -455,3 +455,45 @@ fn files_are_dragged_from_one_window_to_another() {
         h.screen.row(0)
     );
 }
+
+#[test]
+fn the_first_line_leads_to_the_directories_above() {
+    let (dir, mut h) = setup();
+    let root = dir.path();
+    let none = amacs_proto::Mods::empty();
+    h.eval("(set-option! 'dired-confirm-drop #f)");
+    open(&mut h, &root.join("sub"));
+    let top = shown(&mut h, root);
+    let sub = format!("{top}/sub");
+    assert_eq!(h.screen.row(0), format!("{sub}:"));
+    // The last part is where one is; past the name there is nothing.
+    let last = sub.chars().count() as u16 - 1;
+    h.press("<mouse-1>", last, 0)
+        .press("<mouse-1>", last + 5, 0);
+    assert_eq!(h.screen.row(0), format!("{sub}:"));
+
+    // A file is dragged up to a part of the name.
+    let parent = top.chars().count() as u16 - 1;
+    h.press("<mouse-1>", 30, 1).drag_to(parent, 0);
+    assert_eq!(h.echo(), format!("Move inner.txt to {top}/"));
+    h.release(parent, 0, none);
+    assert!(root.join("inner.txt").exists(), "{}", h.echo());
+    assert!(!root.join("sub/inner.txt").exists());
+
+    // A press on a part goes there, with point on where one came from.
+    h.press("<mouse-1>", parent, 0);
+    assert_eq!(h.screen.row(0), format!("{top}:"));
+    assert_eq!(at_point(&mut h), "\"sub\"");
+    // Several levels at once, to the top, and the bar counts as its part.
+    open(&mut h, &root.join("sub"));
+    h.press("<mouse-1>", 0, 0);
+    let first = h.eval("(abbreviate-file-name (dired-directory))");
+    assert!(first == "\"/\"" || first == "\"~\"", "{first}");
+
+    // The button at the side of a mouse goes up.
+    open(&mut h, &root.join("sub"));
+    assert_eq!(h.eval("(key-binding \"<mouse-8>\")"), "dired-up-directory");
+    h.press("<mouse-8>", 30, 5);
+    assert_eq!(h.screen.row(0), format!("{top}:"));
+    assert_eq!(at_point(&mut h), "\"sub\"");
+}
