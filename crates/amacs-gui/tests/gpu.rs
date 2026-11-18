@@ -180,3 +180,78 @@ fn more_glyphs_than_the_atlas_holds_are_still_drawn() {
         pair.check("a page of large glyphs");
     }
 }
+
+/// Times the work a keystroke and a page of scrolling cause in each
+/// backend at 4K. Run with
+/// `cargo test --release -p amacs-gui --test gpu -- --ignored --nocapture timing`.
+///
+/// For the CPU that is painting and copying the picture to where the
+/// compositor reads it; for the GPU, building the frame and the GPU
+/// drawing it. What the compositor then does with either is not counted.
+#[test]
+#[ignore = "a measurement, not a check"]
+fn timing_of_both_backends_at_4k() {
+    use std::time::{Duration, Instant};
+
+    let Some(mut pair) = Pair::new(80, 24) else {
+        return;
+    };
+    let (cell_w, cell_h) = pair.cpu.cell_size();
+    let (cols, rows) = ((3840 / cell_w) as u16, (2160 / cell_h) as u16);
+    pair.editor.handle_event(InputEvent::Resize { cols, rows });
+    pair.resize(3840, 2160);
+    // Every line is another, so that a page of scrolling changes every row.
+    let text: String = (0..usize::from(rows) * 6)
+        .map(|n| {
+            format!(
+                "let value_{n} = compute(a, b) != other && flag >= {n}; // comment text here, \
+                 and more of it to fill a wide window with glyphs from edge to edge of a 4K screen\n"
+            )
+        })
+        .collect();
+    pair.editor.handle_event(InputEvent::Paste(text));
+    pair.keys("M-<");
+    pair.check("a full screen");
+
+    let mut canvas = vec![0u8; 3840 * 2160 * 4];
+    let mut measure = |pair: &mut Pair, rounds: u32, act: &dyn Fn(&mut Pair, u32)| {
+        let (mut cpu, mut gpu) = (Duration::ZERO, Duration::ZERO);
+        for round in 0..rounds {
+            act(pair, round);
+            let ops = pair.editor.redisplay();
+            let start = Instant::now();
+            pair.cpu.apply(&ops);
+            pair.cpu.paint();
+            for (bytes, pixel) in canvas
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(pair.cpu.pixels())
+            {
+                *bytes = pixel.to_le_bytes();
+            }
+            cpu += start.elapsed();
+            let start = Instant::now();
+            pair.gpu.apply(&ops);
+            pair.gpu.paint();
+            pair.gpu.backend().finish().unwrap();
+            gpu += start.elapsed();
+        }
+        (cpu / rounds, gpu / rounds)
+    };
+    let typed = measure(&mut pair, 200, &|pair, round| {
+        let c = char::from(b'a' + (round % 26) as u8);
+        pair.editor.handle_event(InputEvent::Key(Key::char(c)));
+    });
+    let scrolled = measure(&mut pair, 40, &|pair, round| {
+        pair.keys(if round % 8 < 4 { "C-v" } else { "M-v" });
+    });
+    eprintln!(
+        "3840x2160, {cols}x{rows} cells, on {}\n  keystroke: CPU {:?}, GPU {:?}\n  page scroll: CPU {:?}, GPU {:?}",
+        pair.gpu.backend().adapter(),
+        typed.0,
+        typed.1,
+        scrolled.0,
+        scrolled.1,
+    );
+}

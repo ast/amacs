@@ -482,6 +482,15 @@ impl Gpu {
         })
     }
 
+    /// Waits until the GPU has done all that it was asked to, as for
+    /// measuring how long that takes.
+    pub fn finish(&self) -> Result<()> {
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .context("the GPU did not finish")?;
+        Ok(())
+    }
+
     /// The name of the GPU and how it is driven, for a person.
     pub fn adapter(&self) -> &str {
         &self.adapter
