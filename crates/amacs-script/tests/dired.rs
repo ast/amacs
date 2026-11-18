@@ -590,3 +590,29 @@ fn a_large_file_is_asked_about_in_the_file_manager() {
     h.keys("RET y");
     assert!(h.mode_line().contains("big.log"), "{}", h.mode_line());
 }
+
+#[test]
+fn the_directory_of_the_current_file_is_a_key_away() {
+    let (dir, mut h) = setup();
+    let root = dir.path();
+    let top = shown(&mut h, root);
+    h.eval(&format!(
+        "(find-file {:?})",
+        root.join("sub/inner.txt").display().to_string()
+    ));
+    h.keys("C-x C-j");
+    assert_eq!(h.screen.row(0), format!("{top}/sub:"));
+    assert_eq!(at_point(&mut h), "\"inner.txt\"");
+    // From a listing, the same key goes up, with point on where one was.
+    h.keys("C-x C-j");
+    assert_eq!(h.screen.row(0), format!("{top}:"));
+    assert_eq!(at_point(&mut h), "\"sub\"");
+    // A buffer without a file has a working directory.
+    h.eval(r#"(switch-to-buffer "*scratch*")"#);
+    h.eval(&format!(
+        "(set-buffer-directory! {:?})",
+        root.join("empty").display().to_string()
+    ));
+    h.keys("C-x C-j");
+    assert_eq!(h.screen.row(0), format!("{top}/empty:"));
+}

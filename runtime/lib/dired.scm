@@ -925,4 +925,15 @@ shows something else is visited there."
    ("<mouse-3>" dired-mouse-menu) ("<mouse-8>" dired-up-directory)
    ("<motion-mouse-1>" dired-mouse-drag) ("<drag-mouse-1>" dired-mouse-drop)))
 
+(define-command (dired-jump)
+  "Show the directory that the file of the current buffer is in, with
+point on the file. In the file manager, show the directory above. A buffer
+without a file has its working directory shown."
+  (cond
+   [(hash-table-contains? %dired-buffers (buffer-name)) (dired-up-directory)]
+   [(buffer-file-name)
+    => (lambda (file) (dired-open (file-name-directory file) file))]
+   [else (dired-open (working-directory))]))
+
 (global-set-key "C-x d" 'dired)
+(global-set-key "C-x C-j" 'dired-jump)

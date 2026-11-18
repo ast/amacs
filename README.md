@@ -94,14 +94,14 @@ TOML, TSX, TypeScript and YAML. The grammars are compiled into the binary.
 Dockerfiles have a mode but no grammar.
 
 
-| Key | Does |
-|---|---|
-| `TAB` | Indent the line, or the lines of the active region |
-| `RET` | Start a new line, indented; trailing blanks on the old line go |
-| `C-M-\` | Indent the region |
-| `C-M-f`, `C-M-b` | Move over a bracketed expression, string or word |
-| `C-M-u`, `C-M-d`, `C-M-n` | Out of the enclosing list backward, into the next list, out forward |
-| `C-M-k`, `C-M-DEL`, `C-M-SPC` | Kill the expression after or before point; mark it |
+| Key                           | Does                                                                |
+| ----------------------------- | ------------------------------------------------------------------- |
+| `TAB`                         | Indent the line, or the lines of the active region                  |
+| `RET`                         | Start a new line, indented; trailing blanks on the old line go      |
+| `C-M-\`                       | Indent the region                                                   |
+| `C-M-f`, `C-M-b`              | Move over a bracketed expression, string or word                    |
+| `C-M-u`, `C-M-d`, `C-M-n`     | Out of the enclosing list backward, into the next list, out forward |
+| `C-M-k`, `C-M-DEL`, `C-M-SPC` | Kill the expression after or before point; mark it                  |
 
 How lines are indented depends on the language:
 
@@ -283,7 +283,8 @@ one. They are kept across sessions.
 ## Files and git
 
 **The file manager**: `C-x d`, or visiting a directory, lists it, with the
-keys of dired. `RET` visits, `^` goes up, `TAB` opens a directory in place,
+keys of dired, and `C-x C-j` lists the directory that the current file is
+in, with point on the file. `RET` visits, `^` goes up, `TAB` opens a directory in place,
 `/` narrows to the names that contain a text, `.` hides the dot files and
 `s` changes the order. `m`, `u`, `U` and `t` mark; `C` copies, `R` moves or
 renames and `D` deletes the marked files or the one at point, and with two
@@ -508,21 +509,21 @@ The language server tests run against a small server of their own
 
 ## Layout
 
-| Crate | Role |
-|---|---|
-| `amacs-text` | Rope, markers, undo tree |
-| `amacs-proto` | Keys, input events and draw operations shared with frontends |
-| `amacs-treesit` | Grammars, highlighting queries and indentation rules |
-| `amacs-lsp` | Language Server Protocol transport, positions and URIs |
-| `amacs-core` | Editor state, commands, keymaps, redisplay |
-| `amacs-tty` | Terminal frontend |
-| `amacs-server` | The `amacs` binary: standalone editor, server, batch mode |
-| `amacs-client` | The `amacsclient` binary and the connection code |
-| `amacs-gui` | The `amacs-gui` binary: the Wayland window and its renderer |
-| `amacs-scheme` | The editor's own Scheme: reader, compiler, virtual machine |
-| `amacs-script` | Editor primitives for Scheme, and the session that runs the two together |
-| `amacs-mcp` | The `amacs-mcp` binary: a Model Context Protocol server for language models |
-| `amacs-testkit` | Headless frontend for tests |
+| Crate           | Role                                                                        |
+| --------------- | --------------------------------------------------------------------------- |
+| `amacs-text`    | Rope, markers, undo tree                                                    |
+| `amacs-proto`   | Keys, input events and draw operations shared with frontends                |
+| `amacs-treesit` | Grammars, highlighting queries and indentation rules                        |
+| `amacs-lsp`     | Language Server Protocol transport, positions and URIs                      |
+| `amacs-core`    | Editor state, commands, keymaps, redisplay                                  |
+| `amacs-tty`     | Terminal frontend                                                           |
+| `amacs-server`  | The `amacs` binary: standalone editor, server, batch mode                   |
+| `amacs-client`  | The `amacsclient` binary and the connection code                            |
+| `amacs-gui`     | The `amacs-gui` binary: the Wayland window and its renderer                 |
+| `amacs-scheme`  | The editor's own Scheme: reader, compiler, virtual machine                  |
+| `amacs-script`  | Editor primitives for Scheme, and the session that runs the two together    |
+| `amacs-mcp`     | The `amacs-mcp` binary: a Model Context Protocol server for language models |
+| `amacs-testkit` | Headless frontend for tests                                                 |
 
 `runtime/` holds the part of the editor written in Scheme, and its tests.
 
