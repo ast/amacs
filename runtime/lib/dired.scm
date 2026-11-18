@@ -18,6 +18,11 @@ buffer, rather than leaving a buffer for each directory visited.")
   "Directories that the file manager goes to by a key: lists of the key, the
 directory and a name for it.")
 
+(define-option 'dired-open-program "xdg-open"
+  "The program that the file manager opens files with that are not text,
+such as pictures: it is given the name of the file. xdg-open hands the file
+to the program that the desktop uses for its kind.")
+
 (define-option 'dired-confirm-drop #t
   "Whether the file manager asks before it moves or copies the files that
 were dragged with the pointer.")
@@ -350,20 +355,48 @@ act on the files. Start it with M-x dired.")
 
 ;;; Moving about
 
+;; Hands files to the program of the dired-open-program option.
+(define (%dired-open-externally paths)
+  (let ((program (option 'dired-open-program)))
+    (for-each (lambda (path) (start-process program (list path))) paths)
+    (message "Opened " (%dired-describe paths) " with " program)))
+
+;; Visits a file that is no directory: in the editor if it is text, after
+;; a question if it is large, and else with another program. The editor
+;; reads a file in one go, and what is not text it could only show as
+;; nonsense.
+(define (%dired-visit path)
+  (cond
+   [(not (file-text? path)) (%dired-open-externally (list path))]
+   [(file-large? path)
+    (when (y-or-n? (string-append (file-name-nondirectory path) " is "
+                                  (%dired-size (file-size path)) "; open it anyway?"))
+      (find-file path #t))]
+   [else (find-file path)]))
+
 (define-command (dired-find-file)
-  "Visit the file on this line; a directory is shown in the file manager."
+  "Visit the file on this line; a directory is shown in the file manager.
+A file that is not text is opened with the program of the
+dired-open-program option."
   (let ((row (dired-row-at-point)))
     (if (eq? (dired-row-kind row) 'directory)
         (dired-open (dired-row-path row))
-        (find-file (dired-row-path row)))))
+        (%dired-visit (dired-row-path row)))))
+
+(define-command (dired-open-externally)
+  "Open the marked files, or the file on this line, with the program of
+the dired-open-program option, whatever they are."
+  (%dired-open-externally (dired-marked-files)))
 
 (define-command (dired-find-file-other-window)
   "Visit the file on this line in another window."
   (let ((row (dired-row-at-point)))
-    (select-other-window)
     (if (eq? (dired-row-kind row) 'directory)
-        (dired-open (dired-row-path row))
-        (find-file (dired-row-path row)))))
+        (begin (select-other-window) (dired-open (dired-row-path row)))
+        ;; What another program shows needs no window here.
+        (begin
+          (when (file-text? (dired-row-path row)) (select-other-window))
+          (%dired-visit (dired-row-path row))))))
 
 (define-command (dired-up-directory)
   "Show the directory that this one is in, with point on this one."
@@ -747,6 +780,7 @@ marked files if it is one of them."
                             '()
                             '(("o" "Open" dired-find-file)
                               ("O" "Open in another window" dired-find-file-other-window)
+                              ("E" "Open with the system's program" dired-open-externally)
                               ("m" "Mark or unmark" dired-mouse-toggle-mark)
                               ("c" "Copy to..." dired-do-copy)
                               ("r" "Move or rename to..." dired-do-rename)
@@ -860,7 +894,7 @@ shows something else is visited there."
                               (cadr drag)))]
          [(and (not directory) (null? (cdr paths)) (not (file-directory? (car paths))))
           (select-window (car target))
-          (find-file (car paths))]
+          (%dired-visit (car paths))]
          [else (message "Nothing was moved")])))))
 
 ;;; Keys
@@ -868,7 +902,7 @@ shows something else is visited there."
 (for-each
  (lambda (binding) (define-key 'dired-mode (car binding) (cadr binding)))
  '(("RET" dired-find-file) ("f" dired-find-file) ("e" dired-find-file)
-   ("o" dired-find-file-other-window)
+   ("o" dired-find-file-other-window) ("E" dired-open-externally)
    ("^" dired-up-directory) ("DEL" dired-up-directory)
    ("n" dired-next-line) ("p" dired-previous-line) ("SPC" dired-next-line)
    ("<down>" dired-next-line) ("<up>" dired-previous-line)

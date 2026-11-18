@@ -328,10 +328,48 @@ pub const API: &[ApiFn] = api! {
             ed.kill_buffer(id);
             Ok(Value::Void)
         };
-    "find-file" (1, Some(1)) "Visit a file in the selected window." =>
+    "find-file" (1, Some(2)) "Visit a file in the selected window. A file that is not text is an error, and so is one above the size of the large-file-threshold option, unless the second argument is given and not #f." =>
         |ed, args| {
             let path = expand_path(string(args, 0)?, ed.working_directory());
-            ed.find_file(&path)?;
+            if args.get(1).is_some_and(|anyway| *anyway != Value::Bool(false)) {
+                ed.find_file_anyway(&path)?;
+            } else {
+                ed.find_file(&path)?;
+            }
+            Ok(Value::Void)
+        };
+    "file-size" (1, Some(1)) "The size of a file in bytes." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            let meta = std::fs::metadata(&path)
+                .map_err(|error| CmdError::msg(format!("cannot look at {}: {error}", path.display())))?;
+            Ok(Value::Int(meta.len() as i64))
+        };
+    "file-text?" (1, Some(1)) "Whether a file looks like text: its start holds no NUL byte. Only the start is read. A file that cannot be read is an error." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            amacs_core::is_binary(&path)
+                .map(|binary| (!binary).into())
+                .map_err(|error| CmdError::msg(format!("cannot read {}: {error}", path.display())))
+        };
+    "file-large?" (1, Some(1)) "Whether a file is text above the size of the large-file-threshold option, which is read only when asked to in so many words." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            Ok(matches!(ed.file_kind(&path), amacs_core::FileKind::Large(_)).into())
+        };
+    "start-process" (2, Some(2)) "Start a program, with its arguments as a list of strings, and leave it to itself: nothing waits for it and what it writes is thrown away. For programs that show something of their own. An error if it cannot be started." =>
+        |ed, args| {
+            let Value::List(given) = &args[1] else {
+                return Err(wrong_type(1, "a list of strings", &args[1]));
+            };
+            let arguments = given
+                .iter()
+                .map(|arg| match arg {
+                    Value::Str(text) => Ok(text.clone()),
+                    other => Err(wrong_type(1, "a list of strings", other)),
+                })
+                .collect::<CmdResult<Vec<String>>>()?;
+            ed.start_process(string(args, 0)?, &arguments)?;
             Ok(Value::Void)
         };
     "%write-buffer" (1, Some(1)) "Write the current buffer to a file and make that its file, without running before-save-hook." =>

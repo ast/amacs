@@ -101,7 +101,10 @@ impl Editor {
             if edits.is_empty() {
                 continue;
             }
-            let id = self.visit_file(&path).map_err(|error| error.to_string())?.0;
+            let id = self
+                .visit_file(&path, false)
+                .map_err(|error| error.to_string())?
+                .0;
             self.lsp_apply_text_edits(id, &edits, encoding)
                 .map_err(|error: CmdError| error.to_string())?;
             changed += 1;

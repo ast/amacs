@@ -12,7 +12,7 @@ pub fn find_file(ed: &mut Editor) -> CmdResult {
     let dir = default_directory(ed);
     let base = ed.working_directory().to_owned();
     ed.read_string("Find file: ", &dir, Completion::File, move |ed, input| {
-        ed.find_file(&expand_path(&input, &base))
+        ed.find_file_asking(&expand_path(&input, &base))
     })
 }
 

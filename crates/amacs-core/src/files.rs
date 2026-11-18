@@ -1,7 +1,7 @@
 //! Visiting and saving files.
 
 use std::fs::{self, File};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -10,7 +10,7 @@ use amacs_text::Text;
 use crate::buffer::{Buffer, BufferId};
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
-use crate::script::Value;
+use crate::script::{LARGE_FILE_THRESHOLD, Value};
 
 /// Expands a leading `~` and resolves a relative path against `base`,
 /// without touching the file system.
@@ -32,6 +32,44 @@ pub fn abbreviate_path(path: &Path) -> String {
         Some(rest) => format!("~/{}", rest.display()),
         None => path.display().to_string(),
     }
+}
+
+/// A size in bytes as a person reads it: `812`, `4.2K`, `700M`.
+pub fn format_size(bytes: u64) -> String {
+    let mut size = bytes as f64;
+    let mut units = ["", "K", "M", "G", "T"].into_iter();
+    let mut unit = units.next().unwrap_or("");
+    while size >= 1024.0 {
+        match units.next() {
+            Some(next) => unit = next,
+            None => break,
+        }
+        size /= 1024.0;
+    }
+    if unit.is_empty() || size >= 10.0 {
+        format!("{size:.0}{unit}")
+    } else {
+        format!("{size:.1}{unit}")
+    }
+}
+
+/// What a file is, as far as reading it into a buffer goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileKind {
+    /// Text of a size that is read without a thought, or no file yet.
+    Text,
+    /// Not text: reading it would show nothing of use.
+    Binary,
+    /// Text of so many bytes that reading it holds the editor up.
+    Large(u64),
+}
+
+/// Whether a file is something other than text, by what git and grep go
+/// by: a NUL byte near its start. Only the start is read.
+pub fn is_binary(path: &Path) -> io::Result<bool> {
+    let mut start = Vec::with_capacity(8192);
+    File::open(path)?.take(8192).read_to_end(&mut start)?;
+    Ok(start.contains(&0))
 }
 
 /// Reads a file as UTF-8. Text that is not valid UTF-8 is decoded lossily;
@@ -295,6 +333,53 @@ impl Editor {
     /// Shows `path` in the selected window, reading it if no buffer visits it
     /// yet. A path that does not exist gives an empty buffer for a new file.
     pub fn find_file(&mut self, path: &Path) -> CmdResult {
+        self.find_file_with(path, false)
+    }
+
+    /// Visits a file as [`Editor::find_file`] does, also if it is so large
+    /// that reading it takes a while.
+    pub fn find_file_anyway(&mut self, path: &Path) -> CmdResult {
+        self.find_file_with(path, true)
+    }
+
+    /// Visits a file for a person who can be asked: about a large one, a
+    /// question comes first.
+    pub fn find_file_asking(&mut self, path: &Path) -> CmdResult {
+        let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        if self.buffer_visiting(&resolved).is_none()
+            && let FileKind::Large(size) = self.file_kind(&resolved)
+        {
+            let name = abbreviate_path(&resolved);
+            self.ask_yes_no(
+                format!("{name} is {}; open it anyway?", format_size(size)),
+                move |ed| ed.find_file_anyway(&resolved),
+            );
+            return Ok(());
+        }
+        self.find_file(path)
+    }
+
+    /// What a file is, as far as reading it into a buffer goes. A file
+    /// that cannot be looked at counts as text: reading it says why.
+    pub fn file_kind(&self, path: &Path) -> FileKind {
+        let Ok(meta) = fs::metadata(path) else {
+            return FileKind::Text;
+        };
+        if !meta.is_file() {
+            return FileKind::Text;
+        }
+        if is_binary(path).unwrap_or(false) {
+            return FileKind::Binary;
+        }
+        match self.option(LARGE_FILE_THRESHOLD) {
+            Ok(Value::Int(megabytes)) if meta.len() > (megabytes.max(0) as u64) << 20 => {
+                FileKind::Large(meta.len())
+            }
+            _ => FileKind::Text,
+        }
+    }
+
+    fn find_file_with(&mut self, path: &Path, anyway: bool) -> CmdResult {
         // Directories are shown by the file manager, which is Scheme.
         if path.is_dir() && self.has_script_host() {
             let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
@@ -304,7 +389,7 @@ impl Editor {
             );
             return Ok(());
         }
-        let (id, note) = self.visit_file(path)?;
+        let (id, note) = self.visit_file(path, anyway)?;
         self.switch_to_buffer(id);
         if let Some(note) = note {
             self.message(note);
@@ -322,9 +407,14 @@ impl Editor {
     /// yet, without showing it. Also returns something to tell the user
     /// about a file just read, if there is anything. The hooks that choose
     /// the buffer's mode run when it is first shown.
+    ///
+    /// A file that is not text is not read, and one above the size of the
+    /// `large-file-threshold` option only if `anyway`: reading happens in
+    /// one go and would hold the editor up, for nothing in the first case.
     pub(crate) fn visit_file(
         &mut self,
         path: &Path,
+        anyway: bool,
     ) -> CmdResult<(BufferId, Option<&'static str>)> {
         let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         if let Some(id) = self.buffer_visiting(&path) {
@@ -335,6 +425,24 @@ impl Editor {
                 "{} is a directory",
                 abbreviate_path(&path)
             )));
+        }
+        match self.file_kind(&path) {
+            FileKind::Binary => {
+                let size = fs::metadata(&path).map_or(0, |meta| meta.len());
+                return Err(CmdError::msg(format!(
+                    "{} is not text ({})",
+                    abbreviate_path(&path),
+                    format_size(size)
+                )));
+            }
+            FileKind::Large(size) if !anyway => {
+                return Err(CmdError::msg(format!(
+                    "{} is {}, above large-file-threshold",
+                    abbreviate_path(&path),
+                    format_size(size)
+                )));
+            }
+            FileKind::Large(_) | FileKind::Text => {}
         }
         let name = path.file_name().map_or_else(
             || path.display().to_string(),

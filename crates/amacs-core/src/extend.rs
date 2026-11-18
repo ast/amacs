@@ -173,6 +173,44 @@ impl Editor {
         id
     }
 
+    /// Starts a program and leaves it to itself: nothing is written to it,
+    /// what it writes is thrown away, and when it ends is not known. For
+    /// programs that show something of their own, such as a viewer. It runs
+    /// in the working directory with the environment of its project, in a
+    /// process group of its own, so that what is done to the editor's is
+    /// not done to it.
+    pub fn start_process(&mut self, program: &str, args: &[String]) -> CmdResult {
+        use std::os::unix::process::CommandExt;
+        let directory = self.working_directory().to_owned();
+        let environment = match self.environment(&directory) {
+            Some(EnvState::Ready(environment)) => environment,
+            _ => Vec::new(),
+        };
+        let mut command = Command::new(program);
+        command.args(args).process_group(0);
+        if directory.is_dir() {
+            command.current_dir(&directory);
+        }
+        for (name, value) in &environment {
+            match value {
+                Some(value) => command.env(name, value),
+                None => command.env_remove(name),
+            };
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command
+            .spawn()
+            .map_err(|error| CmdError::msg(format!("cannot run {program}: {error}")))?;
+        // Someone has to wait for it, or it stays as a zombie when it ends.
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(())
+    }
+
     /// Runs a program without waiting for it: returns a promise that
     /// resolves to a list of its exit status, what it wrote to standard
     /// output, and what it wrote to standard error. The status is `#f` if

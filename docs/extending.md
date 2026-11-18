@@ -165,6 +165,16 @@ left to `cp`, through `run-process`, so that it does not hold the editor up.
 `(read-file-name "Prompt: ")` and `(read-directory-name "Prompt: ")` ask for
 names with completion.
 
+A file is read into a buffer in one go, so the editor looks first:
+`(find-file name)` is an error for a file that is not text, and for one
+above the `large-file-threshold` option (megabytes; 50 unless changed, `#f`
+for no limit) unless called as `(find-file name #t)`. `(file-text? name)`
+and `(file-large? name)` say beforehand, from the start of the file and
+its size, and `(file-size name)` gives the bytes. What the editor should
+not read, another program can show: `(start-process "xdg-open" (list
+name))` starts a program and leaves it to itself, where `run-process`
+waits for it to end.
+
 ## The file manager
 
 `C-x d`, or visiting a directory, lists it; `runtime/lib/dired.scm` is the
@@ -175,6 +185,12 @@ directory in place, `/` narrows to names that contain a text, `.` hides the
 dot files, `s` changes the order, `b` goes to a directory of the
 `dired-quick-access` option and `r` to one visited before. With two listings
 side by side, copying and moving offer the other one as where to.
+
+A file that is not text, such as a picture or a disc image, is not read:
+`RET` hands it to the program of the `dired-open-program` option,
+`xdg-open` unless changed, which opens it with what the desktop uses for
+its kind. `E` does that for any file, text or not. A text file above
+`large-file-threshold` is opened after a question.
 
 With the pointer: a press goes to a file and a second one opens it,
 `C-<mouse-1>` marks or unmarks, `S-<mouse-1>` marks from the file point is on

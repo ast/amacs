@@ -23,6 +23,9 @@ Working now:
 - Kill ring, region, yank and yank-pop
 - Minibuffer with a candidate list that narrows as you type (below)
 - Atomic saves, with a warning if the file changed on disk
+- Files are looked at before they are read: one that is not text is
+  refused, and one above 50 MB (`large-file-threshold`) is read after a
+  question
 - Line wrapping, tabs, wide characters, incremental redraw
 - Scheme: commands, key bindings, options, hooks, major and minor modes, an
   init file, prompts that suspend the command, and `C-g` to stop runaway code
@@ -286,6 +289,10 @@ renames and `D` deletes the marked files or the one at point, and with two
 listings side by side the other one is offered as where to. `+` makes a
 directory, `b` goes to a directory of the `dired-quick-access` option and
 `r` to one shown before.
+
+Opening a file that is not text, such as a picture or a disc image, hands
+it to `xdg-open` (the `dired-open-program` option), and `E` does that for
+any file.
 
 It works with the pointer too: a second press on a file opens it,
 `C-<mouse-1>` and `S-<mouse-1>` mark, the button for menus lists what can be

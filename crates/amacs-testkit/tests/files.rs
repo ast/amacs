@@ -364,6 +364,74 @@ fn killing_a_modified_file_buffer_asks_first() {
     assert_eq!(h.screen.row(6), " --  *scratch*   L1 C0  (Fundamental)");
 }
 
+#[test]
+fn a_file_that_is_not_text_is_not_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("disc.iso");
+    fs::write(&path, [b"CD001".as_slice(), &[0; 3000]].concat()).unwrap();
+
+    let mut h = harness();
+    visit(&mut h, &path);
+    assert!(
+        h.echo().ends_with("disc.iso is not text (2.9K)"),
+        "{}",
+        h.echo()
+    );
+    assert!(h.editor.find_buffer("disc.iso").is_none());
+    // The editor goes on as before.
+    h.type_text("still here");
+    assert_eq!(h.screen.row(0), "still here");
+}
+
+#[test]
+fn a_large_file_is_read_only_after_a_question() {
+    use amacs_core::Value;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("big.log");
+    fs::write(&path, "a line of a log\n".repeat(100_000)).unwrap();
+    let small = dir.path().join("small.log");
+    fs::write(&small, "little\n").unwrap();
+
+    let mut h = harness();
+    h.editor
+        .set_option("large-file-threshold", Value::Int(1))
+        .unwrap();
+    visit(&mut h, &path);
+    assert!(
+        h.echo()
+            .ends_with("big.log is 1.5M; open it anyway? (y or n)"),
+        "{}",
+        h.echo()
+    );
+    h.keys("n");
+    assert!(h.editor.find_buffer("big.log").is_none());
+    // Code that cannot ask gets an error instead of a long wait.
+    let error = h.editor.find_file(&path).unwrap_err().to_string();
+    assert!(
+        error.ends_with("big.log is 1.5M, above large-file-threshold"),
+        "{error}"
+    );
+
+    visit(&mut h, &path);
+    h.keys("y");
+    assert_eq!(h.screen.row(0), "a line of a log");
+    // Once it is in a buffer there is nothing to ask, and files below the
+    // limit are never asked about.
+    visit(&mut h, &small);
+    assert_eq!(h.screen.row(0), "little");
+    visit(&mut h, &path);
+    assert_eq!(h.screen.row(0), "a line of a log");
+
+    // Without a limit, nothing is asked.
+    h.editor
+        .set_option("large-file-threshold", Value::Bool(false))
+        .unwrap();
+    let other = dir.path().join("other.log");
+    fs::copy(&path, &other).unwrap();
+    visit(&mut h, &other);
+    assert!(h.editor.find_buffer("other.log").is_some());
+}
+
 /// A 100 MB file must open, edit at both ends, undo and save without delay.
 /// Run with `cargo test --release -- --ignored large_file`.
 #[test]
@@ -384,6 +452,10 @@ fn large_file_round_trip() {
     }
 
     let mut h = harness();
+    // This is about how long reading takes, not about being asked.
+    h.editor
+        .set_option("large-file-threshold", amacs_core::Value::Bool(false))
+        .unwrap();
     let start = Instant::now();
     visit(&mut h, &path);
     let opened = start.elapsed();

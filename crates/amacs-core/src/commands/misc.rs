@@ -744,7 +744,7 @@ pub fn find_file_other_window(ed: &mut Editor) -> CmdResult {
         Completion::File,
         move |ed, input| {
             super::windows::select_other_window(ed)?;
-            ed.find_file(&expand_path(&input, &base))
+            ed.find_file_asking(&expand_path(&input, &base))
         },
     )
 }

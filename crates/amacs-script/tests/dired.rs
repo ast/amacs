@@ -361,6 +361,9 @@ fn the_pointer_goes_to_files_opens_them_and_marks_them() {
     );
     h.keys("w");
     assert_eq!(h.echo(), "b.txt");
+    // The menu took rows from the window, which scrolled to keep point in
+    // sight; back to the top.
+    h.keys("M-<");
 
     // A second press opens: a directory here, a file in its buffer.
     h.press("<mouse-1>", 30, 2).press("<double-mouse-1>", 30, 2);
@@ -496,4 +499,94 @@ fn the_first_line_leads_to_the_directories_above() {
     h.press("<mouse-8>", 30, 5);
     assert_eq!(h.screen.row(0), format!("{top}:"));
     assert_eq!(at_point(&mut h), "\"sub\"");
+}
+
+/// A program that writes the names it is given to a file, as the program
+/// that opens files, and the file it writes to.
+fn recording_opener(h: &mut Harness, dir: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let (program, record) = (dir.join("opener"), dir.join("opened"));
+    std::fs::write(
+        &program,
+        format!("#!/bin/sh\necho \"$1\" >> {}\n", record.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    h.eval(&format!(
+        "(set-option! 'dired-open-program {:?})",
+        program.display().to_string()
+    ));
+    record
+}
+
+fn wait_for_record(record: &Path, wanted: &str) {
+    let start = std::time::Instant::now();
+    loop {
+        let found = std::fs::read_to_string(record).unwrap_or_default();
+        if found == wanted {
+            return;
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "the opener wrote {found:?}, not {wanted:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn files_that_are_not_text_open_with_another_program() {
+    let tools = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("a.iso"), [b"CD001".as_slice(), &[0; 64]].concat()).unwrap();
+    std::fs::write(root.join("b.html"), "<p>text</p>\n").unwrap();
+    let mut h = Harness::new(80, 12);
+    h.eval("(set-option! 'dired-icons #f)");
+    let record = recording_opener(&mut h, tools.path());
+    open(&mut h, root);
+
+    // RET and a second press of the button do the same.
+    h.keys("RET");
+    let iso = root.canonicalize().unwrap().join("a.iso");
+    wait_for_record(&record, &format!("{}\n", iso.display()));
+    assert!(h.echo().starts_with("Opened a.iso with "), "{}", h.echo());
+    assert!(h.mode_line().contains("(Dired)"), "{}", h.mode_line());
+    h.press("<mouse-1>", 30, 1).press("<double-mouse-1>", 30, 1);
+    wait_for_record(&record, &format!("{0}\n{0}\n", iso.display()));
+    assert_eq!(h.eval("(member \"a.iso\" (buffer-list))"), "#f");
+
+    // Text opens in the editor, unless the other program is asked for.
+    std::fs::remove_file(&record).unwrap();
+    h.keys("n E");
+    let html = root.canonicalize().unwrap().join("b.html");
+    wait_for_record(&record, &format!("{}\n", html.display()));
+    h.keys("RET");
+    assert!(h.mode_line().contains("b.html"), "{}", h.mode_line());
+
+    // A program that is not there is an error and no more.
+    h.keys("C-x k RET");
+    h.eval("(set-option! 'dired-open-program \"/nonexistent/opener\")");
+    h.keys("p RET");
+    assert!(
+        h.echo().contains("cannot run /nonexistent/opener"),
+        "{}",
+        h.echo()
+    );
+}
+
+#[test]
+fn a_large_file_is_asked_about_in_the_file_manager() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("big.log"), "a line of a log\n".repeat(100_000)).unwrap();
+    let mut h = Harness::new(80, 12);
+    h.eval("(set-option! 'dired-icons #f) (set-option! 'large-file-threshold 1)");
+    open(&mut h, root);
+    h.keys("RET");
+    assert_eq!(h.prompt(), "big.log is 1.5M; open it anyway? (y or n)");
+    h.keys("n");
+    assert!(h.mode_line().contains("(Dired)"), "{}", h.mode_line());
+    h.keys("RET y");
+    assert!(h.mode_line().contains("big.log"), "{}", h.mode_line());
 }

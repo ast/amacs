@@ -172,6 +172,7 @@ pub(crate) struct ScriptState {
 
 pub const FUNDAMENTAL_MODE: &str = "fundamental-mode";
 const TAB_WIDTH: &str = "tab-width";
+pub(crate) const LARGE_FILE_THRESHOLD: &str = "large-file-threshold";
 const FONT_FAMILY: &str = "font-family";
 const FONT_SIZE: &str = "font-size";
 const LINE_NUMBERS: &str = "line-numbers";
@@ -240,6 +241,11 @@ impl ScriptState {
                 "direnv-program",
                 Value::str("direnv"),
                 "The direnv program.",
+            ),
+            (
+                LARGE_FILE_THRESHOLD,
+                Value::Int(50),
+                "The size in megabytes above which a file is read only after a question, since reading it holds the editor up; #f for no limit.",
             ),
             (
                 "formatter",
