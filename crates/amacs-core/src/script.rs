@@ -162,6 +162,20 @@ pub(crate) struct ScriptState {
     promise_frames: HashMap<u64, crate::frame::FrameId>,
     /// The frame to go back to when the running call is done.
     restore_frame: Option<crate::frame::FrameId>,
+    /// The command that the running call is part of, also when the call
+    /// is code that waited and goes on.
+    running_command: Option<String>,
+    /// Promises that commands wait for, with the command: the code that
+    /// goes on when one is settled is still that command.
+    command_promises: HashMap<u64, String>,
+    /// Those of them that are for a program to finish. While there are
+    /// any, what is typed waits: it was typed for what the command will
+    /// show or ask when the program is done.
+    awaited_programs: std::collections::HashSet<u64>,
+    /// What was typed meanwhile, with the frame it was typed in.
+    held_input: std::collections::VecDeque<(crate::frame::FrameId, amacs_proto::InputEvent)>,
+    /// When to say that what is typed is waiting.
+    held_notice_due: Option<std::time::Instant>,
     /// Hooks that have functions, so that others cost nothing to run.
     active_hooks: std::collections::HashSet<String>,
     options: HashMap<String, OptionDef>,
@@ -362,6 +376,17 @@ impl Editor {
     /// after.
     pub fn take_script_call(&mut self) -> Option<ScriptCall> {
         let call = self.script.queue.pop_front()?;
+        // Code that goes on after waiting is part of the command that
+        // waited.
+        let settled = match (&call.target, call.args.first()) {
+            (ScriptTarget::Named("%promise-resolve" | "%promise-reject"), Some(Value::Int(id))) => {
+                let id = *id as u64;
+                self.script.awaited_programs.remove(&id);
+                self.script.command_promises.remove(&id)
+            }
+            _ => None,
+        };
+        self.script.running_command = call.command.clone().or(settled);
         if let Some(frame) = call.frame
             && frame != self.current_frame()
             && self.has_frame(frame)
@@ -380,6 +405,7 @@ impl Editor {
     }
 
     pub fn end_script(&mut self, call: &ScriptCall, outcome: ScriptOutcome) {
+        self.script.running_command = None;
         if let Some((buffer, tick)) = self.script.frame.take() {
             self.finish_command(buffer, tick, call.command.is_some());
         }
@@ -407,7 +433,101 @@ impl Editor {
         self.script
             .promise_frames
             .insert(self.script.next_promise, frame);
+        if let Some(command) = self.script.running_command.clone() {
+            self.script
+                .command_promises
+                .insert(self.script.next_promise, command);
+        }
         self.script.next_promise
+    }
+
+    // Typing ahead
+    //
+    // A command written in Scheme that runs a program gives up control
+    // while the program runs. What is typed then is meant for what the
+    // command does next, a question it asks or a buffer it shows, and so
+    // it waits until the command gets there, as it would if the command
+    // had blocked. C-g stops the waiting.
+
+    /// Marks a promise as one for a program to finish, if a command made
+    /// it: what is typed until it is settled waits.
+    pub(crate) fn await_program(&mut self, promise: u64) {
+        if self.script.command_promises.contains_key(&promise) {
+            self.script.awaited_programs.insert(promise);
+        }
+    }
+
+    /// The running command no longer keeps what is typed waiting, whatever
+    /// programs it goes on to run: for work that takes long and asks
+    /// nothing after it.
+    pub fn release_input(&mut self) {
+        self.script.running_command = None;
+    }
+
+    pub(crate) fn holds_input(&self) -> bool {
+        !self.script.awaited_programs.is_empty()
+    }
+
+    /// Keeps something typed until the command that is waiting for a
+    /// program has gone on.
+    pub(crate) fn hold_input(&mut self, event: amacs_proto::InputEvent) {
+        let frame = self.current_frame();
+        self.script.held_input.push_back((frame, event));
+        if self.script.held_notice_due.is_none() {
+            self.script.held_notice_due =
+                Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+        }
+    }
+
+    /// Gives up on the programs that commands wait for, as C-g asks: the
+    /// commands are left the way quitting a prompt leaves them, and what
+    /// was typed for them is dropped.
+    pub(crate) fn stop_waiting(&mut self) {
+        let awaited: Vec<u64> = self.script.awaited_programs.drain().collect();
+        for promise in awaited {
+            self.script.command_promises.remove(&promise);
+            self.reject_promise(promise);
+        }
+        self.script.held_input.clear();
+        self.script.held_notice_due = None;
+        self.message("Quit");
+    }
+
+    /// The next thing that was typed while a command waited, once nothing
+    /// waits any more and nothing is queued. The host handles it as if it
+    /// had been typed now, and asks again.
+    pub fn take_held_input(&mut self) -> Option<(crate::frame::FrameId, amacs_proto::InputEvent)> {
+        if self.holds_input() || !self.script.queue.is_empty() {
+            return None;
+        }
+        let held = self.script.held_input.pop_front();
+        if self.script.held_input.is_empty() {
+            self.script.held_notice_due = None;
+        }
+        held
+    }
+
+    pub(crate) fn held_notice_deadline(&self) -> Option<std::time::Instant> {
+        self.script.held_notice_due
+    }
+
+    /// Says, when typing has waited a while, what it waits for.
+    pub(crate) fn held_notice_poll(&mut self, now: std::time::Instant) {
+        if self.script.held_notice_due.is_none_or(|due| due > now) {
+            return;
+        }
+        self.script.held_notice_due = None;
+        let command = self
+            .script
+            .awaited_programs
+            .iter()
+            .find_map(|promise| self.script.command_promises.get(promise))
+            .cloned();
+        if let Some(command) = command
+            && !self.script.held_input.is_empty()
+        {
+            self.message(format!("Waiting for {command}; C-g stops waiting"));
+        }
     }
 
     fn settle_promise(&mut self, name: &'static str, id: u64, mut args: Vec<Value>) {

@@ -179,14 +179,24 @@ impl Session {
 
     /// Runs the Scheme calls that the editor has queued, including any that
     /// they queue in turn.
+    ///
+    /// When they are done, what was typed while a command waited for a
+    /// program is handled, a piece at a time, each with the calls that it
+    /// queues: the next piece may be for what the one before brought up.
     fn pump(&mut self) {
         loop {
-            let Some(call) = self.editor.borrow_mut().take_script_call() else {
+            let call = self.editor.borrow_mut().take_script_call();
+            if let Some(call) = call {
+                self.editor.borrow_mut().begin_script();
+                let outcome = self.host.run(&self.editor, &call);
+                self.editor.borrow_mut().end_script(&call, outcome);
+                continue;
+            }
+            let held = self.editor.borrow_mut().take_held_input();
+            let Some((frame, event)) = held else {
                 break;
             };
-            self.editor.borrow_mut().begin_script();
-            let outcome = self.host.run(&self.editor, &call);
-            self.editor.borrow_mut().end_script(&call, outcome);
+            self.editor.borrow_mut().handle_frame_event(frame, event);
         }
     }
 }

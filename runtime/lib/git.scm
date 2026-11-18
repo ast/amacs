@@ -619,6 +619,8 @@ is staged to the last without touching its message."
                            '(("p" "Push to the upstream, or to origin if there is none" push))))
          (state (%git-branch-state root)))
     (message "Pushing…")
+    ;; The network takes its time, and nothing is asked afterwards.
+    (release-input!)
     (if (cdr state)
         (apply git root "push" (cdr choice))
         (apply git root "push" "--set-upstream" "origin" (car state) (cdr choice)))
@@ -632,6 +634,8 @@ is staged to the last without touching its message."
                            '(("u" "Pull from the upstream" merge)
                              ("r" "Pull and rebase onto the upstream" rebase)))))
     (message "Pulling…")
+    ;; The network takes its time, and nothing is asked afterwards.
+    (release-input!)
     (if (eq? (car choice) 'rebase)
         (git root "pull" "--rebase")
         (git root "pull"))
@@ -645,6 +649,8 @@ is staged to the last without touching its message."
                            '(("f" "Fetch from the upstream's remote" one)
                              ("a" "Fetch from all remotes, and prune" all)))))
     (message "Fetching…")
+    ;; The network takes its time, and nothing is asked afterwards.
+    (release-input!)
     (if (eq? (car choice) 'all)
         (git root "fetch" "--all" "--prune")
         (git root "fetch"))

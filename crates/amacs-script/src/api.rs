@@ -357,6 +357,11 @@ pub const API: &[ApiFn] = api! {
             let path = expand_path(string(args, 0)?, ed.working_directory());
             Ok(matches!(ed.file_kind(&path), amacs_core::FileKind::Large(_)).into())
         };
+    "release-input!" (0, Some(0)) "From here on, the running command does not keep what is typed waiting while it runs programs. Without this, keys typed while a command waits for a program are handled when the command has gone on, since they may be for what it then asks or shows. For work that takes long and asks nothing after it." =>
+        |ed, _| {
+            ed.release_input();
+            Ok(Value::Void)
+        };
     "start-process" (2, Some(2)) "Start a program, with its arguments as a list of strings, and leave it to itself: nothing waits for it and what it writes is thrown away. For programs that show something of their own. An error if it cannot be started." =>
         |ed, args| {
             let Value::List(given) = &args[1] else {

@@ -218,6 +218,7 @@ impl Editor {
     /// runs in the working directory with the environment of its project.
     pub fn process_promise(&mut self, program: &str, args: &[String], input: String) -> u64 {
         let id = self.new_promise();
+        self.await_program(id);
         let directory = self.working_directory().to_owned();
         let environment = match self.environment(&directory) {
             Some(EnvState::Ready(environment)) => environment,

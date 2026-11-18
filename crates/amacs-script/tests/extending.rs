@@ -254,3 +254,57 @@ fn buttons_of_the_pointer_are_keys_that_scheme_binds() {
     assert_eq!(h.eval("(buffer-substring (mark) (point))"), "\"five\"");
     assert_eq!(h.eval("(key-binding \"<mouse-1>\")"), "mouse-set-point");
 }
+
+#[test]
+fn what_is_typed_while_a_command_runs_a_program_waits_for_the_command() {
+    let mut h = Harness::new(60, 10);
+    h.eval(
+        r#"(define-command (slow-question)
+             "Run a program, then ask for a key and insert it."
+             (run-process "sh" '("-c" "sleep 0.3"))
+             (insert "<" (read-key "Which? ") ">"))
+           (define-command (slow-switch)
+             "Run a program, then show another buffer."
+             (run-process "sh" '("-c" "sleep 0.3"))
+             (switch-to-buffer "elsewhere"))
+           (define-command (slow-in-the-background)
+             "Run a program that nothing waits for, then say so."
+             (release-input!)
+             (run-process "sh" '("-c" "sleep 0.3"))
+             (message "done in the background"))
+           (global-set-key "C-c q" 'slow-question)
+           (global-set-key "C-c s" 'slow-switch)
+           (global-set-key "C-c b" 'slow-in-the-background)"#,
+    );
+    // The key after the command is the answer to its question, though it
+    // was typed before the question was there; what follows is text.
+    h.keys("C-c q").type_text("xy");
+    assert_eq!(h.text(), "", "nothing yet: the program runs");
+    h.wait_until(|h| h.text() == "<x>y");
+
+    // What is typed for the buffer that a command will show goes there.
+    h.keys("C-c s").type_text("there");
+    h.wait_until(|h| h.mode_line().contains("elsewhere"));
+    assert_eq!(h.text(), "there");
+    h.eval(r#"(switch-to-buffer "*scratch*")"#);
+    assert_eq!(h.text(), "<x>y");
+
+    // C-g stops the waiting: the command is left and what was typed for
+    // it is dropped.
+    h.keys("C-c q").type_text("z").keys("C-g");
+    assert_eq!(h.echo(), "Quit");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    h.type_text("w");
+    assert_eq!(h.text(), "<x>yw");
+
+    // A command that lets go of the input does not hold it up.
+    h.keys("C-c b").type_text("!");
+    assert_eq!(h.text(), "<x>yw!");
+    h.wait_until(|h| h.echo() == "done in the background");
+
+    // Code that is no command holds nothing up either.
+    h.eval(r#"(begin (run-process "sh" '("-c" "sleep 0.3")) (message "evaluated"))"#);
+    h.type_text("?");
+    assert_eq!(h.text(), "<x>yw!?");
+    h.wait_until(|h| h.echo() == "evaluated");
+}

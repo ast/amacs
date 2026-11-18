@@ -84,6 +84,16 @@ If the user quits with `C-g` while a command waits, the command is left the
 way an error leaves it: `unwind-protect` and `dynamic-wind` clean up, and
 `guard` does not see it.
 
+While a command waits for a program, what is typed waits too, and is
+handled when the command has gone on: it was typed for the question that
+the command then asks or the buffer that it then shows, as `c c` in the git
+buffer is for the menu that the first `c` brings up once git has answered.
+`C-g` stops the waiting; the command is left and what was typed for it is
+dropped. This holds for commands only, not for hooks, timers or code that
+is evaluated as text. A command whose program takes long and that asks
+nothing afterwards, as a push over the network, calls `(release-input!)`
+first, and typing goes on meanwhile.
+
 Code evaluated as text, with `M-:` or `amacsclient --eval`, can wait too. The
 evaluation then answers at once, without a value, and the forms after the
 one that waits run when the wait is over.
@@ -177,7 +187,8 @@ waits for it to end.
 
 ## The file manager
 
-`C-x d`, or visiting a directory, lists it; `runtime/lib/dired.scm` is the
+`C-x d`, or visiting a directory, lists it, and `C-x C-j` lists the
+directory of the current buffer's file with point on the file; `runtime/lib/dired.scm` is the
 code. The keys are dired's: `RET` visits, `^` or `DEL` goes up, `m` `u` `U`
 `t` mark, `C` copies, `R` moves or renames, `D` deletes, `d` and `x` flag and
 delete, `+` makes a directory, `g` reads again, `q` quits. `TAB` opens a

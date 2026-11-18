@@ -496,6 +496,16 @@ impl Editor {
     // Input
 
     pub fn handle_event(&mut self, event: InputEvent) {
+        // What is typed while a command waits for a program is for what
+        // the command does next.
+        if self.holds_input() && matches!(event, InputEvent::Key(_) | InputEvent::Paste(_)) {
+            if event == InputEvent::Key(Key::ctrl('g')) {
+                self.stop_waiting();
+            } else {
+                self.hold_input(event);
+            }
+            return;
+        }
         match event {
             InputEvent::Key(key) => self.handle_key(key),
             InputEvent::Resize { cols, rows } => self.resize(cols, rows),
@@ -778,6 +788,7 @@ impl Editor {
             self.key_hint_due = None;
             self.show_key_hint();
         }
+        self.held_notice_poll(now);
     }
 
     /// When [`Editor::poll`] next has something to do, if it does.
@@ -789,6 +800,7 @@ impl Editor {
             self.lsp.idle_due,
             self.auto_revert_due,
             self.extend_deadline(),
+            self.held_notice_deadline(),
         ]
         .into_iter()
         .flatten()
