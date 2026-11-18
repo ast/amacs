@@ -211,3 +211,46 @@ fn commands_wait_for_keys_time_and_programs() {
         "((3 \"in\" \"err\\n\") (\"a\" \"b\") #f \"false failed: \")"
     );
 }
+
+#[test]
+fn buttons_of_the_pointer_are_keys_that_scheme_binds() {
+    let mut h = Harness::new(60, 10);
+    h.paste("one two three\nfour five six\n");
+    h.eval(
+        r#"(define seen '())
+           (define (note what)
+             (set! seen (cons (list what (mouse-press-position) (mouse-position)
+                                    (mouse-modifiers))
+                              seen)))
+           (define-command (my-menu) "Note a press." (note 'press))
+           (define-command (my-drag) "Note a movement." (note 'motion))
+           (define-command (my-drop) "Note a letting go." (note 'drop))
+           (define-major-mode pointer-mode #f "Pointer" "A mode with keys for the pointer.")
+           (define-key 'pointer-mode "<mouse-3>" 'my-menu)
+           (define-key 'pointer-mode "<motion-mouse-3>" 'my-drag)
+           (define-key 'pointer-mode "<drag-mouse-3>" 'my-drop)
+           (pointer-mode)"#,
+    );
+    h.press("M-<mouse-3>", 4, 0);
+    // With modifiers that have no binding of their own, it is the press.
+    let w = h.eval("(selected-window)");
+    assert_eq!(h.eval("seen"), format!("((press ({w} 4) ({w} 4) (meta)))"));
+    h.drag_to(5, 1)
+        .release(5, 1, amacs_proto::Mods::CTRL | amacs_proto::Mods::SHIFT);
+    assert_eq!(
+        h.eval("(reverse seen)"),
+        format!(
+            "((press ({w} 4) ({w} 4) (meta)) (motion ({w} 4) ({w} 19) ()) \
+             (drop ({w} 4) ({w} 19) (control shift)))"
+        )
+    );
+    // A button let go where it was pressed is no drag, and the main
+    // button still does what it does everywhere.
+    h.eval("(set! seen '())");
+    h.press("<mouse-3>", 4, 0)
+        .release(4, 0, amacs_proto::Mods::empty());
+    assert_eq!(h.eval("(length seen)"), "1");
+    h.press("<double-mouse-1>", 5, 1);
+    assert_eq!(h.eval("(buffer-substring (mark) (point))"), "\"five\"");
+    assert_eq!(h.eval("(key-binding \"<mouse-1>\")"), "mouse-set-point");
+}

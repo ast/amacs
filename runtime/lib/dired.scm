@@ -18,6 +18,10 @@ buffer, rather than leaving a buffer for each directory visited.")
   "Directories that the file manager goes to by a key: lists of the key, the
 directory and a name for it.")
 
+(define-option 'dired-confirm-drop #t
+  "Whether the file manager asks before it moves or copies the files that
+were dragged with the pointer.")
+
 (set-face! 'dired-header 'bold #t)
 (set-face! 'dired-directory 'fg 'blue 'bold #t)
 (set-face! 'dired-symlink 'fg 'cyan)
@@ -555,16 +559,11 @@ act on the files. Start it with M-x dired.")
       [(null? (cdr paths)) (list (cons (car paths) destination))]
       [else (error "Several files can only go into a directory")])))
 
-;; Copies or moves the marked files to where the user says, with `transfer`
-;; doing each one: it gets a file and its new name.
-(define (%dired-transfer verb done transfer)
-  (let* ((paths (dired-marked-files))
-         (from (buffer-name))
-         (answer (read-directory-name
-                  (string-append verb " " (%dired-describe paths) " to: ")
-                  (string-append (abbreviate-file-name (%dired-other-directory)) "/")))
-         (pairs (%dired-destinations paths answer))
-         (count 0))
+;; Moves or copies files, given pairs of a file and its new full name,
+;; with `transfer` doing each one. A file that is in the way is replaced
+;; only after asking. `from` is the buffer whose marks on the files go.
+(define (%dired-carry-out pairs transfer done from)
+  (let ((count 0))
     (for-each
      (lambda (pair)
        (when (or (not (file-exists? (cdr pair)))
@@ -575,32 +574,43 @@ act on the files. Start it with M-x dired.")
          (set! count (+ count 1))))
      pairs)
     (when (member from (buffer-list))
-      (with-current-buffer from (%dired-clear-marks! paths)))
+      (with-current-buffer from (%dired-clear-marks! (map car pairs))))
     (%dired-refresh-all)
     (message done " " count (if (= count 1) " file" " files"))))
+
+;; Copies or moves the marked files to where the user says, with `transfer`
+;; doing each one: it gets a file and its new name.
+(define (%dired-transfer verb done transfer)
+  (let* ((paths (dired-marked-files))
+         (from (buffer-name))
+         (answer (read-directory-name
+                  (string-append verb " " (%dired-describe paths) " to: ")
+                  (string-append (abbreviate-file-name (%dired-other-directory)) "/"))))
+    (%dired-carry-out (%dired-destinations paths answer) transfer done from)))
 
 (define (%dired-run program . arguments)
   (let ((result (run-process program arguments)))
     (unless (eqv? (car result) 0)
       (error (string-append program ": " (string-trim (caddr result)))))))
 
+(define (%dired-copy from to)
+  (%dired-run "cp" "-a" "-T" "--" from to))
+
+(define (%dired-move from to)
+  ;; Renaming is at once and cannot leave half a file; between file
+  ;; systems it is not possible, and the files are moved instead.
+  (guard (e (#t (%dired-run "mv" "-T" "--" from to)))
+    (rename-file from to)))
+
 (define-command (dired-do-copy)
   "Copy the marked files, or the file on this line. The other pane of the
 file manager is offered as where to."
-  (%dired-transfer
-   "Copy" "Copied"
-   (lambda (from to) (%dired-run "cp" "-a" "-T" "--" from to))))
+  (%dired-transfer "Copy" "Copied" %dired-copy))
 
 (define-command (dired-do-rename)
   "Move or rename the marked files, or the file on this line. The other pane
 of the file manager is offered as where to."
-  (%dired-transfer
-   "Move" "Moved"
-   (lambda (from to)
-     ;; Renaming is at once and cannot leave half a file; between file
-     ;; systems it is not possible, and the files are moved instead.
-     (guard (e (#t (%dired-run "mv" "-T" "--" from to)))
-       (rename-file from to)))))
+  (%dired-transfer "Move" "Moved" %dired-move))
 
 (define-command (dired-create-directory)
   "Create a directory in this one."
@@ -612,6 +622,195 @@ of the file manager is offered as where to."
     (%dired-refresh-all)
     ;; Of a/b/c, a is what shows here.
     (dired-refresh (expand-file-name (car (string-split name #\/)) (dired-directory)))))
+
+;;; The pointer
+;;;
+;;; A press goes to a file, a second one opens it, and with Control or
+;;; Shift held it marks. Dragging carries the file under the pointer, or
+;;; the marked files if it is one of them, to the directory it is let go
+;;; over: a directory in a listing, or the directory of a listing, in this
+;;; window or another.
+
+;; What is being dragged: a list of the files and the buffer they were
+;; taken from, from the first movement until the button is let go.
+(define %dired-drag #f)
+
+;; The index of the row at a position of the current buffer, or #f.
+(define (%dired-row-index-at state pos)
+  (let ((index (- (line-number-at-pos pos) 2)))
+    (and (>= index 0)
+         (< index (vector-length (dired-state-rows state)))
+         index)))
+
+;; Puts point on the file where the button was pressed. Returns whether
+;; there is a file there.
+(define (%dired-goto-press)
+  (let* ((state (dired-state))
+         (press (mouse-press-position))
+         (index (and press (%dired-row-index-at state (cadr press)))))
+    (deactivate-mark!)
+    (when index
+      (goto-char (vector-ref (dired-state-positions state) index)))
+    index))
+
+(define-command (dired-mouse-select)
+  "Go to the file that the pointer is at."
+  (set! %dired-drag #f)
+  (%dired-goto-press))
+
+(define-command (dired-mouse-open)
+  "Visit the file that the pointer is at; a directory is shown in the file
+manager."
+  (when (%dired-goto-press)
+    (dired-find-file)))
+
+(define-command (dired-mouse-open-other-window)
+  "Visit the file that the pointer is at in another window."
+  (when (%dired-goto-press)
+    (dired-find-file-other-window)))
+
+(define-command (dired-mouse-toggle-mark)
+  "Mark the file that the pointer is at, or take its mark off."
+  (when (%dired-goto-press)
+    (let ((marks (dired-state-marks (dired-state)))
+          (path (dired-file-at-point)))
+      (if (hash-table-contains? marks path)
+          (hash-table-delete! marks path)
+          (hash-table-set! marks path #\*))
+      (dired-refresh))))
+
+(define-command (dired-mouse-mark-range)
+  "Mark the files from the one that point is on to the one that the
+pointer is at."
+  (let* ((state (dired-state))
+         (from (%dired-row-index state))
+         (to (%dired-goto-press)))
+    (when (and from to)
+      (let loop ((index (min from to)))
+        (when (<= index (max from to))
+          (hash-table-set! (dired-state-marks state)
+                           (dired-row-path (vector-ref (dired-state-rows state) index))
+                           #\*)
+          (loop (+ index 1))))
+      (dired-refresh))))
+
+(define-command (dired-mouse-menu)
+  "Show what can be done with the file that the pointer is at, or with the
+marked files if it is one of them."
+  (when (%dired-goto-press)
+    (let ((choice (key-menu (%dired-describe (%dired-files-at-point))
+                            '()
+                            '(("o" "Open" dired-find-file)
+                              ("O" "Open in another window" dired-find-file-other-window)
+                              ("m" "Mark or unmark" dired-mouse-toggle-mark)
+                              ("c" "Copy to..." dired-do-copy)
+                              ("r" "Move or rename to..." dired-do-rename)
+                              ("d" "Delete" dired-do-delete)
+                              ("w" "Copy the name" dired-copy-filename)))))
+      ((global-ref (car choice))))))
+
+;; The marked files if the file at point is one of them, else that file:
+;; what the pointer acts on.
+(define (%dired-files-at-point)
+  (let* ((path (dired-file-at-point))
+         (marked (dired-marked-files)))
+    (if (member path marked) marked (list path))))
+
+(define (%dired-without-slash directory)
+  (if (and (> (string-length directory) 1) (string-suffix? "/" directory))
+      (substring directory 0 (- (string-length directory) 1))
+      directory))
+
+;; Where files would go if the button were let go now: a list of the
+;; window that the pointer is in, the directory there (#f if the window
+;; does not list one) and the index of the row of that directory (#f if
+;; it is the directory of the listing).
+(define (%dired-drop-target)
+  (let ((at (mouse-position)))
+    (and at
+         (let* ((window (car at))
+                (state (hash-table-ref %dired-buffers (window-buffer window))))
+           (if (not state)
+               (list window #f #f)
+               (let* ((index (with-selected-window window
+                               (%dired-row-index-at state (cadr at))))
+                      (row (and index (vector-ref (dired-state-rows state) index))))
+                 (cond
+                  [(not row) (list window (dired-state-directory state) #f)]
+                  [(eq? (dired-row-kind row) 'directory)
+                   (list window (dired-row-path row) index)]
+                  ;; A file stands for the directory it is in, which under
+                  ;; an opened directory is not that of the listing.
+                  [else
+                   (list window
+                         (%dired-without-slash (file-name-directory (dired-row-path row)))
+                         #f)])))))))
+
+;; The pairs of a file and its new full name for the files that a drop
+;; into a directory would carry: not those that are there already, nor a
+;; directory into itself or into what is within it.
+(define (%dired-drop-pairs paths directory)
+  (let ((directory (%dired-without-slash directory)))
+    (filter-map
+     (lambda (path)
+       (and (not (equal? (%dired-without-slash (file-name-directory path)) directory))
+            (not (equal? path directory))
+            (not (string-prefix? (string-append path "/") directory))
+            (cons path (%dired-join directory (file-name-nondirectory path)))))
+     paths)))
+
+(define (%dired-drop-verb)
+  (if (memq 'control (mouse-modifiers)) "Copy" "Move"))
+
+(define-command (dired-mouse-drag)
+  "Carry the file that the button was pressed on, or the marked files if
+it is one of them, and say where they would go."
+  (unless %dired-drag
+    (when (%dired-goto-press)
+      (set! %dired-drag (list (%dired-files-at-point) (buffer-name)))))
+  (when %dired-drag
+    (let* ((paths (car %dired-drag))
+           (target (%dired-drop-target))
+           (directory (and target (cadr target))))
+      ;; The line of the directory under the pointer shows where to.
+      (when (and target (caddr target))
+        (with-selected-window (car target)
+          (goto-char (vector-ref (dired-state-positions (dired-state)) (caddr target)))))
+      (cond
+       [(and directory (pair? (%dired-drop-pairs paths directory)))
+        (message (%dired-drop-verb) " " (%dired-describe paths) " to "
+                 (abbreviate-file-name directory) "/")]
+       [(and target (not directory)
+             (null? (cdr paths)) (not (file-directory? (car paths))))
+        (message "Open " (%dired-describe paths) " in that window")]
+       [else (message "Nowhere to put " (%dired-describe paths) " here")]))))
+
+(define-command (dired-mouse-drop)
+  "Move the files that were dragged to the directory that the pointer is
+over, or copy them if Control is held. A file let go over a window that
+shows something else is visited there."
+  (let ((drag %dired-drag)
+        (target (%dired-drop-target)))
+    (set! %dired-drag #f)
+    (when (and drag target)
+      (let* ((paths (car drag))
+             (directory (cadr target))
+             (pairs (if directory (%dired-drop-pairs paths directory) '()))
+             (copy? (memq 'control (mouse-modifiers))))
+        (cond
+         [(pair? pairs)
+          (when (or (not (option 'dired-confirm-drop))
+                    (y-or-n? (string-append
+                              (%dired-drop-verb) " " (%dired-describe (map car pairs))
+                              " to " (abbreviate-file-name directory) "/?")))
+            (%dired-carry-out pairs
+                              (if copy? %dired-copy %dired-move)
+                              (if copy? "Copied" "Moved")
+                              (cadr drag)))]
+         [(and (not directory) (null? (cdr paths)) (not (file-directory? (car paths))))
+          (select-window (car target))
+          (find-file (car paths))]
+         [else (message "Nothing was moved")])))))
 
 ;;; Keys
 
@@ -631,5 +830,14 @@ of the file manager is offered as where to."
    ("t" dired-toggle-marks) ("d" dired-flag-file-deletion)
    ("x" dired-do-flagged-delete) ("D" dired-do-delete)
    ("C" dired-do-copy) ("R" dired-do-rename) ("+" dired-create-directory)))
+
+(for-each
+ (lambda (binding) (define-key 'dired-mode (car binding) (cadr binding)))
+ '(("<mouse-1>" dired-mouse-select) ("<triple-mouse-1>" dired-mouse-select)
+   ("<double-mouse-1>" dired-mouse-open)
+   ("<mouse-2>" dired-mouse-open-other-window)
+   ("C-<mouse-1>" dired-mouse-toggle-mark) ("S-<mouse-1>" dired-mouse-mark-range)
+   ("<mouse-3>" dired-mouse-menu)
+   ("<motion-mouse-1>" dired-mouse-drag) ("<drag-mouse-1>" dired-mouse-drop)))
 
 (global-set-key "C-x d" 'dired)

@@ -102,6 +102,10 @@ pub fn install(ed: &mut Editor) {
         "lsp-workspace-symbols" => Editor::lsp_workspace_symbols, "Find a symbol of the project by name.";
         "direnv-reload" => direnv_reload, "Read the project environments from direnv again.";
 
+        "mouse-set-point" => crate::mouse::mouse_set_point, "Put point where the button was pressed; a second press takes the word and a third the line.";
+        "mouse-extend-region" => crate::mouse::mouse_extend_region, "Make the region reach to where the button was pressed.";
+        "mouse-drag-region" => crate::mouse::mouse_drag_region, "Make the region reach from where the button was pressed to where the pointer is.";
+
         "windmove-left" => windows::windmove_left, "Select the window to the left.";
         "windmove-right" => windows::windmove_right, "Select the window to the right.";
         "windmove-up" => windows::windmove_up, "Select the window above.";
@@ -234,6 +238,11 @@ pub fn install(ed: &mut Editor) {
         ("C-@", "set-mark-command"),
         ("C-x C-x", "exchange-point-and-mark"),
         ("C-x h", "mark-whole-buffer"),
+        ("<mouse-1>", "mouse-set-point"),
+        ("<double-mouse-1>", "mouse-set-point"),
+        ("<triple-mouse-1>", "mouse-set-point"),
+        ("S-<mouse-1>", "mouse-extend-region"),
+        ("<motion-mouse-1>", "mouse-drag-region"),
         ("TAB", "indent-for-tab-command"),
         ("C-i", "indent-for-tab-command"),
         ("C-M-\\", "indent-region"),

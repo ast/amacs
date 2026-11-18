@@ -698,6 +698,8 @@ fn the_mouse_scrolls_and_sets_point() {
         MouseEvent::Press {
             col: 2,
             row: lower as u16 + 2,
+            button: 1,
+            mods: amacs_proto::Mods::empty(),
             clicks: 1,
         },
     );
@@ -711,6 +713,8 @@ fn the_mouse_scrolls_and_sets_point() {
         MouseEvent::Press {
             col: 30,
             row: 1,
+            button: 1,
+            mods: amacs_proto::Mods::empty(),
             clicks: 1,
         },
     );
@@ -720,6 +724,8 @@ fn the_mouse_scrolls_and_sets_point() {
         MouseEvent::Press {
             col: 5,
             row: lower as u16 - 1,
+            button: 1,
+            mods: amacs_proto::Mods::empty(),
             clicks: 1,
         },
     );
@@ -735,6 +741,8 @@ fn the_mouse_scrolls_and_sets_point() {
         MouseEvent::Press {
             col: gutter as u16 + 3,
             row: 0,
+            button: 1,
+            mods: amacs_proto::Mods::empty(),
             clicks: 1,
         },
     );
@@ -752,18 +760,35 @@ fn the_mouse_selects_by_dragging_and_by_clicking_again() {
         h.editor.handle_event(InputEvent::Mouse(event));
         h.sync();
     };
-    let press = |col, row, clicks| MouseEvent::Press { col, row, clicks };
+    let none = amacs_proto::Mods::empty();
+    let press = |col, row, clicks| MouseEvent::Press {
+        col,
+        row,
+        button: 1,
+        mods: none,
+        clicks,
+    };
+    let drag = |col, row| MouseEvent::Drag {
+        col,
+        row,
+        mods: none,
+    };
+    let release = MouseEvent::Release {
+        col: 0,
+        row: 0,
+        mods: none,
+    };
 
     // A click alone selects nothing.
     mouse(&mut h, press(2, 0, 1));
-    mouse(&mut h, MouseEvent::Release);
+    mouse(&mut h, release);
     assert!(!h.editor.buffer().mark_active);
 
     // Dragging selects from where the button went down, either way.
     mouse(&mut h, press(2, 0, 1));
-    mouse(&mut h, MouseEvent::Drag { col: 4, row: 1 });
+    mouse(&mut h, drag(4, 1));
     assert!(h.editor.buffer().mark_active);
-    mouse(&mut h, MouseEvent::Release);
+    mouse(&mut h, release);
     assert_eq!(h.screen.cursor(), Some((1, 4)));
     h.keys("M-w");
     assert_eq!(
@@ -771,8 +796,8 @@ fn the_mouse_selects_by_dragging_and_by_clicking_again() {
         Some("ne 1 of_text here\nline")
     );
     mouse(&mut h, press(4, 1, 1));
-    mouse(&mut h, MouseEvent::Drag { col: 2, row: 0 });
-    mouse(&mut h, MouseEvent::Release);
+    mouse(&mut h, drag(2, 0));
+    mouse(&mut h, release);
     assert_eq!(h.screen.cursor(), Some((0, 2)));
     h.keys("M-w");
     assert_eq!(
@@ -780,16 +805,16 @@ fn the_mouse_selects_by_dragging_and_by_clicking_again() {
         Some("ne 1 of_text here\nline")
     );
     // Moving without the button held does nothing.
-    mouse(&mut h, MouseEvent::Drag { col: 9, row: 3 });
+    mouse(&mut h, drag(9, 3));
     assert_eq!(h.screen.cursor(), Some((0, 2)));
 
     // A second click takes the word and a third the line.
     mouse(&mut h, press(8, 2, 2));
-    mouse(&mut h, MouseEvent::Release);
+    mouse(&mut h, release);
     h.keys("M-w");
     assert_eq!(h.editor.current_kill().as_deref(), Some("of_text"));
     mouse(&mut h, press(8, 2, 3));
-    mouse(&mut h, MouseEvent::Release);
+    mouse(&mut h, release);
     h.keys("M-w");
     assert_eq!(
         h.editor.current_kill().as_deref(),
@@ -797,16 +822,16 @@ fn the_mouse_selects_by_dragging_and_by_clicking_again() {
     );
     // Dragging after a second click keeps the word.
     mouse(&mut h, press(8, 2, 2));
-    mouse(&mut h, MouseEvent::Drag { col: 1, row: 2 });
-    mouse(&mut h, MouseEvent::Release);
+    mouse(&mut h, drag(1, 2));
+    mouse(&mut h, release);
     h.keys("M-w");
     assert_eq!(h.editor.current_kill().as_deref(), Some("ine 3 of_text"));
 
     // Below the window, the text follows the pointer.
     mouse(&mut h, press(0, 0, 1));
     assert_eq!(h.screen.row(0), "line 1 of_text here");
-    mouse(&mut h, MouseEvent::Drag { col: 0, row: 7 });
-    mouse(&mut h, MouseEvent::Drag { col: 1, row: 7 });
+    mouse(&mut h, drag(0, 7));
+    mouse(&mut h, drag(1, 7));
     assert_eq!(h.screen.row(0), "line 3 of_text here");
     assert!(h.editor.buffer().mark_active);
 }

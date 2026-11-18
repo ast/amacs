@@ -3,13 +3,8 @@
 use amacs_proto::{Key, KeyCode, Mods, NamedKey};
 use smithay_client_toolkit::seat::keyboard::{Keysym, Modifiers};
 
-/// The key for a pressed symbol, or `None` for symbols that are not keys of
-/// their own, such as Shift.
-///
-/// The symbol is the one the layout produces with the modifiers held, so
-/// `Shift+7` on a Swedish layout arrives as `/` and is reported as `/`
-/// without Shift.
-pub fn translate(keysym: Keysym, modifiers: Modifiers) -> Option<Key> {
+/// The modifiers that are held, as the editor names them.
+pub fn mods(modifiers: Modifiers) -> Mods {
     let mut mods = Mods::empty();
     for (held, modifier) in [
         (modifiers.ctrl, Mods::CTRL),
@@ -21,6 +16,17 @@ pub fn translate(keysym: Keysym, modifiers: Modifiers) -> Option<Key> {
             mods |= modifier;
         }
     }
+    mods
+}
+
+/// The key for a pressed symbol, or `None` for symbols that are not keys of
+/// their own, such as Shift.
+///
+/// The symbol is the one the layout produces with the modifiers held, so
+/// `Shift+7` on a Swedish layout arrives as `/` and is reported as `/`
+/// without Shift.
+pub fn translate(keysym: Keysym, modifiers: Modifiers) -> Option<Key> {
+    let mods = mods(modifiers);
 
     let named = match keysym {
         Keysym::Return | Keysym::KP_Enter => Some(NamedKey::Return),

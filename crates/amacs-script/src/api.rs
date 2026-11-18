@@ -11,7 +11,7 @@ use amacs_core::{
     Buffer, BufferId, Candidate, CmdError, CmdResult, CommandBody, Completion, Editor, FaceSpec,
     Formatter, ServerConfig, Value, WindowId, expand_path, window_number,
 };
-use amacs_proto::parse_keys;
+use amacs_proto::{Mods, parse_keys};
 
 /// One primitive.
 pub struct ApiFn {
@@ -859,6 +859,27 @@ pub const API: &[ApiFn] = api! {
         |ed, args| Ok(ed.visible_range(window_arg(ed, args, 0)?).start.into());
     "window-end" (0, Some(1)) "Position after the last char that a window (default the selected one) shows." =>
         |ed, args| Ok(ed.visible_range(window_arg(ed, args, 0)?).end.into());
+    "mouse-position" (0, Some(0)) "Where the pointer is: a list of the window it is in and the position in that window's buffer of the char it is at, or #f if it is in no window." =>
+        |ed, _| Ok(mouse_place(ed.mouse_position()));
+    "mouse-press-position" (0, Some(0)) "Where a button of the pointer was last pressed: a list of the window and the position in its buffer, or #f." =>
+        |ed, _| Ok(mouse_place(ed.mouse_press_position()));
+    "mouse-modifiers" (0, Some(0)) "The modifier keys that were held when the pointer last did something: a list of the symbols control, meta, shift and super." =>
+        |ed, _| {
+            let mods = ed.mouse_modifiers();
+            let names = [
+                (Mods::CTRL, "control"),
+                (Mods::META, "meta"),
+                (Mods::SHIFT, "shift"),
+                (Mods::SUPER, "super"),
+            ];
+            Ok(Value::List(
+                names
+                    .into_iter()
+                    .filter(|(flag, _)| mods.contains(*flag))
+                    .map(|(_, name)| Value::sym(name))
+                    .collect(),
+            ))
+        };
     "in-minibuffer?" (0, Some(0)) "Whether the minibuffer is selected." =>
         |ed, _| Ok(ed.in_minibuffer().into());
     "%set-buffer" (1, Some(1)) "Make the selected window show the named buffer for a moment, without what goes with switching to it." =>
@@ -948,3 +969,11 @@ pub const API: &[ApiFn] = api! {
             Ok(Value::Void)
         };
 };
+
+/// A window and a position in its buffer as Scheme sees them.
+fn mouse_place(place: Option<(WindowId, usize)>) -> Value {
+    match place {
+        Some((window, pos)) => Value::List(vec![Value::Int(window_number(window)), pos.into()]),
+        None => Value::Bool(false),
+    }
+}

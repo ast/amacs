@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use amacs_proto::{InputEvent, Key, KeyCode, Mods, MouseEvent, NamedKey};
+use amacs_proto::{InputEvent, Key, KeyCode, Mods, NamedKey};
 use amacs_text::{MarkerId, Text};
 use slotmap::SlotMap;
 
@@ -24,6 +24,7 @@ use crate::keymap::{Keymap, Lookup, lookup_in};
 use crate::kill_ring::KillRing;
 use crate::lsp::LspState;
 use crate::minibuffer::MinibufferState;
+use crate::mouse::Mouse;
 use crate::script::{ScriptCall, ScriptFn, ScriptState, ScriptTarget, Value};
 use crate::snippet::ActiveSnippet;
 use crate::undo_view::UndoView;
@@ -137,28 +138,6 @@ const KEY_HINT_DELAY: Duration = Duration::from_millis(600);
 
 /// All editor state. It is driven by [`Editor::handle_event`] and observed
 /// through [`Editor::redisplay`].
-/// Where a selection made by dragging started.
-#[derive(Clone)]
-struct MouseDrag {
-    window: WindowId,
-    buffer: BufferId,
-    /// What stays selected wherever the pointer goes: nothing after one
-    /// click, a word after two, a line after three.
-    anchor: Range<usize>,
-}
-
-/// The word that a position is in or beside, or the one char there.
-fn word_around(text: &Text, pos: usize) -> Range<usize> {
-    let is_word = |c: &char| c.is_alphanumeric() || *c == '_';
-    let start = pos - text.chars_before(pos).take_while(is_word).count();
-    let end = pos + text.chars_from(pos).take_while(is_word).count();
-    if start == end {
-        pos..(pos + 1).min(text.len())
-    } else {
-        start..end
-    }
-}
-
 pub struct Editor {
     pub(crate) buffers: SlotMap<BufferId, Buffer>,
     /// Buffers in most-recently-selected order.
@@ -198,8 +177,8 @@ pub struct Editor {
     pub(crate) formatters: HashMap<String, Formatter>,
     /// Labels of places to jump to, while the user picks one.
     pub(crate) labels: Option<Labels>,
-    /// The selection that the pointer is making with its button held.
-    mouse_drag: Option<MouseDrag>,
+    /// Where the pointer is and what was last done with it.
+    pub(crate) mouse: Mouse,
     /// The undo history being shown as a tree.
     pub(crate) undo_view: Option<UndoView>,
     /// The rectangle last killed or copied, a string per line.
@@ -269,7 +248,7 @@ impl Editor {
             snippets: HashMap::new(),
             formatters: HashMap::new(),
             labels: None,
-            mouse_drag: None,
+            mouse: Mouse::default(),
             undo_view: None,
             killed_rectangle: Vec::new(),
             keep_mark: false,
@@ -622,7 +601,7 @@ impl Editor {
 
     /// The window that shows a cell of the frame, and the cell's row and
     /// column in it. The mode line is no part of that.
-    fn window_at(&self, col: u16, row: u16) -> Option<(WindowId, usize, usize)> {
+    pub(crate) fn window_at(&self, col: u16, row: u16) -> Option<(WindowId, usize, usize)> {
         self.frame().layout.leaves().into_iter().find_map(|id| {
             let rect = self.windows[id].rect;
             let inside = (rect.x..rect.x + rect.w).contains(&col)
@@ -631,105 +610,9 @@ impl Editor {
         })
     }
 
-    fn handle_mouse(&mut self, event: MouseEvent) {
-        self.relayout();
-        match event {
-            MouseEvent::Scroll { col, row, lines } => {
-                let Some((id, _, _)) = self.window_at(col, row) else {
-                    return;
-                };
-                // The window under the pointer scrolls, whichever is selected.
-                let selected = self.selected();
-                self.frame_mut().selected = id;
-                let result = self.scroll_lines(i64::from(lines));
-                self.frame_mut().selected = selected;
-                self.report(result);
-            }
-            MouseEvent::Press { col, row, clicks } => {
-                self.mouse_drag = None;
-                if self.in_minibuffer() || self.key_prompt.is_some() {
-                    return;
-                }
-                let Some((id, row, col)) = self.window_at(col, row) else {
-                    return;
-                };
-                self.frame_mut().echo = None;
-                self.cancel_pending();
-                self.execute_with("mouse-set-point", |ed| {
-                    ed.frame_mut().selected = id;
-                    let pos = ed.position_at(id, row, col);
-                    // A second click takes the word there and a third the
-                    // line; dragging then goes on from that.
-                    let anchor = match clicks {
-                        0 | 1 => pos..pos,
-                        2 => word_around(ed.text(), pos),
-                        _ => {
-                            let text = ed.text();
-                            let line = text.line_of(pos);
-                            text.line_start(line)..(text.line_end(line) + 1).min(text.len())
-                        }
-                    };
-                    ed.set_point(anchor.end);
-                    let buffer = ed.buffer_mut();
-                    buffer.rectangle_mark = false;
-                    buffer.mark_active = !anchor.is_empty();
-                    if buffer.mark_active {
-                        buffer.set_mark(anchor.start);
-                    }
-                    ed.mouse_drag = Some(MouseDrag {
-                        window: id,
-                        buffer: ed.window().buffer,
-                        anchor,
-                    });
-                    Ok(())
-                });
-            }
-            MouseEvent::Drag { col, row } => {
-                let Some(drag) = self.mouse_drag.clone() else {
-                    return;
-                };
-                // The window may be gone since the press, or show another
-                // buffer, or a prompt may have come up.
-                let stale = !self.frame().layout.leaves().contains(&drag.window)
-                    || self.windows[drag.window].buffer != drag.buffer
-                    || self.selected() != drag.window
-                    || self.in_minibuffer();
-                if stale {
-                    self.mouse_drag = None;
-                    return;
-                }
-                let rect = self.windows[drag.window].rect;
-                let last = rect.y + rect.h.saturating_sub(2);
-                self.execute_with("mouse-drag-region", |ed| {
-                    // Beyond the top or the bottom of the window, the text
-                    // follows.
-                    if row < rect.y {
-                        ed.scroll_lines(-1)?;
-                    } else if row > last {
-                        ed.scroll_lines(1)?;
-                    }
-                    let row = usize::from(row.clamp(rect.y, last) - rect.y);
-                    let col = usize::from(col.saturating_sub(rect.x));
-                    let pos = ed.position_at(drag.window, row, col);
-                    let (mark, point) = if pos < drag.anchor.start {
-                        (drag.anchor.end, pos)
-                    } else {
-                        (drag.anchor.start, pos.max(drag.anchor.end))
-                    };
-                    ed.set_point(point);
-                    let buffer = ed.buffer_mut();
-                    buffer.set_mark(mark);
-                    buffer.mark_active = mark != point;
-                    Ok(())
-                });
-            }
-            MouseEvent::Release => self.mouse_drag = None,
-        }
-    }
-
     /// The position in a window's buffer that is shown at a row and column
     /// of the window, or the nearest there is.
-    fn position_at(&self, id: WindowId, row: usize, col: usize) -> usize {
+    pub(crate) fn position_at(&self, id: WindowId, row: usize, col: usize) -> usize {
         let window = &self.windows[id];
         let buffer = &self.buffers[window.buffer];
         let (gutter, width) = crate::redisplay::text_area(window, buffer);
@@ -815,7 +698,7 @@ impl Editor {
         self.prompt_frame = prompting.then_some(self.current_frame);
     }
 
-    fn cancel_pending(&mut self) {
+    pub(crate) fn cancel_pending(&mut self) {
         self.pending_keys.clear();
         self.esc_pending = false;
         self.prefix_arg = None;

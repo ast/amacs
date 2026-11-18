@@ -24,6 +24,7 @@ mod keymap;
 mod kill_ring;
 mod lsp;
 mod minibuffer;
+mod mouse;
 mod project;
 mod redisplay;
 mod script;

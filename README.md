@@ -61,15 +61,15 @@ A prompt that has candidates lists them under the input. Typing narrows them:
 every word must occur in a candidate, in any order, and an uppercase letter
 makes the match case-sensitive.
 
-| Key | Does |
-|---|---|
-| `RET` | Accept the selected candidate; enter a selected directory |
-| `M-RET` | Accept the text as typed, for a new name that matches an old one |
-| `C-n`, `C-p`, `C-v`, `M-v`, `M-<`, `M->` | Move the selection |
-| `TAB` | Put the candidate in the input, to edit it |
-| `DEL` | After a `/` in a file name, go up a directory |
-| `M-p`, `M-n` | Earlier and later inputs of the same kind |
-| `C-.` | Act on the candidate another way: copy, insert, kill, other window |
+| Key                                      | Does                                                               |
+| ---------------------------------------- | ------------------------------------------------------------------ |
+| `RET`                                    | Accept the selected candidate; enter a selected directory          |
+| `M-RET`                                  | Accept the text as typed, for a new name that matches an old one   |
+| `C-n`, `C-p`, `C-v`, `M-v`, `M-<`, `M->` | Move the selection                                                 |
+| `TAB`                                    | Put the candidate in the input, to edit it                         |
+| `DEL`                                    | After a `/` in a file name, go up a directory                      |
+| `M-p`, `M-n`                             | Earlier and later inputs of the same kind                          |
+| `C-.`                                    | Act on the candidate another way: copy, insert, kill, other window |
 
 Commands built on it: `M-x`, `C-x C-f`, `C-x b` (buffers and recent files),
 `C-s` (lines of the buffer, with a live preview), `C-c /` (the project's
@@ -287,6 +287,11 @@ listings side by side the other one is offered as where to. `+` makes a
 directory, `b` goes to a directory of the `dired-quick-access` option and
 `r` to one shown before.
 
+It works with the pointer too: a second press on a file opens it,
+`C-<mouse-1>` and `S-<mouse-1>` mark, the button for menus lists what can be
+done, and files are dragged into a directory of a listing or over to
+another listing, which moves them, or copies them with Control held.
+
 **Git**: `C-x g` shows the status of the repository of the current buffer,
 in sections that `TAB` folds. `s` and `u` stage and unstage the file or hunk
 at point, `k` discards it, and `RET` goes to the change. `c` commits, `b`
@@ -415,7 +420,12 @@ the region; a second click takes the word and a third the line, and
 dragging on from there adds to it. Past the top or bottom of the window the
 text follows the pointer.
 
-Not there yet: the mouse in the terminal, input methods and compose
+Buttons are keys, `<mouse-1>` to `<mouse-3>` and what is done with them
+held, so modes and the init file bind them as they bind other keys:
+`docs/extending.md` says how.
+
+Not there yet: the mouse in the terminal, dragging to and from other
+programs, input methods and compose
 sequences, and a native clipboard without the helper programs.
 
 ## Scheme

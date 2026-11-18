@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use amacs_proto::{FaceAttrs, InputEvent, Key, parse_keys};
+use amacs_proto::{FaceAttrs, InputEvent, Key, KeyCode, Mods, MouseEvent, NamedKey, parse_keys};
 use amacs_script::Session;
 use amacs_testkit::Screen;
 
@@ -54,6 +54,45 @@ impl Harness {
         for c in text.chars() {
             self.session.handle_event(InputEvent::Key(Key::char(c)));
         }
+        self.redisplay();
+        self
+    }
+
+    /// Presses a button of the pointer at a cell of the frame: `keys` is
+    /// the press as a key, such as `<mouse-1>` or `C-<double-mouse-1>`.
+    pub fn press(&mut self, keys: &str, col: u16, row: u16) -> &mut Self {
+        let key: Key = keys.parse().unwrap();
+        let (button, clicks) = match key.code {
+            KeyCode::Named(NamedKey::Mouse(button)) => (button, 1),
+            KeyCode::Named(NamedKey::DoubleMouse(button)) => (button, 2),
+            KeyCode::Named(NamedKey::TripleMouse(button)) => (button, 3),
+            _ => panic!("{keys} is not a press of a button"),
+        };
+        self.mouse(MouseEvent::Press {
+            col,
+            row,
+            button,
+            mods: key.mods,
+            clicks,
+        })
+    }
+
+    /// Moves the pointer to a cell with the button held.
+    pub fn drag_to(&mut self, col: u16, row: u16) -> &mut Self {
+        self.mouse(MouseEvent::Drag {
+            col,
+            row,
+            mods: Mods::empty(),
+        })
+    }
+
+    /// Lets the button go at a cell, with some modifiers held.
+    pub fn release(&mut self, col: u16, row: u16, mods: Mods) -> &mut Self {
+        self.mouse(MouseEvent::Release { col, row, mods })
+    }
+
+    pub fn mouse(&mut self, event: MouseEvent) -> &mut Self {
+        self.session.handle_event(InputEvent::Mouse(event));
         self.redisplay();
         self
     }

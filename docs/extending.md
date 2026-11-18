@@ -88,6 +88,44 @@ Code evaluated as text, with `M-:` or `amacsclient --eval`, can wait too. The
 evaluation then answers at once, without a value, and the forms after the
 one that waits run when the wait is over.
 
+## The pointer
+
+What is done with the pointer becomes keys, bound like any others:
+
+| Key | When |
+|---|---|
+| `<mouse-1>`, `<mouse-2>`, `<mouse-3>` | A button is pressed: the main one, the middle one, the one for menus |
+| `<double-mouse-1>`, `<triple-mouse-1>` | It is pressed again in quick succession at the same place |
+| `<motion-mouse-1>` | The pointer comes to another char cell with the button held |
+| `<drag-mouse-1>` | The button is let go after the pointer has moved |
+
+A press selects the window it is made in, and is looked up in the keymaps
+of that window's buffer, with the modifiers that are held: `C-<mouse-1>`.
+A press that is not bound with its modifiers or its number of clicks runs
+what the plain press is bound to. Movement and letting go are looked up
+without modifiers, in the buffer where the button went down.
+
+The commands ask where things are:
+
+```scheme
+(define-command (report-press)
+  "Say where the button was pressed."
+  (message "Pressed at " (cadr (mouse-press-position))))
+(define-key 'report-mode "<mouse-3>" 'report-press)
+```
+
+`(mouse-press-position)` is a list of the window and the position in its
+buffer where the button went down, and `(mouse-position)` the same for
+where the pointer is now, which can be in another window; either is `#f`
+when there is none. `(mouse-modifiers)` lists what is held, of `control`,
+`meta`, `shift` and `super`, also when the button is let go: that is how
+the file manager tells copying from moving.
+
+Everywhere, `<mouse-1>` is `mouse-set-point`, `S-<mouse-1>` is
+`mouse-extend-region` and `<motion-mouse-1>` is `mouse-drag-region`. The
+file manager binds them to its own commands; `runtime/lib/dired.scm`, from
+"The pointer" on, is the model for dragging things.
+
 ## What is on screen
 
 `(show-labels! '((window position "keys") ...) dim?)` draws key sequences over
@@ -136,6 +174,16 @@ directory in place, `/` narrows to names that contain a text, `.` hides the
 dot files, `s` changes the order, `b` goes to a directory of the
 `dired-quick-access` option and `r` to one visited before. With two listings
 side by side, copying and moving offer the other one as where to.
+
+With the pointer: a press goes to a file and a second one opens it,
+`C-<mouse-1>` marks or unmarks, `S-<mouse-1>` marks from the file point is on
+to the one pressed, the middle button opens in another window and the
+button for menus lists what can be done. Dragging carries the file, or the
+marked files if it is one of them, to the directory it is let go over: a
+directory in a listing, or a listing itself, in this window or another.
+They are moved, or copied if Control is held when the button is let go,
+after a question that the `dired-confirm-drop` option turns off. A file
+let go over a window that shows something else is visited there.
 
 Its parts are there for other code: `(dired-open dir)`,
 `(dired-file-at-point)`, `(dired-marked-files)`, `(dired-refresh)`.

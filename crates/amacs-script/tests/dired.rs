@@ -331,3 +331,127 @@ fn files_are_renamed_moved_deleted_and_made() {
     assert_eq!(h.echo(), "sub .hidden a.rs");
     assert_eq!(h.eval("(current-kill)"), "\"sub .hidden a.rs\"");
 }
+
+#[test]
+fn the_pointer_goes_to_files_opens_them_and_marks_them() {
+    let (dir, mut h) = setup();
+    h.press("<mouse-1>", 30, 4);
+    assert_eq!(at_point(&mut h), "\"a.rs\"");
+    // Beside the listing there is no file, and nothing happens.
+    h.press("<mouse-1>", 30, 9);
+    assert_eq!(at_point(&mut h), "\"a.rs\"");
+
+    h.press("C-<mouse-1>", 3, 5);
+    assert!(h.screen.row(5).starts_with('*'), "{}", h.screen.row(5));
+    h.press("C-<mouse-1>", 3, 5);
+    assert!(h.screen.row(5).starts_with(' '), "{}", h.screen.row(5));
+    h.press("<mouse-1>", 3, 2).press("S-<mouse-1>", 3, 4);
+    assert_eq!(
+        h.eval("(map file-name-nondirectory (dired-marked-files))"),
+        "(\"sub\" \".hidden\" \"a.rs\")"
+    );
+    h.keys("U");
+
+    // The button for menus says what can be done with the file.
+    h.press("<mouse-3>", 3, 5);
+    assert!(
+        h.screen.text().contains("Copy the name"),
+        "{}",
+        h.screen.text()
+    );
+    h.keys("w");
+    assert_eq!(h.echo(), "b.txt");
+
+    // A second press opens: a directory here, a file in its buffer.
+    h.press("<mouse-1>", 30, 2).press("<double-mouse-1>", 30, 2);
+    let sub = shown(&mut h, &dir.path().join("sub"));
+    assert_eq!(h.screen.row(0), format!("{sub}:"));
+    h.press("<mouse-1>", 30, 1).press("<double-mouse-1>", 30, 1);
+    assert!(h.mode_line().contains("inner.txt"), "{}", h.mode_line());
+}
+
+#[test]
+fn files_are_dragged_into_a_directory_of_the_listing() {
+    let (dir, mut h) = setup();
+    let root = dir.path();
+    let none = amacs_proto::Mods::empty();
+    // Over the directory, the echo area says what letting go would do.
+    h.press("<mouse-1>", 30, 5).drag_to(30, 3).drag_to(30, 2);
+    assert!(
+        h.echo().starts_with("Move b.txt to ") && h.echo().ends_with("/sub/"),
+        "{}",
+        h.echo()
+    );
+    assert_eq!(
+        at_point(&mut h),
+        "\"sub\"",
+        "the directory is shown as where to"
+    );
+    h.release(30, 2, none);
+    assert!(h.prompt().starts_with("Move b.txt to "), "{}", h.prompt());
+    h.keys("y");
+    assert!(root.join("sub/b.txt").exists());
+    assert!(!root.join("b.txt").exists());
+    assert_eq!(h.echo(), "Moved 1 file");
+    assert_eq!(names(&mut h), "(\"empty\" \"sub\" \".hidden\" \"a.rs\")");
+
+    // Let go where it came from, nothing happens; answered no, neither.
+    h.press("<mouse-1>", 30, 4)
+        .drag_to(30, 3)
+        .release(30, 3, none);
+    assert_eq!(h.echo(), "Nothing was moved");
+    h.press("<mouse-1>", 30, 4)
+        .drag_to(30, 1)
+        .release(30, 1, none);
+    h.keys("n");
+    assert!(root.join("a.rs").exists());
+
+    // The marked files go together, and with Control they are copied.
+    h.eval("(set-option! 'dired-confirm-drop #f)");
+    h.press("C-<mouse-1>", 3, 3).press("C-<mouse-1>", 3, 4);
+    h.press("<mouse-1>", 30, 4)
+        .drag_to(30, 1)
+        .release(30, 1, amacs_proto::Mods::CTRL);
+    h.wait_until(|h| h.echo() == "Copied 2 files");
+    assert!(root.join("empty/a.rs").exists() && root.join("empty/.hidden").exists());
+    assert!(root.join("a.rs").exists());
+
+    // A directory does not go into itself.
+    h.press("<mouse-1>", 30, 2)
+        .drag_to(30, 3)
+        .drag_to(30, 2)
+        .release(30, 2, none);
+    assert_eq!(h.echo(), "Nothing was moved");
+    assert!(root.join("sub/inner.txt").exists());
+}
+
+#[test]
+fn files_are_dragged_from_one_window_to_another() {
+    let (dir, mut h) = setup();
+    let root = dir.path();
+    let none = amacs_proto::Mods::empty();
+    h.eval("(set-option! 'dired-confirm-drop #f)");
+    h.keys("C-x 3 C-x o");
+    open(&mut h, &root.join("sub"));
+    h.keys("C-x o");
+    // From the listing on the left to the empty part of that on the right.
+    h.press("<mouse-1>", 30, 5)
+        .drag_to(60, 8)
+        .release(60, 8, none);
+    assert!(root.join("sub/b.txt").exists(), "{}", h.echo());
+    assert!(!root.join("b.txt").exists());
+    assert!(h.screen.row(1).contains("b.txt"), "{}", h.screen.row(1));
+
+    // Over a window that shows something else, a file is visited there.
+    h.keys("C-x o");
+    h.eval(r#"(switch-to-buffer "*scratch*")"#);
+    h.keys("C-x o");
+    h.press("<mouse-1>", 30, 4)
+        .drag_to(60, 8)
+        .release(60, 8, none);
+    assert!(
+        h.screen.row(0).contains("fn main() {}"),
+        "{}",
+        h.screen.row(0)
+    );
+}
