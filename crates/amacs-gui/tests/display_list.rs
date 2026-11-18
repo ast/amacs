@@ -251,6 +251,7 @@ fn a_backend_is_told_what_changed_and_where_the_cursor_is() {
             row: 0,
             col: 4,
             shape: CursorShape::Block,
+            color: None,
         },
         DrawOp::Flush,
     ]);

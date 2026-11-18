@@ -245,6 +245,7 @@ impl Editor {
                     row,
                     col,
                     shape: CursorShape::Block,
+                    color: self.faces.color("cursor"),
                 });
             }
             state.cursor = cursor;

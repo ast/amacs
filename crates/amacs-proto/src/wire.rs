@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{DrawOp, InputEvent};
 
 /// Changes whenever a message changes shape. Client and server must agree.
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// Larger messages are refused, so that a corrupt length cannot make the
 /// reader allocate without bound.

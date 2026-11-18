@@ -133,6 +133,9 @@ pub enum DrawOp {
         row: u16,
         col: u16,
         shape: CursorShape,
+        /// The colour that the theme gives the cursor, for frontends that
+        /// can choose it. Without it, a cursor is whatever stands out.
+        color: Option<Color>,
     },
     /// Everything since the last flush forms one consistent frame.
     Flush,

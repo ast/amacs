@@ -715,3 +715,23 @@ fn the_editor_can_be_asked_about_itself() {
     h.eval("(define-command (say) \"Say.\" (message \"hi\")) (say)");
     assert_eq!(h.text(), "<hi>");
 }
+
+#[test]
+fn the_cursor_comes_with_the_colour_that_the_theme_gives_it() {
+    use amacs_proto::{Color, DrawOp, InputEvent, Key};
+    let mut h = Harness::new(40, 6);
+    let cursor_color = |h: &mut Harness| {
+        h.session.handle_event(InputEvent::Key(Key::char('x')));
+        h.session
+            .redisplay()
+            .into_iter()
+            .find_map(|op| match op {
+                DrawOp::Cursor { color, .. } => Some(color),
+                _ => None,
+            })
+            .expect("typing moves the cursor")
+    };
+    assert_eq!(cursor_color(&mut h), Some(Color::rgb(0xd0, 0x00, 0x00)));
+    h.eval("(load-theme 'modus-vivendi)");
+    assert_eq!(cursor_color(&mut h), Some(Color::rgb(0xff, 0xff, 0xff)));
+}

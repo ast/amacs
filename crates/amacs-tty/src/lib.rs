@@ -25,6 +25,20 @@ use crossterm::terminal::{
 use crossterm::{execute, queue};
 use unicode_width::UnicodeWidthStr;
 
+/// What tells a terminal to draw its cursor in a colour (OSC 12). The
+/// terminal's own cursor is drawn in a colour chosen for the terminal's
+/// own background, which on the background of the editor's theme can be
+/// next to invisible.
+fn cursor_color_sequence(color: Color) -> String {
+    format!(
+        "\x1b]12;#{:02x}{:02x}{:02x}\x1b\\",
+        color.r, color.g, color.b
+    )
+}
+
+/// What gives the terminal's cursor its own colour back (OSC 112).
+const RESET_CURSOR_COLOR: &str = "\x1b]112\x1b\\";
+
 /// Puts the terminal back the way it was. Safe to call more than once, and
 /// from a panic hook.
 fn restore_terminal(enhanced_keys: bool) {
@@ -36,6 +50,7 @@ fn restore_terminal(enhanced_keys: bool) {
     let _ = execute!(
         out,
         DisableBracketedPaste,
+        Print(RESET_CURSOR_COLOR),
         SetCursorStyle::DefaultUserShape,
         Show,
         LeaveAlternateScreen
@@ -66,6 +81,8 @@ pub struct Tty {
     panes: HashMap<PaneId, PaneRect>,
     faces: Vec<FaceAttrs>,
     cursor: Option<(u16, u16, CursorShape)>,
+    /// The colour the terminal was last told to draw its cursor in.
+    cursor_color: Option<Color>,
     enhanced_keys: bool,
     in_update: bool,
 }
@@ -105,6 +122,7 @@ impl Tty {
             panes: HashMap::new(),
             faces: Vec::new(),
             cursor: None,
+            cursor_color: None,
             enhanced_keys,
             in_update: false,
         })
@@ -154,11 +172,20 @@ impl Tty {
                     row,
                     col,
                     shape,
+                    color,
                 } => {
                     self.cursor = self
                         .panes
                         .get(pane)
                         .map(|rect| (rect.x + col, rect.y + row, *shape));
+                    if *color != self.cursor_color {
+                        let sequence = match color {
+                            Some(color) => cursor_color_sequence(*color),
+                            None => RESET_CURSOR_COLOR.to_owned(),
+                        };
+                        queue!(self.out, Print(sequence))?;
+                        self.cursor_color = *color;
+                    }
                 }
                 DrawOp::Flush => {
                     if let Some((x, y, shape)) = self.cursor {
@@ -232,5 +259,18 @@ fn term_color(color: Color) -> TermColor {
         r: color.r,
         g: color.g,
         b: color.b,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cursor_colour_is_set_as_xterm_does() {
+        assert_eq!(
+            cursor_color_sequence(Color::rgb(0xd0, 0x00, 0x0a)),
+            "\x1b]12;#d0000a\x1b\\"
+        );
     }
 }
