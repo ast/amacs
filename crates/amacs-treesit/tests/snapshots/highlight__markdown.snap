@@ -2,20 +2,46 @@
 source: crates/amacs-treesit/tests/highlight.rs
 expression: "highlighted(\"markdown\", \"sample.md\")"
 ---
-«delimiter|#» «heading|Title»
+«delimiter|#» «heading|Heading one»
 
-Some *emphasis* and **strong** text with `code`.
+Some «delimiter|*»«emphasis|emphasis»«delimiter|*», «delimiter|**»«strong|strong»«delimiter|**», «delimiter|`»«code|code»«delimiter|`», «delimiter|~~»«comment|struck»«delimiter|~~» and a «delimiter|[»«link|link»«delimiter|](»«string|https://example.org»«delimiter|)».
 
-«delimiter|##» «heading|Section»
+«delimiter|##» «heading|Table»
 
-«delimiter|- »an item
-«delimiter|- »[a link](https://example.com)
+«delimiter||» «strong|Key »«delimiter||» «strong|Does »«delimiter||» «strong|Notes »«delimiter||»
+«delimiter||---|:---:|--:|»
+«delimiter||» «delimiter|`»«code|RET»«delimiter|`» «delimiter||» Accept the selected candidate «delimiter||» x «delimiter||»
+«delimiter||» «delimiter|`»«code|M-RET»«delimiter|`» «delimiter||» Accept the text as typed, for a new name «delimiter||» long cell here «delimiter||»
+«delimiter||» å «delimiter||» ö «delimiter||» 1 «delimiter||»
 
-«delimiter|```»«code|rust»
-«code|fn main() {}»
+«delimiter|- »«keyword|[ ]» task
+«delimiter|- »«string|[x]» done
+«delimiter|  - »nested item
+
+«delimiter|1. »one
+«delimiter|2. »two
+
+«delimiter|> »A quote
+«delimiter|> »over two lines
+
+«delimiter|```»«type|rust»
+«keyword|fn» «function-name|main»«bracket|()» «bracket|{» «preprocessor|println!»«bracket|(»«string|"hi"»«bracket|)»«delimiter|;» «bracket|}»
 «delimiter|```»
 
-«delimiter|> »A quote.
+«delimiter|---»
 
-«delimiter|1. »First
-«delimiter|2. »Second
+«delimiter|![»«link|image»«delimiter|](»«string|a.png»«delimiter|)» «function-name|<b>»html«function-name|</b>»
+
+«delimiter|> »quoted «delimiter|*»«emphasis|emphasis»
+«delimiter|> »«emphasis|over»«delimiter|*» lines and «delimiter|`»«code|code»«delimiter|`»
+
+«delimiter|- »an item with
+«delimiter|  ```»«type|sh»
+«delimiter|  »«function-name|echo» «string|"»«operator|$»«property|HOME»«string|"» «comment|# in a list»
+«delimiter|  ```»
+
+*not closed in this paragraph
+
+and not closed* by this one
+
+«link|[ref]»: «string|https://example.org» «code|"Title"»

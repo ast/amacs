@@ -128,6 +128,28 @@ const CMAKE: BracketRules = BracketRules {
     ..PLAIN
 };
 
+/// Where a language holds text in other languages.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Injections {
+    /// Kinds of node whose text is in a language: the kind and the language.
+    pub kinds: &'static [(&'static str, &'static str)],
+    /// Kinds of node in which one node names the language of another, as a
+    /// fenced block of code does: the kind, the kind of the node with the
+    /// name, and the kind of the node with the text.
+    pub named: &'static [(&'static str, &'static str, &'static str)],
+}
+
+const MARKDOWN: Injections = Injections {
+    kinds: &[
+        ("inline", "markdown-inline"),
+        ("pipe_table_cell", "markdown-inline"),
+        ("html_block", "html"),
+        ("minus_metadata", "yaml"),
+        ("plus_metadata", "toml"),
+    ],
+    named: &[("fenced_code_block", "language", "code_fence_content")],
+};
+
 /// A compiled grammar with its highlighting query.
 pub(crate) struct Grammar {
     pub language: tree_sitter::Language,
@@ -152,6 +174,7 @@ pub struct Language {
     /// Whether, of two patterns matching one node, the earlier decides its
     /// highlight. Queries written for tree-sitter before 0.25 expect that.
     pub(crate) first_pattern_wins: bool,
+    pub(crate) injections: Option<&'static Injections>,
     compiled: OnceLock<Option<Grammar>>,
 }
 
@@ -172,6 +195,7 @@ impl Language {
             grammar: None,
             highlights: &[],
             first_pattern_wins: false,
+            injections: None,
             compiled: OnceLock::new(),
         }
     }
@@ -215,6 +239,11 @@ impl Language {
         self
     }
 
+    const fn injections(mut self, injections: &'static Injections) -> Self {
+        self.injections = Some(injections);
+        self
+    }
+
     pub fn has_grammar(&self) -> bool {
         self.grammar.is_some()
     }
@@ -254,7 +283,7 @@ impl Language {
     }
 }
 
-static LANGUAGES: [Language; 23] = [
+static LANGUAGES: [Language; 24] = [
     Language::new("bash")
         .grammar(
             || tree_sitter_bash::LANGUAGE.into(),
@@ -371,9 +400,15 @@ static LANGUAGES: [Language; 23] = [
     Language::new("markdown")
         .grammar(
             || tree_sitter_md::LANGUAGE.into(),
-            &[tree_sitter_md::HIGHLIGHT_QUERY_BLOCK],
+            &[include_str!("../queries/markdown.scm")],
         )
+        .injections(&MARKDOWN)
         .backticks(),
+    // What is within the paragraphs, headings and table cells of Markdown.
+    Language::new("markdown-inline").grammar(
+        || tree_sitter_md::INLINE_LANGUAGE.into(),
+        &[include_str!("../queries/markdown-inline.scm")],
+    ),
     Language::new("nix")
         .grammar(
             || tree_sitter_nix::LANGUAGE.into(),
@@ -458,6 +493,42 @@ static LANGUAGES: [Language; 23] = [
 /// The language with the given name.
 pub fn language(name: &str) -> Option<&'static Language> {
     LANGUAGES.iter().find(|language| language.name == name)
+}
+
+/// The language that a name stands for where people name languages, as
+/// after the fence of a block of code in Markdown: `rs`, `sh`, `C++`.
+pub fn language_called(name: &str) -> Option<&'static Language> {
+    const ALIASES: &[(&str, &str)] = &[
+        ("c++", "cpp"),
+        ("cc", "cpp"),
+        ("console", "bash"),
+        ("docker", "dockerfile"),
+        ("dts", "devicetree"),
+        ("el", "elisp"),
+        ("emacs-lisp", "elisp"),
+        ("golang", "go"),
+        ("js", "javascript"),
+        ("jsx", "tsx"),
+        ("lisp", "elisp"),
+        ("makefile", "make"),
+        ("md", "markdown"),
+        ("py", "python"),
+        ("rs", "rust"),
+        ("scm", "scheme"),
+        ("sh", "bash"),
+        ("shell", "bash"),
+        ("terraform", "hcl"),
+        ("tf", "hcl"),
+        ("ts", "typescript"),
+        ("yml", "yaml"),
+        ("zsh", "bash"),
+    ];
+    let name = name.trim().to_lowercase();
+    let name = ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == name)
+        .map_or(name.as_str(), |(_, language)| language);
+    language(name)
 }
 
 /// All languages, in alphabetical order.

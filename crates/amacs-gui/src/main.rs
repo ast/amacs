@@ -178,6 +178,11 @@ struct App {
     /// Scrolling by a touchpad that has not yet come to a whole line, in
     /// pixels of the surface.
     scroll_rest: f64,
+    /// The last press of the main button: when, at which cell, and how many
+    /// presses in a row it made.
+    press: Option<(u32, (u16, u16), u8)>,
+    /// The cell the pointer is at, while the main button is held.
+    dragging: Option<(u16, u16)>,
     modifiers: Modifiers,
     loop_handle: LoopHandle<'static, App>,
 
@@ -459,6 +464,8 @@ fn run() -> Result<ExitCode> {
         keyboard: None,
         pointer: None,
         scroll_rest: 0.0,
+        press: None,
+        dragging: None,
         modifiers: Modifiers::default(),
         loop_handle,
         renderer,
@@ -653,6 +660,9 @@ impl SeatHandler for App {
 const WHEEL_LINES: i32 = 3;
 /// The main button of a mouse, as Linux numbers it.
 const BUTTON_LEFT: u32 = 0x110;
+/// How long after a press another one at the same cell counts with it, in
+/// milliseconds.
+const MULTI_CLICK_MS: u32 = 400;
 
 impl PointerHandler for App {
     fn pointer_frame(
@@ -692,8 +702,29 @@ impl PointerHandler for App {
                         self.send(InputEvent::Mouse(MouseEvent::Scroll { col, row, lines }));
                     }
                 }
-                PointerEventKind::Press { button, .. } if *button == BUTTON_LEFT => {
-                    self.send(InputEvent::Mouse(MouseEvent::Press { col, row }));
+                PointerEventKind::Press { button, time, .. } if *button == BUTTON_LEFT => {
+                    // Presses soon after each other at one cell count up
+                    // to three and start over.
+                    let again = self.press.is_some_and(|(at, cell, clicks)| {
+                        cell == (col, row) && clicks < 3 && time.wrapping_sub(at) <= MULTI_CLICK_MS
+                    });
+                    let clicks = match self.press {
+                        Some((_, _, clicks)) if again => clicks + 1,
+                        _ => 1,
+                    };
+                    self.press = Some((*time, (col, row), clicks));
+                    self.dragging = Some((col, row));
+                    self.send(InputEvent::Mouse(MouseEvent::Press { col, row, clicks }));
+                }
+                PointerEventKind::Motion { .. } => {
+                    if self.dragging.is_some_and(|cell| cell != (col, row)) {
+                        self.dragging = Some((col, row));
+                        self.send(InputEvent::Mouse(MouseEvent::Drag { col, row }));
+                    }
+                }
+                PointerEventKind::Release { button, .. } if *button == BUTTON_LEFT => {
+                    self.dragging = None;
+                    self.send(InputEvent::Mouse(MouseEvent::Release));
                 }
                 _ => {}
             }

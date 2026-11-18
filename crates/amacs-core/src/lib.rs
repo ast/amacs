@@ -34,6 +34,7 @@ mod window;
 
 pub use buffer::{Buffer, BufferId, LineNumbers};
 pub use completion::{Candidate, Completion, Waker};
+pub use display::string_cells;
 pub use editor::{
     Clipboard, Command, CommandBody, Editor, EditorEvent, GLOBAL_MAP, MINIBUFFER_MAP, Prefix,
 };

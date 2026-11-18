@@ -245,6 +245,8 @@ pub const API: &[ApiFn] = api! {
             let (a, b) = (pos(ed, args, 0)?, pos(ed, args, 1)?);
             Ok(ed.text().slice(a.min(b)..a.max(b)).into())
         };
+    "string-width" (1, Some(1)) "The number of columns a string takes on screen: two for a wide char such as a CJK ideograph, none for a combining mark." =>
+        |_, args| Ok(amacs_core::string_cells(string(args, 0)?).into());
     "buffer-string" (0, Some(1)) "The whole text of the current buffer, or of the named one." =>
         |ed, args| Ok(buffer(ed, args, 0)?.text().to_string().into());
     "erase-buffer" (0, Some(0)) "Delete all text in the current buffer." =>

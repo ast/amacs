@@ -13,6 +13,11 @@ pub fn char_cells(c: char, col: usize, tab_width: usize) -> usize {
     }
 }
 
+/// Number of cells a string without tabs occupies when drawn.
+pub fn string_cells(text: &str) -> usize {
+    text.chars().map(|c| char_cells(c, 0, 1)).sum()
+}
+
 /// Appends what is drawn for `c`: spaces for a tab, `^X` for a control char.
 pub fn push_glyph(out: &mut String, c: char, cells: usize) {
     match c {

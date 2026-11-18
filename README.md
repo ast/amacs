@@ -132,6 +132,28 @@ Two minor modes deal with delimiters:
 (add-hook! 'scheme-mode-hook (lambda () (enable-mode! 'paredit-mode)))
 ```
 
+## Markdown
+
+Markdown is highlighted in two layers: the blocks, and what is within
+paragraphs, headings and table cells, such as emphasis, code and links.
+The code in a fenced block is highlighted as its language when the fence
+names one that the editor knows (` ```rust `, ` ```sh `), front matter as
+YAML or TOML, and blocks of HTML as HTML.
+
+| Key | Does |
+|---|---|
+| `TAB`, `S-TAB` | In a table: line up its columns and go to the next or previous cell; after the last cell, start a new row |
+| `C-c C-c` | Line up the table at point, or tick or clear the box of a list item |
+| `C-c \|` | Insert a table |
+| `RET` | In a list: start the next item, with the next number and an empty box if the list has them; on an empty item, end the list |
+| `C-c C-n`, `C-c C-p`, `C-c C-j` | Next heading, previous heading, a heading chosen by its text |
+| `M-<left>`, `M-<right>` | Promote or demote the heading at point |
+
+Lining up a table changes its text: every cell of a column is made as wide
+as the widest, counted in screen columns, and placed as the row of dashes
+says (`:--` left, `--:` right, `:-:` in the middle). It is written in
+Scheme, in `runtime/lib/markdown.scm`.
+
 ## Language servers
 
 A buffer is attached to a language server when its mode's hook calls
@@ -388,10 +410,13 @@ terminal frames too: a kill is copied, and `C-y` yanks what another program
 copied last. This needs `WAYLAND_DISPLAY` in the server's environment.
 
 A click puts point there and selects the window, and the wheel scrolls the
-window under the pointer.
+window under the pointer. Dragging with the button held selects text, as
+the region; a second click takes the word and a third the line, and
+dragging on from there adds to it. Past the top or bottom of the window the
+text follows the pointer.
 
-Not there yet: selecting by dragging, input methods and compose sequences,
-and a native clipboard without the helper programs.
+Not there yet: the mouse in the terminal, input methods and compose
+sequences, and a native clipboard without the helper programs.
 
 ## Scheme
 

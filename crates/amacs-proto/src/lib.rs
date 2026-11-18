@@ -39,6 +39,11 @@ pub enum MouseEvent {
     /// The wheel was turned, or two fingers moved: so many lines, forward
     /// in the text if positive.
     Scroll { col: u16, row: u16, lines: i16 },
-    /// The main button was pressed.
-    Press { col: u16, row: u16 },
+    /// The main button was pressed: for the first time, or the second or
+    /// third in quick succession at the same cell.
+    Press { col: u16, row: u16, clicks: u8 },
+    /// The pointer came to another cell with the main button held.
+    Drag { col: u16, row: u16 },
+    /// The main button was let go.
+    Release,
 }

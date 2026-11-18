@@ -137,6 +137,28 @@ const KEY_HINT_DELAY: Duration = Duration::from_millis(600);
 
 /// All editor state. It is driven by [`Editor::handle_event`] and observed
 /// through [`Editor::redisplay`].
+/// Where a selection made by dragging started.
+#[derive(Clone)]
+struct MouseDrag {
+    window: WindowId,
+    buffer: BufferId,
+    /// What stays selected wherever the pointer goes: nothing after one
+    /// click, a word after two, a line after three.
+    anchor: Range<usize>,
+}
+
+/// The word that a position is in or beside, or the one char there.
+fn word_around(text: &Text, pos: usize) -> Range<usize> {
+    let is_word = |c: &char| c.is_alphanumeric() || *c == '_';
+    let start = pos - text.chars_before(pos).take_while(is_word).count();
+    let end = pos + text.chars_from(pos).take_while(is_word).count();
+    if start == end {
+        pos..(pos + 1).min(text.len())
+    } else {
+        start..end
+    }
+}
+
 pub struct Editor {
     pub(crate) buffers: SlotMap<BufferId, Buffer>,
     /// Buffers in most-recently-selected order.
@@ -176,6 +198,8 @@ pub struct Editor {
     pub(crate) formatters: HashMap<String, Formatter>,
     /// Labels of places to jump to, while the user picks one.
     pub(crate) labels: Option<Labels>,
+    /// The selection that the pointer is making with its button held.
+    mouse_drag: Option<MouseDrag>,
     /// The undo history being shown as a tree.
     pub(crate) undo_view: Option<UndoView>,
     /// The rectangle last killed or copied, a string per line.
@@ -245,6 +269,7 @@ impl Editor {
             snippets: HashMap::new(),
             formatters: HashMap::new(),
             labels: None,
+            mouse_drag: None,
             undo_view: None,
             killed_rectangle: Vec::new(),
             keep_mark: false,
@@ -620,7 +645,8 @@ impl Editor {
                 self.frame_mut().selected = selected;
                 self.report(result);
             }
-            MouseEvent::Press { col, row } => {
+            MouseEvent::Press { col, row, clicks } => {
+                self.mouse_drag = None;
                 if self.in_minibuffer() || self.key_prompt.is_some() {
                     return;
                 }
@@ -632,11 +658,72 @@ impl Editor {
                 self.execute_with("mouse-set-point", |ed| {
                     ed.frame_mut().selected = id;
                     let pos = ed.position_at(id, row, col);
-                    ed.set_point(pos);
-                    ed.buffer_mut().mark_active = false;
+                    // A second click takes the word there and a third the
+                    // line; dragging then goes on from that.
+                    let anchor = match clicks {
+                        0 | 1 => pos..pos,
+                        2 => word_around(ed.text(), pos),
+                        _ => {
+                            let text = ed.text();
+                            let line = text.line_of(pos);
+                            text.line_start(line)..(text.line_end(line) + 1).min(text.len())
+                        }
+                    };
+                    ed.set_point(anchor.end);
+                    let buffer = ed.buffer_mut();
+                    buffer.rectangle_mark = false;
+                    buffer.mark_active = !anchor.is_empty();
+                    if buffer.mark_active {
+                        buffer.set_mark(anchor.start);
+                    }
+                    ed.mouse_drag = Some(MouseDrag {
+                        window: id,
+                        buffer: ed.window().buffer,
+                        anchor,
+                    });
                     Ok(())
                 });
             }
+            MouseEvent::Drag { col, row } => {
+                let Some(drag) = self.mouse_drag.clone() else {
+                    return;
+                };
+                // The window may be gone since the press, or show another
+                // buffer, or a prompt may have come up.
+                let stale = !self.frame().layout.leaves().contains(&drag.window)
+                    || self.windows[drag.window].buffer != drag.buffer
+                    || self.selected() != drag.window
+                    || self.in_minibuffer();
+                if stale {
+                    self.mouse_drag = None;
+                    return;
+                }
+                let rect = self.windows[drag.window].rect;
+                let last = rect.y + rect.h.saturating_sub(2);
+                self.execute_with("mouse-drag-region", |ed| {
+                    // Beyond the top or the bottom of the window, the text
+                    // follows.
+                    if row < rect.y {
+                        ed.scroll_lines(-1)?;
+                    } else if row > last {
+                        ed.scroll_lines(1)?;
+                    }
+                    let row = usize::from(row.clamp(rect.y, last) - rect.y);
+                    let col = usize::from(col.saturating_sub(rect.x));
+                    let pos = ed.position_at(drag.window, row, col);
+                    let (mark, point) = if pos < drag.anchor.start {
+                        (drag.anchor.end, pos)
+                    } else {
+                        (drag.anchor.start, pos.max(drag.anchor.end))
+                    };
+                    ed.set_point(point);
+                    let buffer = ed.buffer_mut();
+                    buffer.set_mark(mark);
+                    buffer.mark_active = mark != point;
+                    Ok(())
+                });
+            }
+            MouseEvent::Release => self.mouse_drag = None,
         }
     }
 
