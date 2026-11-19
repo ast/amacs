@@ -513,6 +513,11 @@ pub const API: &[ApiFn] = api! {
             ed.log(string(args, 0)?);
             Ok(Value::Void)
         };
+    "%queue-eval" (1, Some(1)) "Evaluate source text at top level once the running code has returned to the editor." =>
+        |ed, args| {
+            ed.queue_eval(string(args, 0)?, false)?;
+            Ok(Value::Void)
+        };
     "%read-string" (3, Some(3)) "Start reading a string: prompt, initial input, completion kind. Returns a promise." =>
         |ed, args| {
             let completion = completion(args, 2)?;

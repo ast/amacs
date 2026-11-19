@@ -28,6 +28,7 @@ const FILES: &[(&str, &str)] = &[
     file!("lib/dired.scm"),
     file!("lib/section.scm"),
     file!("lib/menu.scm"),
+    file!("lib/ibuffer.scm"),
     file!("lib/git.scm"),
     file!("lib/markdown.scm"),
     file!("core/test.scm"),

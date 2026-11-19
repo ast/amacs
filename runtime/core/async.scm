@@ -15,3 +15,21 @@ to do on the way out is done."
     (if (%escape? result)
         (raise result)
         result)))
+
+;; What `run-later` has been given and not yet run, oldest first.
+(define %later '())
+
+(define (%run-later!)
+  (unless (null? %later)
+    (let ((thunk (car %later)))
+      (set! %later (cdr %later))
+      (thunk))))
+
+(define (run-later thunk)
+  "Runs a procedure of no arguments once the running code has returned to
+the editor: after the command, hook or evaluation that called this is
+done, and outside any buffer that with-current-buffer made current for
+it. A hook that must wait for a program uses this, so that the buffer it
+runs in is not left on screen while it waits."
+  (set! %later (append %later (list thunk)))
+  (%queue-eval "(%run-later!)"))

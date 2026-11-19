@@ -98,6 +98,13 @@ Code evaluated as text, with `M-:` or `amacsclient --eval`, can wait too. The
 evaluation then answers at once, without a value, and the forms after the
 one that waits run when the wait is over.
 
+While code waits inside `with-current-buffer`, that buffer is the one on
+screen in the selected window. A hook of a buffer runs in it, so a hook
+that waits for a program, as the git gutter waits for `git diff` after a
+save, hands the waiting to `(run-later thunk)`: the procedure runs once
+the running code has returned to the editor, outside any buffer made
+current for it.
+
 ## The pointer
 
 What is done with the pointer becomes keys, bound like any others:
@@ -220,6 +227,30 @@ the directory above.
 
 Its parts are there for other code: `(dired-open dir)`,
 `(dired-file-at-point)`, `(dired-marked-files)`, `(dired-refresh)`.
+
+## The buffer list
+
+`C-x C-b` lists the buffers in groups, one for each project, with marks
+and commands that act on the marked ones; `runtime/lib/ibuffer.scm` is the
+code, and it is built from the sections of `runtime/lib/section.scm`, so a
+group folds with `TAB`. The keys are ibuffer's: `RET` and `o` switch to the
+buffer, `m` `u` `U` `t` mark, `*` marks by kind, `D` kills, `d` and `x`
+flag and kill, `S` saves, `s` sorts, `/` narrows, `g` reads again and `q`
+leaves. Marking on the heading of a group marks every buffer in it. With
+the pointer, a press goes to a buffer or folds a group, a second press
+opens it, `C-<mouse-1>` marks and the button for menus lists what can be
+done.
+
+A buffer that visits no file is listed under "Other buffers", unless its
+major mode is in the `ibuffer-project-modes` option, which starts as the
+file manager and git; those go under the project of their directory. The
+`ibuffer-show-hidden` option says whether the buffers whose names start
+with a space are listed; `.` toggles that in the list.
+
+The parts are there for other code: `(ibuffer)`, `(ibuffer-rows)` with
+`ibuffer-row-name`, `ibuffer-row-file`, `ibuffer-row-mode`,
+`ibuffer-row-size` and `ibuffer-row-modified?`, `(ibuffer-buffer-at-point)`,
+`(ibuffer-marked-buffers)` and `(ibuffer-refresh)`.
 
 ## Git
 

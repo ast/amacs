@@ -775,9 +775,14 @@ worked out when a file is visited and when it is saved.")
 
 (define (git-gutter-update)
   "Works out again the marks beside the lines of the current buffer."
-  (let ((file (buffer-file-name)))
+  (let ((name (buffer-name))
+        (file (buffer-file-name)))
     (when (and file (minor-mode-enabled? 'git-gutter-mode))
-      (%git-gutter-update-buffer (buffer-name) file))))
+      ;; This runs from the buffer's hooks, which may have made it current
+      ;; in a window that shows another, as when several are saved at
+      ;; once. Git takes a moment, so the asking is done afterwards, from
+      ;; outside, or the buffer would be on screen meanwhile.
+      (run-later (lambda () (%git-gutter-update-buffer name file))))))
 
 (add-hook! 'find-file-hook git-gutter-update)
 (add-hook! 'after-save-hook git-gutter-update)

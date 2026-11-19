@@ -43,6 +43,8 @@ Working now:
 - A file manager (`C-x d`) and git views (`C-x g`): status, staging by file
   or hunk, commits, branches, stashes, logs, blame, marks in the gutter
   (below)
+- A buffer list (`C-x C-b`) grouped by project, with marks and commands
+  that kill or save many buffers at once (below)
 - A Model Context Protocol server (`amacs-mcp`) through which a language
   model uses, inspects and changes the running editor: see `docs/ai.md`
 
@@ -292,6 +294,32 @@ yanks the last one.
 
 **Bookmarks**: `C-x r m` names a place in a file and `C-x r b` returns to
 one. They are kept across sessions.
+
+**The buffer list**: `C-x C-b` lists the buffers under the project each
+belongs to, with point on the one you came from, as ibuffer does. Each
+line has the marks, `*` for unsaved changes and `%` for read-only, the
+name, the size, the mode and the file. A project folds with `TAB`.
+
+| Key                | Does                                                                |
+| ------------------ | ------------------------------------------------------------------- |
+| `RET`, `o`         | Switch to the buffer, here or in another window                     |
+| `n`, `p`           | Next and previous buffer, over the headings                         |
+| `m`, `u`, `U`, `t` | Mark, unmark, unmark all, toggle; on a heading, the whole group      |
+| `*`                | Mark by kind: unsaved, in this mode, with or without a file, by name |
+| `D`, `k`           | Kill the marked buffers, or this one, after asking                  |
+| `d`, `x`           | Flag a buffer to be killed; kill the flagged                        |
+| `S`                | Save the marked buffers that have unsaved changes to a file         |
+| `s`                | Sort each group by last use, then name, size or mode                |
+| `/`, `g`           | Narrow to names and files that contain a text; show all again       |
+| `.`                | Show the buffers the editor keeps for itself                        |
+| `w`, `q`           | Copy the file names; leave                                          |
+
+Buffers that visit no file are listed under "Other buffers", except those
+of the modes in the `ibuffer-project-modes` option, a directory listing or
+a git status, which go under their project. The pointer works as in the
+file manager: a press goes to a buffer or folds a group, a second press
+opens, `C-<mouse-1>` marks and the button for menus lists what can be done.
+It is written in Scheme, in `runtime/lib/ibuffer.scm`.
 
 ## Files and git
 
