@@ -144,14 +144,14 @@ The code in a fenced block is highlighted as its language when the fence
 names one that the editor knows (` ```rust `, ` ```sh `), front matter as
 YAML or TOML, and blocks of HTML as HTML.
 
-| Key | Does |
-|---|---|
-| `TAB`, `S-TAB` | In a table: line up its columns and go to the next or previous cell; after the last cell, start a new row |
-| `C-c C-c` | Line up the table at point, or tick or clear the box of a list item |
-| `C-c \|` | Insert a table |
-| `RET` | In a list: start the next item, with the next number and an empty box if the list has them; on an empty item, end the list |
-| `C-c C-n`, `C-c C-p`, `C-c C-j` | Next heading, previous heading, a heading chosen by its text |
-| `M-<left>`, `M-<right>` | Promote or demote the heading at point |
+| Key                             | Does                                                                                                                       |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `TAB`, `S-TAB`                  | In a table: line up its columns and go to the next or previous cell; after the last cell, start a new row                  |
+| `C-c C-c`                       | Line up the table at point, or tick or clear the box of a list item                                                        |
+| `C-c \|`                        | Insert a table                                                                                                             |
+| `RET`                           | In a list: start the next item, with the next number and an empty box if the list has them; on an empty item, end the list |
+| `C-c C-n`, `C-c C-p`, `C-c C-j` | Next heading, previous heading, a heading chosen by its text                                                               |
+| `M-<left>`, `M-<right>`         | Promote or demote the heading at point                                                                                     |
 
 Lining up a table changes its text: every cell of a column is made as wide
 as the widest, counted in screen columns, and placed as the row of dashes
