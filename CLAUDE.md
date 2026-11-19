@@ -38,9 +38,18 @@ reconnects by itself on the next call.
 
 ## Building
 
-Builds, tests and flake checks use six cores, not all of them:
-`CARGO_BUILD_JOBS=6` for cargo and `just`, and `nix flake check --cores 6
---max-jobs 1`.
+`just restart` builds the dev profile: incremental, with optimised
+dependencies, linked with mold. `cargo test` shares that build. The linker
+flag is an environment variable of the devShell in `flake.nix`, not a
+`.cargo/config.toml`, because the Nix build reads that file and has no
+mold. `AMACS_PROFILE=release just restart` builds a release instead.
+
+Builds and tests use six cores, not all of them: `CARGO_BUILD_JOBS=6` for
+cargo and `just`. The flake check goes to the remote builder `evo`, which
+`/etc/nix/machines` lists, so that this machine stays free:
+`nix flake check --max-jobs 0 --cores 0`. When `evo` is not reachable,
+`nix flake check --cores 6 --max-jobs 1` builds here. `just check-remote`
+runs the pre-commit checks on `evo` from a copy of the working tree.
 
 ## Before a commit
 

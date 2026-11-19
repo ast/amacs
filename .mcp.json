@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "amacs": {
-      "command": "target/release/amacs-mcp",
+      "command": "target/debug/amacs-mcp",
       "env": {
         "AMACS_SOCKET": "${XDG_RUNTIME_DIR}/amacs/dev.sock"
       }

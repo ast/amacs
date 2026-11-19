@@ -4,23 +4,28 @@
 # one that may be running for real work. Same as in .envrc.
 export AMACS_SOCKET := env("AMACS_SOCKET", env("XDG_RUNTIME_DIR", "/tmp") / "amacs/dev.sock")
 
+# "dev" or "release". The dev loop builds dev: incremental, with optimised
+# dependencies, and shared with `cargo test`. Same as in .envrc and .mcp.json.
+profile := env("AMACS_PROFILE", "dev")
+bindir := "target" / (if profile == "dev" { "debug" } else { profile })
+
 log := "target/amacs-daemon.log"
 
 default:
     @just --list
 
-# Build a release, stop the server that is running and start a new one.
+# Build, stop the server that is running and start a new one.
 restart: build stop start
 
-# Build the release binaries.
+# Build the binaries of the chosen profile.
 build:
-    cargo build --release
+    cargo build --profile {{profile}}
 
 # Stop the server, if one is running.
 stop:
     #!/usr/bin/env bash
     set -u
-    target/release/amacsclient --kill-server >/dev/null 2>&1 || true
+    {{bindir}}/amacsclient --kill-server >/dev/null 2>&1 || true
     # A new server cannot take the socket until the old one has let go.
     for _ in $(seq 50); do
         [ -S "$AMACS_SOCKET" ] || exit 0
@@ -36,7 +41,7 @@ start:
     mkdir -p "$(dirname "$AMACS_SOCKET")"
     # The Scheme that is part of the editor is read from this checkout,
     # so that a restart picks up changes to it without a build.
-    AMACS_RUNTIME="$PWD/runtime" setsid nohup target/release/amacs --daemon >"{{log}}" 2>&1 </dev/null &
+    AMACS_RUNTIME="$PWD/runtime" setsid nohup {{bindir}}/amacs --daemon >"{{log}}" 2>&1 </dev/null &
     for _ in $(seq 50); do
         if [ -S "$AMACS_SOCKET" ]; then
             echo "amacs is running on $AMACS_SOCKET (log: {{log}})"
@@ -50,7 +55,7 @@ start:
 
 # Open a window on the server, with any files given.
 open *files:
-    target/release/amacsclient -c -n {{files}}
+    {{bindir}}/amacsclient -c -n {{files}}
 
 # What the commit routine checks, short of the flake.
 check:
@@ -58,3 +63,8 @@ check:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
     cargo deny check
+
+# The same checks on evo, from a copy of this working tree, committed or not.
+check-remote host="evo":
+    rsync -a --delete --exclude target --exclude .direnv ./ {{host}}:src/amacs-dev/
+    ssh {{host}} 'cd src/amacs-dev && nix develop -c just check'

@@ -1,0 +1,4 @@
+# A build directory of rust-analyzer's own, so that its checks and a
+# `just restart` do not wait for each other's lock on `target/`.
+[cargo]
+targetDir = true

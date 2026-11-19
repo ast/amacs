@@ -11,13 +11,27 @@
         "aarch64-linux"
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      # What the build and the tests read. The documentation and the files
+      # of the development shell are left out, so that a change to them
+      # does not rebuild everything.
+      src = nixpkgs.lib.fileset.toSource {
+        root = ./.;
+        fileset = nixpkgs.lib.fileset.unions [
+          ./Cargo.toml
+          ./Cargo.lock
+          ./crates
+          ./runtime
+          ./examples
+          ./contrib
+        ];
+      };
     in
     {
       packages = forAllSystems (pkgs: rec {
         amacs = pkgs.rustPlatform.buildRustPackage {
           pname = "amacs";
           version = "0.1.0";
-          src = self;
+          inherit src;
           cargoLock.lockFile = ./Cargo.lock;
           # The Wayland client reads keymaps with libxkbcommon, and talks to
           # the compositor through libwayland, as the drivers of GPUs do.
@@ -26,21 +40,15 @@
             pkgs.libxkbcommon
             pkgs.wayland
           ];
-          # Searching a project's files runs ripgrep, and so do its tests.
-          nativeCheckInputs = [
-            pkgs.ripgrep
-            pkgs.git
-          ];
-          # The renderer's tests draw text and need a known font.
-          AMACS_TEST_FONTS = "${pkgs.jetbrains-mono}/share/fonts";
-          # The check phase runs the whole test suite. Some tests expand `~`.
-          preCheck = "export HOME=$TMPDIR";
-          # User units for running the server under systemd, with or without
-          # socket activation.
+          # The tests are a check of their own, `checks.tests`, built in the
+          # dev profile beside this release build rather than after it.
+          doCheck = false;
           # Drawing with the GPU loads Vulkan when it is asked for, by name.
           postFixup = ''
             patchelf --add-rpath ${pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ]} $out/bin/amacs-gui
           '';
+          # User units for running the server under systemd, with or without
+          # socket activation.
           postInstall = ''
             install -Dm644 -t $out/lib/systemd/user contrib/systemd/amacs.socket
             substitute contrib/systemd/amacs.service $out/lib/systemd/user/amacs.service \
@@ -59,6 +67,24 @@
         in
         {
           inherit amacs;
+
+          # The whole test suite, in the dev profile that `just check` runs.
+          tests = amacs.overrideAttrs (old: {
+            pname = "amacs-tests";
+            # Searching a project's files runs ripgrep, and so do its tests.
+            nativeBuildInputs = old.nativeBuildInputs ++ [
+              pkgs.ripgrep
+              pkgs.git
+            ];
+            # The renderer's tests draw text and need a known font.
+            AMACS_TEST_FONTS = "${pkgs.jetbrains-mono}/share/fonts";
+            # Some tests expand `~`.
+            buildPhase = "HOME=$TMPDIR cargo test --workspace --offline -j $NIX_BUILD_CORES";
+            doCheck = false;
+            installPhase = "touch $out";
+            # Nothing is installed, so there is nothing to fix up.
+            dontFixup = true;
+          });
 
           clippy = amacs.overrideAttrs (old: {
             pname = "amacs-clippy";
@@ -89,7 +115,14 @@
           # What is built here finds Vulkan the way the installed program
           # does through its rpath.
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ];
+          # Link with mold. An environment variable of this shell rather than
+          # a `.cargo/config.toml`: the Nix build reads that file too, and
+          # has no mold. `mold` is mold behind the same wrapper as
+          # the toolchain's ld, which adds the paths of the store libraries.
+          "CARGO_TARGET_${pkgs.stdenv.hostPlatform.rust.cargoEnvVarTarget}_RUSTFLAGS" =
+            "-C link-arg=-fuse-ld=mold";
           packages = with pkgs; [
+            mold
             clippy
             rustfmt
             rust-analyzer
