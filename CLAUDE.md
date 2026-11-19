@@ -62,4 +62,3 @@ the MCP server are in `crates/amacs-server/tests`.
   `unsafe` needs another way.
 - `~/src/nixos`, the Emacs configuration that the editor is modelled on, is
   for reading only.
-- `.envrc` is not committed.

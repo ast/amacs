@@ -58,6 +58,16 @@ the later milestones. `TODO.md` lists what is left.
 Keys follow Emacs defaults: `C-x C-f` opens a file, `C-x C-s` saves, `C-x C-c`
 quits, `M-x` runs a command by name, `M-:` evaluates a Scheme expression.
 
+To work on the editor, `just restart` builds a release and starts a server
+on a socket of its own, `$XDG_RUNTIME_DIR/amacs/dev.sock`, apart from one
+that may be running for real work, and `just open FILE` opens a window on
+it. `just` alone lists the rest.
+
+With direnv, `direnv allow` once is all it takes: the `.envrc` loads the
+flake's shell, puts `target/release` on the path and points `amacsclient`
+at the development server. Without direnv, `nix develop` and
+`export AMACS_SOCKET="$XDG_RUNTIME_DIR/amacs/dev.sock"` do the same.
+
 ## Choosing things in the minibuffer
 
 A prompt that has candidates lists them under the input. Typing narrows them:
