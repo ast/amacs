@@ -58,7 +58,7 @@ impl Software {
         let clip_y1 = (clip.y + clip.h).min(self.height) as i32;
         let channels = match image.content {
             GlyphContent::Mask => 1,
-            GlyphContent::Color => 4,
+            GlyphContent::Color | GlyphContent::Subpixel => 4,
         };
         let (r, g, b) = (color >> 16 & 0xff, color >> 8 & 0xff, color & 0xff);
 
@@ -77,26 +77,45 @@ impl Software {
                     return;
                 };
                 // A mask is coverage of the text colour; a colour glyph, such
-                // as an emoji, brings its own colour.
-                let (sr, sg, sb, alpha) = match image.content {
-                    GlyphContent::Mask => (r, g, b, u32::from(data[0])),
-                    GlyphContent::Color => (
+                // as an emoji, brings its own colour; a glyph drawn per
+                // subpixel covers each part of the pixel by its own amount.
+                let [sr, sg, sb, ar, ag, ab] = match image.content {
+                    GlyphContent::Mask => {
+                        let alpha = u32::from(data[0]);
+                        [r, g, b, alpha, alpha, alpha]
+                    }
+                    GlyphContent::Color => {
+                        let alpha = u32::from(data[3]);
+                        [
+                            u32::from(data[0]),
+                            u32::from(data[1]),
+                            u32::from(data[2]),
+                            alpha,
+                            alpha,
+                            alpha,
+                        ]
+                    }
+                    GlyphContent::Subpixel => [
+                        r,
+                        g,
+                        b,
                         u32::from(data[0]),
                         u32::from(data[1]),
                         u32::from(data[2]),
-                        u32::from(data[3]),
-                    ),
+                    ],
                 };
-                if alpha == 0 {
+                if ar | ag | ab == 0 {
                     continue;
                 }
                 let index = py as usize * self.width as usize + px as usize;
                 let dest = self.pixels[index];
-                let blend = |source: u32, dest: u32| (source * alpha + dest * (255 - alpha)) / 255;
+                let blend = |source: u32, dest: u32, alpha: u32| {
+                    (source * alpha + dest * (255 - alpha)) / 255
+                };
                 self.pixels[index] = 0xff00_0000
-                    | blend(sr, dest >> 16 & 0xff) << 16
-                    | blend(sg, dest >> 8 & 0xff) << 8
-                    | blend(sb, dest & 0xff);
+                    | blend(sr, dest >> 16 & 0xff, ar) << 16
+                    | blend(sg, dest >> 8 & 0xff, ag) << 8
+                    | blend(sb, dest & 0xff, ab);
             }
         }
     }

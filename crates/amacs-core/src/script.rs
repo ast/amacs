@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
+use amacs_proto::SubpixelOrder;
+
 use crate::buffer::{BufferId, LineNumbers};
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
@@ -189,6 +191,7 @@ const TAB_WIDTH: &str = "tab-width";
 pub(crate) const LARGE_FILE_THRESHOLD: &str = "large-file-threshold";
 const FONT_FAMILY: &str = "font-family";
 const FONT_SIZE: &str = "font-size";
+const SUBPIXEL_ORDER: &str = "subpixel-order";
 const LINE_NUMBERS: &str = "line-numbers";
 const INDENT_OFFSET: &str = "indent-offset";
 const INDENT_TABS: &str = "indent-tabs-mode";
@@ -322,6 +325,18 @@ impl ScriptState {
             OptionDef {
                 default: Value::Int(13),
                 doc: "Font size for graphical frames, in pixels.".to_owned(),
+            },
+        );
+        state.options.insert(
+            SUBPIXEL_ORDER.to_owned(),
+            OptionDef {
+                default: Value::str("none"),
+                doc: "How graphical frames draw text: \"none\" in shades of grey; \
+                      \"rgb\" or \"bgr\", the order of the parts of the screen's \
+                      pixels from left to right, for each part by itself, which is \
+                      three times the resolution across and sharper on a screen of \
+                      low density."
+                    .to_owned(),
             },
         );
         state
@@ -631,6 +646,13 @@ impl Editor {
         if name == FONT_FAMILY && !matches!(value, Value::Str(_)) {
             return Err(CmdError::msg("font-family must be a string"));
         }
+        if name == SUBPIXEL_ORDER
+            && !matches!(value, Value::Str(order) if SubpixelOrder::parse(order).is_some())
+        {
+            return Err(CmdError::msg(
+                "subpixel-order must be \"none\", \"rgb\" or \"bgr\"",
+            ));
+        }
         if name == INDENT_OFFSET && !matches!(value, Value::Int(1..=16)) {
             return Err(CmdError::msg(
                 "indent-offset must be an integer from 1 to 16",
@@ -660,8 +682,9 @@ impl Editor {
         Ok(())
     }
 
-    /// The configured font for graphical frames: family, and size in pixels.
-    pub fn frame_font(&self) -> (String, u16) {
+    /// The configured font for graphical frames: family, size in pixels,
+    /// and the order of subpixels to draw for.
+    pub fn frame_font(&self) -> (String, u16, SubpixelOrder) {
         let family = match self.script.option_values.get(FONT_FAMILY) {
             Some(Value::Str(family)) => family.clone(),
             _ => "monospace".to_owned(),
@@ -670,7 +693,11 @@ impl Editor {
             Some(Value::Int(size)) => *size as u16,
             _ => 13,
         };
-        (family, size)
+        let subpixel = match self.script.option_values.get(SUBPIXEL_ORDER) {
+            Some(Value::Str(order)) => SubpixelOrder::parse(order).unwrap_or_default(),
+            _ => SubpixelOrder::None,
+        };
+        (family, size, subpixel)
     }
 
     /// Copies the options that the core itself uses into the buffers.

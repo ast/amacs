@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use amacs_core::Editor;
 use amacs_gui::render::{Fonts, Gpu, Renderer, Software};
-use amacs_proto::{InputEvent, Key, parse_keys};
+use amacs_proto::{InputEvent, Key, SubpixelOrder, parse_keys};
 
 const FONT_PX: f32 = 16.0;
 
@@ -30,6 +30,12 @@ struct Pair {
 impl Pair {
     /// `None` where there is no GPU.
     fn new(cols: u16, rows: u16) -> Option<Self> {
+        Self::with_subpixel(cols, rows, SubpixelOrder::None)
+    }
+
+    /// `None` where there is no GPU, or none that can draw per subpixel
+    /// when that is asked for.
+    fn with_subpixel(cols: u16, rows: u16, order: SubpixelOrder) -> Option<Self> {
         let gpu = match Gpu::offscreen() {
             Ok(gpu) => gpu,
             Err(error) => {
@@ -37,10 +43,14 @@ impl Pair {
                 return None;
             }
         };
+        if order != SubpixelOrder::None && !gpu.draws_subpixels() {
+            eprintln!("skipped: {} does not blend with two sources", gpu.adapter());
+            return None;
+        }
         let mut pair = Self {
             editor: Editor::new(cols, rows),
-            cpu: Renderer::with_backend(fonts(FONT_PX), Software::default()),
-            gpu: Renderer::with_backend(fonts(FONT_PX), gpu),
+            cpu: Renderer::with_backend(fonts(FONT_PX), Software::default()).with_subpixel(order),
+            gpu: Renderer::with_backend(fonts(FONT_PX), gpu).with_subpixel(order),
         };
         let (cell_w, cell_h) = pair.cpu.cell_size();
         pair.resize(u32::from(cols) * cell_w, u32::from(rows) * cell_h);
@@ -254,4 +264,17 @@ fn timing_of_both_backends_at_4k() {
         scrolled.0,
         scrolled.1,
     );
+}
+
+#[test]
+fn the_gpu_draws_subpixels_as_the_cpu_does() {
+    let Some(mut pair) = Pair::with_subpixel(64, 8, SubpixelOrder::Rgb) else {
+        return;
+    };
+    pair.editor.handle_event(InputEvent::Paste(
+        "fn main() -> Result<(), Error> { a != b && c >= d }\n".to_owned(),
+    ));
+    pair.check("text per subpixel");
+    pair.keys("C-x 2");
+    pair.check("two panes per subpixel");
 }

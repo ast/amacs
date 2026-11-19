@@ -13,6 +13,7 @@ amacs-proto.workspace = true
 anyhow.workspace = true
 cosmic-text.workspace = true
 smithay-client-toolkit.workspace = true
+swash.workspace = true
 unicode-width.workspace = true
 # Makes the window's connection one of the system's libwayland.
 wayland-backend.workspace = true

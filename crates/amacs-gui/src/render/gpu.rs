@@ -7,6 +7,11 @@
 //! Colours are blended as the numbers they are, without regard to gamma,
 //! which is what drawing on the CPU does too: the two backends give the
 //! same picture, but for rounding.
+//!
+//! A glyph drawn per subpixel covers the red, green and blue of a pixel by
+//! different amounts, which takes blending with two sources: the colour,
+//! and the coverage of each channel. A GPU without that draws such glyphs
+//! in shades of grey.
 
 use std::collections::HashMap;
 
@@ -35,7 +40,8 @@ struct Instance {
     @location(1) uv: vec4<f32>,
     @location(2) color: vec4<f32>,
     // 0: a rectangle of the colour. 1: a glyph that is a mask for the
-    // colour. 2: a glyph with colours of its own.
+    // colour. 2: a glyph with colours of its own. 3: a glyph that is a
+    // mask for each channel of the colour.
     @location(3) kind: vec4<f32>,
 };
 
@@ -76,6 +82,47 @@ fn fragment(corner: Corner) -> @location(0) vec4<f32> {
 }
 ";
 
+/// The fragment shader for blending with two sources: the colour, and how
+/// much of each channel of the pixel it covers.
+const DUAL_SOURCE_FRAGMENT: &str = r"
+struct Fragments {
+    @location(0) @blend_src(0) color: vec4<f32>,
+    @location(0) @blend_src(1) coverage: vec4<f32>,
+};
+
+@fragment
+fn fragment_dual(corner: Corner) -> Fragments {
+    var out: Fragments;
+    out.color = corner.color;
+    if corner.kind < 0.5 {
+        out.coverage = vec4<f32>(corner.color.a);
+        return out;
+    }
+    let texel = textureLoad(atlas, vec2<i32>(floor(corner.uv)), 0);
+    if corner.kind < 1.5 {
+        out.coverage = vec4<f32>(texel.a);
+        return out;
+    }
+    if corner.kind < 2.5 {
+        out.color = texel;
+        out.coverage = vec4<f32>(texel.a);
+        return out;
+    }
+    out.coverage = vec4<f32>(texel.rgb, 1.0);
+    return out;
+}
+";
+
+/// The whole shader, with the two-source fragment shader where the GPU can
+/// blend that way. The `enable` has to come first.
+fn shader_source(dual_source: bool) -> String {
+    if dual_source {
+        format!("enable dual_source_blending;\n{SHADER}{DUAL_SOURCE_FRAGMENT}")
+    } else {
+        SHADER.to_owned()
+    }
+}
+
 /// Floats in an instance: four vectors of four.
 const INSTANCE_FLOATS: usize = 16;
 const INSTANCE_BYTES: u64 = (INSTANCE_FLOATS * 4) as u64;
@@ -101,6 +148,8 @@ struct Slot {
 struct Atlas {
     texture: wgpu::Texture,
     side: u32,
+    /// Whether glyphs drawn per subpixel can be blended as such.
+    dual_source: bool,
     /// Glyphs without a picture are remembered too.
     slots: HashMap<GlyphKey, Option<Slot>>,
     /// Where the next picture goes, and how tall the row it is in has
@@ -110,7 +159,7 @@ struct Atlas {
 }
 
 impl Atlas {
-    fn new(device: &wgpu::Device) -> Self {
+    fn new(device: &wgpu::Device, dual_source: bool) -> Self {
         let side = ATLAS_SIDE.min(device.limits().max_texture_dimension_2d);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glyph atlas"),
@@ -129,6 +178,7 @@ impl Atlas {
         Self {
             texture,
             side,
+            dual_source,
             slots: HashMap::new(),
             next: (0, 0),
             row_height: 0,
@@ -160,6 +210,7 @@ impl Atlas {
                     && image.height <= self.side =>
             {
                 let texels = (image.width * image.height) as usize;
+                let mut content = image.content;
                 let rgba: Vec<u8> = match image.content {
                     GlyphContent::Mask => image
                         .data
@@ -168,6 +219,30 @@ impl Atlas {
                         .flat_map(|coverage| [255, 255, 255, *coverage])
                         .collect(),
                     GlyphContent::Color => image.data.iter().take(texels * 4).copied().collect(),
+                    GlyphContent::Subpixel if self.dual_source => image
+                        .data
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .take(texels)
+                        .flat_map(|parts| [parts[0], parts[1], parts[2], 255])
+                        .collect(),
+                    // Without two-source blending, the mean of the three
+                    // parts is the coverage of the whole pixel.
+                    GlyphContent::Subpixel => {
+                        content = GlyphContent::Mask;
+                        image
+                            .data
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .take(texels)
+                            .flat_map(|parts| {
+                                let sum: u32 = parts[..3].iter().map(|&part| u32::from(part)).sum();
+                                [255, 255, 255, (sum / 3) as u8]
+                            })
+                            .collect()
+                    }
                 };
                 if rgba.len() != texels * 4 {
                     // A picture with less data than its size says is not one.
@@ -209,7 +284,7 @@ impl Atlas {
                         height: image.height,
                         left: image.left,
                         top: image.top,
-                        content: image.content,
+                        content,
                     })
                 }
             }
@@ -243,6 +318,9 @@ pub struct Gpu {
     pipeline: wgpu::RenderPipeline,
     /// Draws white where there was black and so on: the cursor.
     invert: wgpu::RenderPipeline,
+    /// Whether the GPU blends with two sources, which glyphs drawn per
+    /// subpixel need to be shown as such.
+    dual_source: bool,
     globals: wgpu::Buffer,
     bindings: wgpu::BindGroup,
     instances: wgpu::Buffer,
@@ -330,12 +408,22 @@ impl Gpu {
         target: Target,
         format: wgpu::TextureFormat,
     ) -> Result<Self> {
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .context("the GPU cannot be used")?;
+        let dual_source = adapter
+            .features()
+            .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+        let required_features = if dual_source {
+            wgpu::Features::DUAL_SOURCE_BLENDING
+        } else {
+            wgpu::Features::empty()
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features,
+            ..wgpu::DeviceDescriptor::default()
+        }))
+        .context("the GPU cannot be used")?;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("quads"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(shader_source(dual_source).into()),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("quads"),
@@ -373,7 +461,7 @@ impl Gpu {
             2 => Float32x4,
             3 => Float32x4,
         ];
-        let pipeline = |label: &str, blend: wgpu::BlendState| {
+        let pipeline = |label: &str, entry_point: &str, blend: wgpu::BlendState| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -395,7 +483,7 @@ impl Gpu {
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fragment"),
+                    entry_point: Some(entry_point),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
@@ -419,15 +507,39 @@ impl Gpu {
             dst_factor: wgpu::BlendFactor::Zero,
             operation: wgpu::BlendOperation::Add,
         };
-        let normal = pipeline(
-            "quads",
-            wgpu::BlendState {
-                color: over,
-                alpha: over,
-            },
-        );
+        // The same, channel by channel, by the second source.
+        let over_each = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Src1,
+            dst_factor: wgpu::BlendFactor::OneMinusSrc1,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let over_each_alpha = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Src1Alpha,
+            dst_factor: wgpu::BlendFactor::OneMinusSrc1Alpha,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let normal = if dual_source {
+            pipeline(
+                "quads",
+                "fragment_dual",
+                wgpu::BlendState {
+                    color: over_each,
+                    alpha: over_each_alpha,
+                },
+            )
+        } else {
+            pipeline(
+                "quads",
+                "fragment",
+                wgpu::BlendState {
+                    color: over,
+                    alpha: over,
+                },
+            )
+        };
         let invert = pipeline(
             "cursor",
+            "fragment",
             wgpu::BlendState {
                 color: inverse,
                 alpha: inverse,
@@ -440,7 +552,7 @@ impl Gpu {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let atlas = Atlas::new(&device);
+        let atlas = Atlas::new(&device, dual_source);
         let bindings = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("quads"),
             layout: &layout,
@@ -470,6 +582,7 @@ impl Gpu {
             format,
             pipeline: normal,
             invert,
+            dual_source,
             globals,
             bindings,
             instances,
@@ -492,6 +605,12 @@ impl Gpu {
     }
 
     /// The name of the GPU and how it is driven, for a person.
+    /// Whether glyphs drawn per subpixel are shown as such. A GPU that
+    /// cannot blend with two sources shows them in shades of grey.
+    pub fn draws_subpixels(&self) -> bool {
+        self.dual_source
+    }
+
     pub fn adapter(&self) -> &str {
         &self.adapter
     }
@@ -561,6 +680,7 @@ impl Gpu {
             let kind = match slot.content {
                 GlyphContent::Mask => 1.0,
                 GlyphContent::Color => 2.0,
+                GlyphContent::Subpixel => 3.0,
             };
             push(out, rect, uv, rgba(glyph.color), kind);
         }

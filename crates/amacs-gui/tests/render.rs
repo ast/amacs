@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use amacs_core::Editor;
 use amacs_gui::render::{DEFAULT_BG, Rect, Renderer};
-use amacs_proto::{Color, InputEvent, Key, parse_keys};
+use amacs_proto::{Color, InputEvent, Key, SubpixelOrder, parse_keys};
 
 const FONT_PX: f32 = 16.0;
 
@@ -331,4 +331,65 @@ fn the_mode_line_has_a_line_above_and_below() {
     assert!(row(cell_h / 2).iter().all(|pixel| *pixel == fill));
     // The text rows have no such lines.
     assert!(h.cell_is(58, 1, DEFAULT_BG));
+}
+
+/// How unevenly the channels of the pixels are covered: the largest
+/// difference, over the pixels above the mode line, between how much of
+/// the red and how much of the blue of the background a pixel has lost.
+/// Grey text loses both alike.
+fn channel_unevenness(renderer: &Renderer, rows: u16) -> f32 {
+    let pixels = renderer.pixels();
+    let (width, _) = renderer.size();
+    let (_, cell_h) = renderer.cell_size();
+    let text_rows = usize::from(rows - 2) * cell_h as usize;
+    let mut counts = std::collections::HashMap::new();
+    for &pixel in &pixels[..text_rows * width as usize] {
+        *counts.entry(pixel).or_insert(0usize) += 1;
+    }
+    let background = counts
+        .into_iter()
+        .max_by_key(|&(_, count)| count)
+        .map(|(pixel, _)| pixel)
+        .unwrap();
+    let channel = |pixel: u32, shift: u32| (pixel >> shift & 0xff) as f32;
+    let lost = |pixel: u32, shift: u32| {
+        (channel(background, shift) - channel(pixel, shift)) / channel(background, shift)
+    };
+    pixels[..text_rows * width as usize]
+        .iter()
+        .map(|&pixel| (lost(pixel, 16) - lost(pixel, 0)).abs())
+        .fold(0.0, f32::max)
+}
+
+#[test]
+fn text_is_drawn_per_subpixel_when_the_order_is_known() {
+    let unevenness = |order: SubpixelOrder| {
+        let (cols, rows) = (40, 6);
+        let mut renderer = match std::env::var_os("AMACS_TEST_FONTS") {
+            Some(dir) => Renderer::with_font_dir(&PathBuf::from(dir), "JetBrains Mono", FONT_PX),
+            None => Renderer::new("monospace", FONT_PX),
+        }
+        .with_subpixel(order);
+        let (cell_w, cell_h) = renderer.cell_size();
+        renderer.resize(u32::from(cols) * cell_w, u32::from(rows) * cell_h);
+        let mut editor = Editor::new(cols, rows);
+        editor.handle_event(InputEvent::Paste(
+            "The quick brown fox jumps over it".to_owned(),
+        ));
+        renderer.apply(&editor.redisplay());
+        renderer.paint();
+        channel_unevenness(&renderer, rows)
+    };
+    let grey = unevenness(SubpixelOrder::None);
+    let rgb = unevenness(SubpixelOrder::Rgb);
+    let bgr = unevenness(SubpixelOrder::Bgr);
+    assert!(grey < 0.05, "grey text covers the channels alike: {grey}");
+    assert!(
+        rgb > 0.2,
+        "text drawn per subpixel covers them unevenly: {rgb}"
+    );
+    assert!(
+        bgr > 0.2,
+        "text drawn per subpixel covers them unevenly: {bgr}"
+    );
 }

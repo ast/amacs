@@ -13,8 +13,8 @@ pub use draw::{Color, CursorShape, DisplayLine, DrawOp, FaceAttrs, FaceId, PaneI
 pub use key::{Key, KeyCode, Mods, NamedKey, ParseKeyError, parse_keys};
 pub use screen::Screen;
 pub use wire::{
-    ClientMsg, EvalFailure, FileSpec, FrameRequest, PROTOCOL_VERSION, ServerMsg, pid_path,
-    read_msg, socket_path, write_msg,
+    ClientMsg, EvalFailure, FileSpec, FrameRequest, PROTOCOL_VERSION, ServerMsg, SubpixelOrder,
+    pid_path, read_msg, socket_path, write_msg,
 };
 
 use serde::{Deserialize, Serialize};

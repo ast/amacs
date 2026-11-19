@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use amacs_client::Connection;
 use amacs_gui::render::Renderer;
 use amacs_proto::{
-    ClientMsg, DrawOp, FrameRequest, InputEvent, Key, Screen, ServerMsg, parse_keys,
+    ClientMsg, DrawOp, FrameRequest, InputEvent, Key, Screen, ServerMsg, SubpixelOrder, parse_keys,
 };
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -24,8 +24,9 @@ pub struct Driver {
     connection: Connection,
     pub screen: Screen,
     size: (u16, u16),
-    /// The font that the server would have a window use.
-    font: (String, u16),
+    /// The font that the server would have a window use, and the order of
+    /// subpixels it would draw for.
+    font: (String, u16, SubpixelOrder),
     /// Draws the frame as a window would, once a picture has been asked for.
     renderer: Option<Renderer>,
     /// The connection failed: the server is gone, or was started anew.
@@ -45,7 +46,7 @@ impl Driver {
             connection,
             screen: Screen::default(),
             size: (cols, rows),
-            font: ("monospace".to_owned(), 16),
+            font: ("monospace".to_owned(), 16, SubpixelOrder::None),
             renderer: None,
             lost: false,
         };
@@ -54,8 +55,9 @@ impl Driver {
                 ServerMsg::Attached {
                     font_family,
                     font_size,
+                    subpixel,
                 } => {
-                    driver.font = (font_family, font_size);
+                    driver.font = (font_family, font_size, subpixel);
                     break;
                 }
                 ServerMsg::Draw(ops) => driver.draw(&ops),
@@ -215,7 +217,8 @@ impl Driver {
             let mut renderer = match std::env::var_os("AMACS_TEST_FONTS") {
                 Some(dir) => Renderer::with_font_dir(Path::new(&dir), "JetBrains Mono", size),
                 None => Renderer::new(&self.font.0, size),
-            };
+            }
+            .with_subpixel(self.font.2);
             let (cell_w, cell_h) = renderer.cell_size();
             renderer.resize(
                 u32::from(self.size.0) * cell_w,

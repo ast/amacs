@@ -17,8 +17,8 @@ use amacs_client::{Connection, parse_position};
 use amacs_gui::keys;
 use amacs_gui::render::Fonts;
 use amacs_proto::{
-    ClientMsg, FileSpec, FrameRequest, InputEvent, MouseEvent, ServerMsg, read_msg, socket_path,
-    write_msg,
+    ClientMsg, FileSpec, FrameRequest, InputEvent, MouseEvent, ServerMsg, SubpixelOrder, read_msg,
+    socket_path, write_msg,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use output::{Output, RendererKind};
@@ -63,6 +63,9 @@ Options:
   -n, --no-wait           Keep the window when the files are finished
       --font FAMILY       Font family, instead of the `font-family` option
       --font-size PIXELS  Font size, instead of the `font-size` option
+      --subpixel ORDER    Draw text for subpixels in this order, `rgb` or
+                          `bgr`, or `none` for shades of grey, instead of
+                          the `subpixel-order` option
       --renderer KIND     Draw with the `cpu` (the default) or the `gpu`;
                           AMACS_RENDERER in the environment says the same
   -s, --socket-name PATH  Use this socket instead of the default
@@ -80,6 +83,7 @@ struct Options {
     no_wait: bool,
     font: Option<String>,
     font_size: Option<u16>,
+    subpixel: Option<SubpixelOrder>,
     renderer: Option<RendererKind>,
     socket: Option<PathBuf>,
 }
@@ -139,6 +143,12 @@ fn parse_args() -> Result<Option<Options>> {
                     .filter(|s| (4..=200).contains(s));
                 options.font_size =
                     Some(size.ok_or_else(|| anyhow!("--font-size needs a number from 4 to 200"))?);
+            }
+            "--subpixel" => {
+                let order = value("none, rgb or bgr")?;
+                let order = order.to_str().and_then(SubpixelOrder::parse);
+                options.subpixel =
+                    Some(order.ok_or_else(|| anyhow!("--subpixel needs none, rgb or bgr"))?);
             }
             "--renderer" => {
                 let kind = value("cpu or gpu")?;
@@ -372,11 +382,12 @@ fn run() -> Result<ExitCode> {
             rows: INITIAL_GRID.1,
         },
     })?;
-    let (family, font_size) = match connection.receive()? {
+    let (family, font_size, subpixel) = match connection.receive()? {
         ServerMsg::Attached {
             font_family,
             font_size,
-        } => (font_family, font_size),
+            subpixel,
+        } => (font_family, font_size, subpixel),
         ServerMsg::Exit { message, status } => {
             if let Some(message) = message {
                 eprintln!("{message}");
@@ -391,6 +402,7 @@ fn run() -> Result<ExitCode> {
         _ => family,
     };
     let font_size = f32::from(options.font_size.unwrap_or(font_size));
+    let subpixel = options.subpixel.unwrap_or(subpixel);
 
     let (globals, event_queue) =
         registry_queue_init(&wayland).context("cannot list Wayland globals")?;
@@ -430,7 +442,7 @@ fn run() -> Result<ExitCode> {
         .unwrap_or_default();
     let output = Output::new(
         kind,
-        Fonts::new(&family, font_size),
+        Fonts::new(&family, font_size).with_subpixel(subpixel),
         &wayland,
         window.wl_surface(),
     );

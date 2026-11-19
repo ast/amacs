@@ -81,6 +81,38 @@ pub enum ClientMsg {
     Input(InputEvent),
 }
 
+/// The order of the red, green and blue parts of a screen's pixels, from
+/// left to right: what drawing text per subpixel needs to know. `None`
+/// draws text in shades of grey.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SubpixelOrder {
+    #[default]
+    None,
+    Rgb,
+    Bgr,
+}
+
+impl SubpixelOrder {
+    /// The order named `none`, `rgb` or `bgr`.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "none" => Some(Self::None),
+            "rgb" => Some(Self::Rgb),
+            "bgr" => Some(Self::Bgr),
+            _ => None,
+        }
+    }
+
+    /// The name that [`SubpixelOrder::parse`] reads.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Rgb => "rgb",
+            Self::Bgr => "bgr",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerMsg {
     /// The client has a frame: it must send input and apply draw operations.
@@ -89,6 +121,7 @@ pub enum ServerMsg {
     Attached {
         font_family: String,
         font_size: u16,
+        subpixel: SubpixelOrder,
     },
     /// The files were opened in an existing frame.
     Opened,

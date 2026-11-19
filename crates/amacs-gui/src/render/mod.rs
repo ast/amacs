@@ -35,7 +35,7 @@ mod text;
 
 use std::path::Path;
 
-use amacs_proto::{Color, DrawOp};
+use amacs_proto::{Color, DrawOp, SubpixelOrder};
 
 pub use gpu::Gpu;
 pub use list::{Frame, GlyphQuad, Quad, Row};
@@ -131,6 +131,15 @@ impl<B: Backend> Renderer<B> {
 
     pub fn backend(&self) -> &B {
         &self.backend
+    }
+
+    /// Draws text for a screen whose pixels have their parts in this order,
+    /// or in shades of grey for `None`.
+    pub fn with_subpixel(mut self, order: SubpixelOrder) -> Self {
+        self.fonts.set_subpixel(order);
+        self.backend.forget_glyphs();
+        self.scene.set_stale();
+        self
     }
 
     /// Changes the font size in pixels, as when the output's scale changes.

@@ -452,10 +452,11 @@ impl Server {
             frame
         });
         let reply = if frame.is_some() {
-            let (font_family, font_size) = self.session.editor().frame_font();
+            let (font_family, font_size, subpixel) = self.session.editor().frame_font();
             ServerMsg::Attached {
                 font_family,
                 font_size,
+                subpixel,
             }
         } else {
             ServerMsg::Opened

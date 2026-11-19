@@ -427,8 +427,24 @@ The font comes from two options, for example in `init.scm`:
 ```
 
 `--font` and `--font-size` override them for one window. The default family,
-`monospace`, is whatever fontconfig says it is. The options are read when a
-window opens; changing them does not affect windows that are already open.
+`monospace`, is whatever fontconfig says it is.
+
+Text can also be drawn for each part of a pixel by itself, which is three
+times the resolution across at the price of coloured fringes on the edges
+of glyphs. Some eyes prefer it on a screen of low density, others do not.
+It takes knowing the order of the parts, which compositors rarely do; most
+screens are `rgb`:
+
+```scheme
+(set-option! 'subpixel-order "rgb")   ; or "bgr"; "none" is shades of grey
+```
+
+`--subpixel` overrides it for one window. The GPU renderer needs a GPU that
+blends with two sources, which every desktop GPU does; without one it draws
+in shades of grey.
+
+The options are read when a window opens; changing them does not affect
+windows that are already open.
 
 Text is shaped per run, so programming ligatures form, and then placed on
 the cell grid.

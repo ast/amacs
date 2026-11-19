@@ -17,6 +17,9 @@
 ;; scale is applied, and depends on the machine.
 (set-option! 'font-family "JetBrainsMono Nerd Font Mono")
 (set-option! 'font-size (if (equal? (system-name) "evo") 16 13))
+;; Text in shades of grey. "rgb" draws it per subpixel: three times the
+;; resolution across, with coloured fringes. Grey looks better here.
+(set-option! 'subpixel-order "none")
 
 ;; The theme. Palette entries can be replaced in every theme at once; the
 ;; values are other palette names or colours such as "#aa0000".

@@ -6,11 +6,14 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 use std::rc::Rc;
 
-use amacs_proto::{DisplayLine, FaceAttrs};
+use amacs_proto::{DisplayLine, FaceAttrs, SubpixelOrder};
 use cosmic_text::{
-    Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent,
-    Weight, Wrap,
+    Attrs, Buffer, CacheKey, CacheKeyFlags, Family, FontSystem, Metrics, Shaping, Style, Weight,
+    Wrap,
 };
+use swash::scale::image::{Content as SwashContent, Image as SwashImage};
+use swash::scale::{Render, ScaleContext, Source, StrikeWith};
+use swash::zeno::{Angle, Format, Transform, Vector};
 use unicode_width::UnicodeWidthChar;
 
 /// Shaped lines kept for reuse. Scrolling shows mostly lines seen before.
@@ -28,6 +31,10 @@ pub enum GlyphContent {
     /// Four bytes per pixel, red, green, blue and alpha: a glyph that
     /// brings its own colours, such as an emoji.
     Color,
+    /// Four bytes per pixel: how much of the pixel's red, green and blue
+    /// parts the glyph covers, each to be filled with that part of the
+    /// colour of the text, and a fourth byte that says nothing.
+    Subpixel,
 }
 
 /// The picture of a glyph.
@@ -71,7 +78,11 @@ fn family_attrs(family: &str) -> Attrs<'_> {
 
 pub struct Fonts {
     fonts: FontSystem,
-    glyph_cache: SwashCache,
+    scaler: ScaleContext,
+    /// The pictures of glyphs drawn so far. Glyphs without one, as a space,
+    /// are remembered too.
+    images: HashMap<GlyphKey, Option<SwashImage>>,
+    subpixel: SubpixelOrder,
     /// Reused for shaping one line at a time.
     scratch: Buffer,
     family: String,
@@ -102,7 +113,9 @@ impl Fonts {
         let scratch = Buffer::new(&mut fonts, Metrics::new(font_px, font_px));
         let mut this = Self {
             fonts,
-            glyph_cache: SwashCache::new(),
+            scaler: ScaleContext::new(),
+            images: HashMap::new(),
+            subpixel: SubpixelOrder::None,
             scratch,
             family: family.to_owned(),
             font_px,
@@ -115,12 +128,31 @@ impl Fonts {
         this
     }
 
+    /// Draws glyphs for a screen whose pixels have their parts in this
+    /// order, or in shades of grey for `None`.
+    pub fn with_subpixel(mut self, order: SubpixelOrder) -> Self {
+        self.set_subpixel(order);
+        self
+    }
+
+    /// Changes the order of subpixels to draw for. Every glyph's picture is
+    /// another after this.
+    pub fn set_subpixel(&mut self, order: SubpixelOrder) {
+        self.subpixel = order;
+        self.images.clear();
+    }
+
+    /// The order of subpixels that glyphs are drawn for.
+    pub fn subpixel(&self) -> SubpixelOrder {
+        self.subpixel
+    }
+
     /// Changes the font size in pixels. Every glyph's picture is another
     /// after this.
     pub fn set_size(&mut self, font_px: f32) {
         self.font_px = font_px;
         self.shaped.clear();
-        self.glyph_cache = SwashCache::new();
+        self.images.clear();
         self.scratch.set_metrics(Metrics::new(font_px, font_px));
         self.scratch.set_wrap(Wrap::None);
         self.measure();
@@ -241,7 +273,18 @@ impl Fonts {
 
 impl GlyphSource for Fonts {
     fn image(&mut self, key: GlyphKey) -> Option<GlyphImage<'_>> {
-        let image = self.glyph_cache.get_image(&mut self.fonts, key).as_ref()?;
+        // The red and blue parts of a pixel are a third of a pixel to each
+        // side of the green, in the order the screen has them.
+        let format = match self.subpixel {
+            SubpixelOrder::None => Format::Alpha,
+            SubpixelOrder::Rgb => Format::Subpixel,
+            SubpixelOrder::Bgr => Format::subpixel_bgra(),
+        };
+        let image = self
+            .images
+            .entry(key)
+            .or_insert_with(|| rasterize(&mut self.fonts, &mut self.scaler, key, format))
+            .as_ref()?;
         Some(GlyphImage {
             left: image.placement.left,
             top: image.placement.top,
@@ -249,9 +292,48 @@ impl GlyphSource for Fonts {
             height: image.placement.height,
             content: match image.content {
                 SwashContent::Mask => GlyphContent::Mask,
-                SwashContent::Color | SwashContent::SubpixelMask => GlyphContent::Color,
+                SwashContent::Color => GlyphContent::Color,
+                SwashContent::SubpixelMask => GlyphContent::Subpixel,
             },
             data: &image.data,
         })
     }
+}
+
+/// Draws a glyph: a colour outline or bitmap if the font has one, as for
+/// an emoji, else its outline, hinted, in the format asked for.
+fn rasterize(
+    fonts: &mut FontSystem,
+    context: &mut ScaleContext,
+    key: CacheKey,
+    format: Format,
+) -> Option<SwashImage> {
+    let font = fonts.get_font(key.font_id, key.font_weight)?;
+    let font = font.as_swash();
+    let mut builder = context
+        .builder(font)
+        .size(f32::from_bits(key.font_size_bits))
+        .hint(!key.flags.contains(CacheKeyFlags::DISABLE_HINTING));
+    // A variable font is set to the weight asked for.
+    let weight = swash::Tag::from_be_bytes(*b"wght");
+    if let Some(axis) = font.variations().find_by_tag(weight) {
+        let value = f32::from(key.font_weight.0).clamp(axis.min_value(), axis.max_value());
+        builder = builder.normalized_coords(font.variations().normalized_coords([(weight, value)]));
+    }
+    let mut scaler = builder.build();
+    let offset = Vector::new(key.x_bin.as_float(), key.y_bin.as_float());
+    // Italic from a font that has none is the upright glyph, slanted.
+    let slant = key
+        .flags
+        .contains(CacheKeyFlags::FAKE_ITALIC)
+        .then(|| Transform::skew(Angle::from_degrees(14.0), Angle::from_degrees(0.0)));
+    Render::new(&[
+        Source::ColorOutline(0),
+        Source::ColorBitmap(StrikeWith::BestFit),
+        Source::Outline,
+    ])
+    .format(format)
+    .offset(offset)
+    .transform(slant)
+    .render(&mut scaler, key.glyph_id)
 }
