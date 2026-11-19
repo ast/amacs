@@ -1,0 +1,191 @@
+# What is left
+
+State on 2026-11-19. Milestones M0 to M10 of the original plan are in, and
+since then: tooling for language models (the MCP server), mouse selection
+and buttons as keys, the file manager driven by the pointer, Markdown,
+files looked at before they are read, a renderer in parts with a second
+backend that draws with the GPU, and typing ahead while a command waits for
+a program. What is done is in the history; this file is what is not.
+
+Start by reading `CLAUDE.md`, then `docs/extending.md` and `docs/ai.md`.
+Features go in Scheme under `runtime/`; Rust only for missing primitives.
+
+The order within each section is a suggestion, most useful first.
+
+## Next
+
+What I would take first, across the sections below:
+
+1. The GPU backend keeps the rows that did not change, and then becomes
+   the default if it measures better (see "Drawing").
+2. Files are read in the background (see "Files").
+3. Dropping files from other programs into the editor (see "Mouse").
+
+## Extension surface
+
+- [ ] Markers as Scheme values.
+- [ ] Records and hash tables cannot be passed to editor primitives.
+- [ ] A long copy or move in the file manager holds typing until it is
+      done or `C-g`, as any command that waits for a program does. It
+      could call `(release-input!)`, at the price of the "replace it?"
+      question no longer getting what was typed ahead.
+- [ ] No command renames a buffer or parts it from its file.
+
+## Scheme language (`crates/amacs-scheme`)
+
+- [ ] Keyword arguments and a module system.
+- [ ] R7RS suite: 735 pass, 231 fail, 14 forms do not read. The thresholds
+      are in `tests/r7rs.rs`; raise them as failures are fixed.
+- [ ] `call/cc` is escape-only. Full re-entrant continuations were left out
+      on purpose; revisit only if something needs them.
+
+## Files
+
+- [ ] Files are read in one go on the editor's thread. A large file that
+      was agreed to (`large-file-threshold`) blocks while it is read. Read
+      in the background.
+- [ ] No way to look inside a file that is not text (a hex view, or
+      `find-file-literally`). `C-x C-f` refuses such a file; only the file
+      manager hands it to `xdg-open`.
+
+## File manager (`runtime/lib/dired.scm`)
+
+- [ ] Preview pane.
+- [ ] Refresh when the directory changes on disk.
+- [ ] Renames inside a repository through `git mv`.
+- [ ] No history to go back and forward in: `<mouse-8>` goes up and
+      `<mouse-9>` does nothing.
+- [ ] A plain drop always moves; other file managers copy when the target
+      is on another file system.
+- [ ] The window scrolls when a menu of keys takes rows from it, and does
+      not scroll back.
+
+## Git (`runtime/lib/git.scm`)
+
+- [ ] Interactive rebase.
+- [ ] The gutter updates only on open and save, and is drawn only when line
+      numbers are on.
+- [ ] Forge features (pull requests, issues). Out of scope for v1 in the
+      plan.
+
+## Mouse
+
+- [ ] Drag and drop with other programs: Wayland's data device, which
+      would also give a native clipboard in place of `wl-copy` and
+      `wl-paste`. Dropping in first (`<drop>` with a list of paths),
+      dragging out after. The client is on libwayland already.
+- [ ] A selection made with the mouse does not become the primary
+      selection, and the middle button does not paste it.
+- [ ] A menu at the pointer for `<mouse-3>`; the file manager uses the
+      menu of keys under the echo area.
+- [ ] Mouse in the terminal frontend (only the Wayland client sends it).
+- [ ] The pointer has tests in the editor's core and in Scheme only. What
+      the Wayland client sends (buttons, drags, click counts) is tried by
+      hand.
+
+## Markdown (`runtime/lib/markdown.scm`, grammar in `crates/amacs-treesit`)
+
+- [ ] Tables are lined up by changing the text. Showing an unaligned table
+      aligned without touching it needs virtual text in redisplay.
+- [ ] Hiding markup and a reading mode, as `markdown-ts-view-mode` has.
+- [ ] Moving subtrees, a table of contents, struck-through text drawn
+      struck through (it is drawn as a comment).
+- [ ] Text in another language is parsed anew each time it is drawn
+      (`paint_injections`); cache the trees if large documents feel slow.
+
+## Drawing (`crates/amacs-gui/src/render`)
+
+The CPU backend is the default; `--renderer gpu` or `AMACS_RENDERER=gpu`
+chooses the other. Measured at 3840x2160 on an Intel integrated GPU
+(`timing_of_both_backends_at_4k`): a keystroke costs 3.6 ms on the CPU and
+4.6 ms on the GPU, a page of scrolling 11 ms and 6 ms. The GPU wins where
+everything changes and loses where little does, because it builds the
+whole frame anew.
+
+- [ ] The GPU backend keeps the instances of rows that did not change
+      (`Frame::changed` names the others). Then measure again; if a
+      keystroke is no dearer than on the CPU, make it the default.
+- [ ] An option in Scheme to choose the backend, beside the flag and the
+      environment.
+- [ ] The flake check has no Vulkan, so the tests of the GPU backend pass
+      there without running. Mesa's lavapipe in the sandbox would run
+      them.
+- [ ] The cursor in the window is its cell inverted; the theme's cursor
+      colour, which the terminal now uses, is ignored there.
+- [ ] Proportional fonts.
+
+## MCP server (`crates/amacs-mcp`)
+
+- [ ] A way to press buttons of the pointer, so that a model can try what
+      a person does with the mouse.
+- [ ] A tool to list frames and to look at a user's frame instead of the
+      server's own headless one.
+- [ ] Insight into the Rust side: a panic in the server shows only as a
+      dropped connection. Surface the panic message and the daemon log
+      (`target/amacs-daemon.log`).
+- [ ] The echo area keeps an old message ("Quit") on later screens, which
+      reads as if it belonged to the last key.
+- [ ] The picture from `screen` uses the server's configured font and falls
+      back silently to another monospace font when it is missing.
+
+## From the plan, to check before assuming done
+
+Not verified since they were written. Check each against the code before
+doing any work:
+
+- [ ] M3: systemd units (`amacs.socket`, `amacs.service`), the panic hook
+      that dumps modified buffers, recovery after `kill -9`.
+- [ ] M4: golden-image tests for the Wayland client, the latency trace
+      (target: key press to commit under 5 ms), the Swedish key matrix.
+- [ ] M5: the benchmark of 1M candidates filtered under 30 ms.
+- [ ] M7: a rename with rust-analyzer in a real project; each of the seven
+      language servers tried once.
+- [ ] The sample `examples/init.scm` against the Emacs configuration that
+      the editor is modelled on: which bindings and custom commands are
+      still not ported.
+
+## Later milestones in the plan
+
+None started.
+
+- [ ] Terminal emulator.
+- [ ] Org.
+- [ ] Spelling.
+- [ ] Remote files (tramp).
+- [ ] age encryption.
+- [ ] AI features inside the editor.
+
+## Things that bit before
+
+- `nix flake check` takes ten minutes or more (twenty-five when wgpu is
+  built anew), sees only files git knows, has no network, and its home
+  directory is the build directory. Tests that build paths under a
+  temporary directory must not assume it is outside home
+  (`abbreviate-file-name` turns it into `~/...`).
+- The flake's clippy and format checks reuse the package's recipe and
+  install nothing: a step added to the package that touches `$out/bin`
+  must be kept out of them (`dontFixup`).
+- Count test results plainly: save the output to a file, then
+  `grep -c '^test result: ok'` and grep for `FAILED`. A filter once hid a
+  failure.
+- The development server at `$XDG_RUNTIME_DIR/amacs/dev.sock` is the
+  user's. Before `just restart`, ask it whether a buffer has unsaved
+  changes; for experiments start a server on a private socket with a short
+  path, set through `AMACS_SOCKET`.
+- Stop processes by their ids, never by name: `pkill amacs-gui` or
+  `pkill sway` would take the user's windows and desktop with them. A
+  headless sway for trying a window needs `XDG_RUNTIME_DIR` at a short
+  path and `WLR_BACKENDS=headless`.
+- A session of Claude Code keeps the `amacs-mcp` it started. After a
+  change to the wire protocol its tools fail until the session is started
+  anew.
+- `amacsclient --json --eval '...'`: the flag goes before `--eval`. In zsh
+  use single quotes and `(quote x)` instead of `'x`, or put the code in a
+  file and `load` it.
+- rustfmt rewraps lines, so re-read a file after formatting before making
+  exact-string edits.
+- A change to the wire protocol (now version 10) needs `just restart` and
+  the version bumped in `amacs-proto`.
+- Tests of highlighting must ask for parts of a text, not only the whole:
+  a range that ended inside a table once crashed the server. Tests of
+  redrawing must use lines that differ, or scrolling changes nothing.
