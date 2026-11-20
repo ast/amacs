@@ -24,7 +24,8 @@ fn a_shell_runs_in_the_buffer_and_keys_reach_it() {
     h.type_text("echo hello world").keys("RET");
     h.wait_until(|h| h.screen.row(1) == "hello world");
     assert_eq!(h.screen.row(0), "$ echo hello world");
-    assert!(h.screen.row(2).starts_with("$"), "{}", h.screen.row(2));
+    // The prompt comes after the output, and may come later.
+    h.wait_until(|h| h.screen.row(2).starts_with("$"));
     // Point is at the shell's cursor, after the prompt on the third row.
     assert_eq!(h.screen.cursor(), Some((2, 2)));
     // The text is an ordinary buffer's.
@@ -89,10 +90,11 @@ fn editor_keys_keep_their_meaning_and_point_can_leave_the_cursor() {
 #[test]
 fn an_interrupt_and_the_end_of_the_program() {
     let mut h = shell(40, 6);
-    h.type_text("sleep 30").keys("RET");
-    // Wait until the shell has echoed the command and started running it,
-    // so the interrupt lands on the sleep and not on an empty prompt.
-    h.wait_until(|h| h.text().contains("sleep 30\n"));
+    h.type_text("sh -c 'echo started; sleep 30'").keys("RET");
+    // Wait until the program itself has written, so the interrupt lands on
+    // it and not on a shell that has yet to start it: the echo of the
+    // command comes before that.
+    h.wait_until(|h| h.text().contains("\nstarted\n"));
     h.keys("C-c C-c");
     // A second prompt appears once the sleep is interrupted.
     h.wait_until(|h| {
@@ -130,12 +132,8 @@ fn a_full_screen_program_draws_and_leaves() {
     // Clear the screen and draw at a place, as full screen programs do.
     h.type_text("printf '\\033[2J\\033[3;5Hhere\\033[44m \\033[0m'")
         .keys("RET");
-    h.wait_until(|h| h.screen.row(2).contains("here"));
-    assert!(
-        h.screen.row(2).starts_with("    here "),
-        "{}",
-        h.screen.row(2)
-    );
+    // The prompt follows the blue cell, which may come after the word.
+    h.wait_until(|h| h.screen.row(2).starts_with("    here $"));
     h.eval("(set-face! 'term-test 'fg 'fg-term-blue)");
     assert_eq!(h.screen.face_at(2, 8).bg, h.face("term-test").fg);
     assert_ne!(h.screen.face_at(2, 8).bg, h.screen.face_at(2, 0).bg);
@@ -254,8 +252,11 @@ fn a_listing_beside_the_terminal_follows_the_shell() {
         h.eval("(with-selected-window (cadr (window-list)) (dired-directory))"),
         format!("{top:?}")
     );
+    // The heading shortens a directory under the home directory, which the
+    // temporary one is in some builds.
+    let last = top.rsplit('/').next().unwrap();
     assert!(
-        h.screen.row(0).contains(&format!("{top}:")),
+        h.screen.row(0).contains(&format!("/{last}:")),
         "{}",
         h.screen.row(0)
     );
