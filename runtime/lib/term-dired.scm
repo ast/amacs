@@ -1,6 +1,6 @@
 ;;; A file manager that follows a terminal.
 ;;;
-;;; `term-dired` (C-c C-d in a terminal) shows the directory that the shell
+;;; `term-dired` (C-q C-d in a terminal) shows the directory that the shell
 ;;; is in, in a window beside the terminal, and from then on that window
 ;;; shows the shell's directory whenever the shell changes it. The terminal
 ;;; leads: moving about in the listing does nothing to the shell, and the
@@ -104,5 +104,5 @@ a `cd` at its prompt."
       (unless (equal? directory (dired-directory))
         (dired-open directory)))))
 
-(define-key 'term-mode "C-c C-d" 'term-dired)
+(term-define-key "C-d" 'term-dired)
 (define-key 'dired-mode "c" 'dired-cd-terminal)

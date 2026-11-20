@@ -370,21 +370,21 @@ interface.
 Because the screen is a buffer, every buffer command works on it: `C-s` to
 search, `M-w` to copy, the kill ring, the mark. The lines that scroll off
 the top stay as text (`term-scrollback-lines`, 10000). Keys go to the
-program, except those of the `term-emacs-keys` option (`C-x`, `C-c`, `M-x`,
-`M-:`, `M-o` and a few more), so the editor's own commands still work; this
-is eat's semi-char mode. `C-c C-c` sends an interrupt, `C-c C-y` sends the
-last kill, and `<paste>` is sent as a bracketed paste.
+program, `C-c` among them, except those of the `term-emacs-keys` option
+(`C-x`, `M-x`, `M-:`, `M-o` and a few more), so the editor's own commands
+still work; this is eat's semi-char mode. One key is the terminal's own,
+as the prefix key of tmux: `C-q`, the `term-escape-key` option. It leads to
+the terminal's commands, and sends a reserved key to the program: `C-q C-x`
+sends `C-x`, `C-q C-q` sends `C-q` itself. `C-q C-y` sends the last kill,
+and `<paste>` is sent as a bracketed paste.
 
-To send one of the reserved keys to the program, `C-c C-q` sends the next
-key raw, so `C-c C-q C-x` sends `C-x`. For a program that needs the
-reserved keys all the time, such as a shell with its own `C-x`, a
-full-screen editor or tmux, `C-c C-k` enters char mode, where every key
-goes to the program; the mode line shows `Char`. From char mode, `C-c C-j`
-returns to semi-char mode, and `C-c` followed by any other key is sent to
-the program.
+For a program that needs the reserved keys all the time, such as a shell
+with its own `C-x`, a full-screen editor or tmux, `C-q C-k` enters char
+mode, where every key but `C-q` goes to the program; the mode line shows
+`Char`, and `C-q C-k` returns to semi-char mode.
 
 Point follows the program's cursor until you move it away, to select or
-copy; `C-c C-l` brings it back, and so does the next key sent to the
+copy; `C-q C-l` brings it back, and so does the next key sent to the
 program. The terminal takes the size of the window that shows it. The
 program runs with `TERM=xterm-256color`, `COLORTERM=truecolor`, `AMACS=1`
 and the editor's socket in its environment. The sixteen ANSI colours come
@@ -396,7 +396,7 @@ in the shell, `C-x C-f` and `C-x d` start from there. The editor asks the
 system where the shell is each time it writes, which needs Linux and no
 set-up of the shell; it does not see a `cd` in a shell on another machine.
 
-`C-c C-d` (`term-dired`) shows that directory in the file manager, in a
+`C-q C-d` (`term-dired`) shows that directory in the file manager, in a
 window beside the terminal, and the window follows the shell from then on:
 each `cd` shows the new directory. The terminal leads. Moving about in the
 listing leaves the shell where it is, and `c` there sends the shell to the

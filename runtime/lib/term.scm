@@ -8,30 +8,36 @@
 ;;; itself is kept by the editor's core (`crates/amacs-core/src/terminal.rs`
 ;;; on `crates/amacs-term`).
 ;;;
-;;; Keys go to the program except those in `term-emacs-keys`, which keep
-;;; their meaning in the editor, so that `C-x`, `M-x` and `M-o` work as
-;;; everywhere: eat calls this semi-char mode. `C-c C-c` sends an
-;;; interrupt. Point follows the program's cursor until it is moved away,
-;;; and follows again with the next key sent or `C-c C-l`.
+;;; Keys go to the program, `C-c` among them, except those in
+;;; `term-emacs-keys`, which keep their meaning in the editor, so that
+;;; `C-x`, `M-x` and `M-o` work as everywhere: eat calls this semi-char
+;;; mode. The escape key, `term-escape-key` (C-q, as the prefix of tmux),
+;;; leads to the terminal's own commands and sends a reserved key: `C-q C-x`
+;;; sends `C-x`, `C-q C-q` sends `C-q`. Point follows the program's cursor
+;;; until it is moved away, and follows again with the next key sent or
+;;; `C-q C-l`.
 
 (define-option 'term-shell #f
   "The program that `term` runs: a list of the program and its arguments,
 or #f for the SHELL of the environment, or sh.")
 
+(define-option 'term-escape-key "C-q"
+  "The key that leads to the terminal's own commands in a terminal buffer,
+as the prefix key of tmux: C-q C-k toggles char mode, C-q C-l brings point
+back to the cursor. After it, a key that the editor keeps for itself goes
+to the program instead: C-q C-x sends C-x, and C-q C-q sends the escape
+key itself. Set it in init.scm; terminals started afterwards use it.")
+
 (define-option 'term-emacs-keys
-  '("C-x" "C-c" "M-x" "M-:" "M-o" "C-u" "M-<" "M->" "C-v" "M-v"
+  '("C-x" "M-x" "M-:" "M-o" "C-u" "M-<" "M->" "C-v" "M-v"
     "S-<left>" "S-<right>" "S-<up>" "S-<down>")
   "Keys that keep their meaning in the editor in a terminal buffer, where
-every other key goes to the program. `C-c` leads to the terminal's own
-commands.")
+every other key goes to the program, `C-c` included. Each is sent to the
+program by pressing it after the `term-escape-key`. Set it in init.scm;
+terminals started afterwards use it.")
 
 (define-option 'term-scrollback-lines 10000
   "How many lines that scrolled off the top a terminal buffer keeps.")
-
-(define-option 'term-char-mode-exit-key "C-j"
-  "In char mode, the key pressed after C-c that returns to semi-char mode.
-C-c then this key leaves char mode; C-c then anything else is sent to the
-program.")
 
 (set-face! 'term 'fg #f 'bg #f)
 (set-documentation! 'term
@@ -43,29 +49,30 @@ palette entries.")
 
 (define-major-mode term-mode #f "Term"
   "The screen of a program on a pseudo-terminal. Keys go to the program,
-except those of the `term-emacs-keys` option; `C-c C-c` interrupts it,
-`C-c C-l` brings point back to its cursor."
+`C-c` among them, except those of the `term-emacs-keys` option and the
+`term-escape-key` (C-q), which leads to the terminal's commands and sends
+a reserved key: `C-q C-x` sends `C-x`. `C-q C-l` brings point back to the
+cursor, `C-q C-k` toggles char mode, `C-q C-y` sends the last kill."
+  (%term-bind-keys!)
   (set-buffer-read-only! #t)
   (set-buffer-default-face! 'term))
 
 (define-minor-mode term-char-mode "Char"
   "Char mode: every key goes to the program, including C-x, M-x and the
-other keys that semi-char mode keeps for the editor. For a program that
-needs them, such as a shell with its own C-x, a full-screen editor, or
-tmux. C-c then the `term-char-mode-exit-key` (C-j) returns to semi-char
-mode; C-c then any other key is sent to the program. Toggle with C-c C-k.")
+other keys that semi-char mode keeps for the editor; only the
+`term-escape-key` (C-q) is the editor's, and C-q C-k returns to semi-char
+mode. For a program that needs the editor's keys, such as a shell with its
+own C-x, a full-screen editor, or tmux.")
 
 ;;; Which keys go to the program
 
-(define (%term-keys)
-  "The keys that term-mode binds to `term-send-key`: those that the editor
-binds somewhere, so that the default binding would not catch them, except
-the ones of `term-emacs-keys`."
-  (let ((emacs (option 'term-emacs-keys))
-        (keys '()))
+(define (%term-all-keys)
+  "The keys that term-mode binds to `term-send-key` when nothing keeps them
+for the editor: those that the editor binds somewhere, so that the default
+binding would not catch them."
+  (let ((keys '()))
     (define (add! key)
-      (unless (member key emacs)
-        (set! keys (cons key keys))))
+      (set! keys (cons key keys)))
     (define (add-with-modifiers! name)
       (for-each (lambda (prefix) (add! (string-append prefix name)))
                 '("" "S-" "C-" "M-" "C-S-" "C-M-" "M-S-")))
@@ -91,10 +98,70 @@ the ones of `term-emacs-keys`."
                 "<f9>" "<f10>" "<f11>" "<f12>"))
     (reverse keys)))
 
+(define (%term-reserved-keys)
+  ;; The keys that are the editor's in semi-char mode: the escape key and
+  ;; the keys of `term-emacs-keys`, with the escape key first.
+  (let ((escape (option 'term-escape-key)))
+    (cons escape (filter (lambda (key) (not (equal? key escape)))
+                         (option 'term-emacs-keys)))))
+
+;; The commands after the escape key, as (key . command), the last defined
+;; first. `term-define-key` adds to it.
+(define %term-escape-commands '())
+
+;; The reserved keys that the keymaps were last built for, so that a change
+;; of the options through init.scm or `set-option!` is seen by the next
+;; terminal.
+(define %term-bound-keys #f)
+
 (define (%term-bind-keys!)
-  (define-key 'term-mode #t 'term-send-key)
-  (for-each (lambda (key) (define-key 'term-mode key 'term-send-key))
-            (%term-keys)))
+  "Binds the keys of term-mode and term-char-mode as the options
+`term-escape-key` and `term-emacs-keys` say now. Each terminal started
+does this, so a change of the options needs no more; nothing is done when
+they have not changed."
+  (let ((reserved (%term-reserved-keys)))
+    (unless (equal? reserved %term-bound-keys)
+      (let ((escape (car reserved)))
+        (when %term-bound-keys
+          (undefine-key 'term-mode (car %term-bound-keys))
+          (for-each (lambda (key) (undefine-key 'term-char-mode key))
+                    (cdr %term-bound-keys)))
+        (define-key 'term-mode #t 'term-send-key)
+        (for-each (lambda (key)
+                    (if (member key reserved)
+                        (undefine-key 'term-mode key)
+                        (define-key 'term-mode key 'term-send-key)))
+                  (%term-all-keys))
+        ;; After the escape key, a reserved key goes to the program, the
+        ;; escape key itself among them.
+        (for-each (lambda (key)
+                    (define-key 'term-mode (string-append escape " " key)
+                      'term-send-key))
+                  reserved)
+        (for-each (lambda (binding)
+                    (define-key 'term-mode (string-append escape " " (car binding))
+                      (cdr binding)))
+                  (reverse %term-escape-commands))
+        ;; In char mode the keys that semi-char mode keeps for the editor go
+        ;; to the program too, so they are bound here to override the global
+        ;; prefixes; only the escape key stays, as the way out.
+        (define-key 'term-char-mode #t 'term-send-key)
+        (for-each (lambda (key) (define-key 'term-char-mode key 'term-send-key))
+                  (cdr reserved))
+        (set! %term-bound-keys reserved)))))
+
+(define (term-define-key key command)
+  "Binds a command to a key pressed after the `term-escape-key` in terminal
+buffers, in semi-char mode and char mode alike: (term-define-key \"C-d\"
+'term-dired) makes C-q C-d show the listing. The binding follows the
+escape key when the option is changed."
+  (set! %term-escape-commands
+        (cons (cons key command)
+              (filter (lambda (binding) (not (equal? (car binding) key)))
+                      %term-escape-commands)))
+  (when %term-bound-keys
+    (define-key 'term-mode (string-append (car %term-bound-keys) " " key)
+      command)))
 
 ;;; The buffers
 
@@ -220,10 +287,6 @@ if there is none. With a prefix argument, start another."
   "Sends text to the program in the current terminal buffer, as if typed."
   (terminal-paste text))
 
-(define-command (term-send-interrupt)
-  "Send an interrupt, C-c, to the program in the terminal."
-  (terminal-send-key "C-c"))
-
 (define-command (term-recenter)
   "Bring point back to the program's cursor and keep it there."
   (set-terminal-follow! #t))
@@ -235,7 +298,7 @@ if there is none. With a prefix argument, start another."
              (terminal-buffer?)
              (terminal-follows?)
              (not (memq (this-command) '(term-send-key term-paste term-yank
-                                         term-send-interrupt term-recenter)))
+                                         term-recenter)))
              (let ((cursor (terminal-cursor)))
                (and cursor (not (= cursor (point))))))
     (set-terminal-follow! #f)))
@@ -256,41 +319,11 @@ if there is none. With a prefix argument, start another."
 
 (add-hook! 'window-size-change-hook %term-fit-windows)
 
-(define-command (term-send-next-key)
-  "Send the next key to the program, even a key that the editor usually
-keeps for itself, such as C-x. For sending one such key without leaving
-semi-char mode."
-  (let ((next (read-key "Send key to program: ")))
-    (terminal-send-key next)))
-
-(define-command (term-char-c-c)
-  "In char mode, the handler for C-c: read the next key and either leave
-char mode (if it is the exit key) or send C-c and that key to the program."
-  (let ((next (read-key "C-c-")))
-    (if (equal? next (option 'term-char-mode-exit-key))
-        (term-char-mode)            ; toggles char mode off
-        (begin (terminal-send-key "C-c")
-               (terminal-send-key next)))))
-
-(define (%term-bind-char-keys!)
-  ;; In char mode the keys semi-char keeps for the editor go to the program
-  ;; too, so they must be bound here to override the global prefixes; only
-  ;; C-c stays, as the way out.
-  (define-key 'term-char-mode #t 'term-send-key)
-  (for-each (lambda (key)
-              (unless (equal? key "C-c")
-                (define-key 'term-char-mode key 'term-send-key)))
-            (option 'term-emacs-keys))
-  (define-key 'term-char-mode "C-c" 'term-char-c-c)
-  (define-key 'term-char-mode "<paste>" 'term-paste))
-
-(%term-bind-char-keys!)
-(%term-bind-keys!)
+(term-define-key "C-l" 'term-recenter)
+(term-define-key "C-y" 'term-yank)
+(term-define-key "C-k" 'term-char-mode)
 (define-key 'term-mode "<paste>" 'term-paste)
-(define-key 'term-mode "C-c C-c" 'term-send-interrupt)
-(define-key 'term-mode "C-c C-l" 'term-recenter)
-(define-key 'term-mode "C-c C-y" 'term-yank)
-(define-key 'term-mode "C-c C-k" 'term-char-mode)
-(define-key 'term-mode "C-c C-q" 'term-send-next-key)
+(define-key 'term-char-mode "<paste>" 'term-paste)
+(%term-bind-keys!)
 (global-set-key "C-c v" 'term)
 (global-set-key "C-c V" 'term-other-window)

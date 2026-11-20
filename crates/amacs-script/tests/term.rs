@@ -70,13 +70,13 @@ fn editor_keys_keep_their_meaning_and_point_can_leave_the_cursor() {
     h.keys("C-x b");
     assert!(h.prompt().contains("Switch to buffer"), "{}", h.prompt());
     h.keys("C-g");
-    // Moving point away stops it following the cursor; C-c C-l brings it
+    // Moving point away stops it following the cursor; C-q C-l brings it
     // back; a key for the program does too.
     h.keys("M-<");
     assert_eq!(h.eval("(point)"), "0");
     assert_eq!(h.eval("(terminal-follows?)"), "#f");
-    // C-c C-l brings point back to the cursor and makes it follow again.
-    h.keys("C-c C-l");
+    // C-q C-l brings point back to the cursor and makes it follow again.
+    h.keys("C-q C-l");
     assert_eq!(h.eval("(terminal-follows?)"), "#t");
     assert_eq!(h.eval("(= (point) (terminal-cursor))"), "#t");
     // A key sent to the program also makes it follow again.
@@ -95,7 +95,8 @@ fn an_interrupt_and_the_end_of_the_program() {
     // it and not on a shell that has yet to start it: the echo of the
     // command comes before that.
     h.wait_until(|h| h.text().contains("\nstarted\n"));
-    h.keys("C-c C-c");
+    // C-c is the program's, as in any terminal.
+    h.keys("C-c");
     // A second prompt appears once the sleep is interrupted.
     h.wait_until(|h| {
         h.text()
@@ -173,7 +174,7 @@ fn char_mode_sends_the_reserved_keys_to_the_program() {
     h.keys("C-g");
     // Enter char mode. Now C-x goes to the program, so C-x C-f does not
     // open find-file.
-    h.keys("C-c C-k");
+    h.keys("C-q C-k");
     assert!(h.mode_line().contains("Char"), "{}", h.mode_line());
     assert_eq!(h.eval("(key-binding \"C-x\")"), "term-send-key");
     assert_eq!(h.eval("(key-binding \"M-x\")"), "term-send-key");
@@ -183,8 +184,8 @@ fn char_mode_sends_the_reserved_keys_to_the_program() {
         "C-x opened a prompt in char mode: {}",
         h.prompt()
     );
-    // C-c then the exit key leaves char mode; C-c then another key is sent.
-    h.keys("C-c C-j");
+    // The escape key is still the editor's: C-q C-k leaves char mode.
+    h.keys("C-q C-k");
     assert!(
         !h.mode_line().contains("Char"),
         "did not leave char mode: {}",
@@ -201,18 +202,28 @@ fn char_mode_sends_the_reserved_keys_to_the_program() {
 }
 
 #[test]
-fn a_single_reserved_key_can_be_sent_without_char_mode() {
+fn the_escape_key_sends_a_reserved_key_and_can_be_changed() {
     let mut h = shell(50, 10);
-    // In a shell with emacs line editing, C-a goes to the start of the
-    // line already (not reserved), but C-x is reserved by the editor.
-    // term-send-next-key sends the next key raw: send "x" to be sure it
-    // reaches the program's input line.
-    h.type_text("abc");
-    h.wait_until(|h| h.screen.row(0).ends_with("abc"));
-    h.keys("C-c C-q");
-    assert!(h.prompt().contains("Send key"), "{}", h.prompt());
-    h.type_text("Z");
-    h.wait_until(|h| h.screen.row(0).ends_with("abcZ"));
+    // C-x is the editor's; after the escape key it goes to the program,
+    // which echoes it as ^X. The escape key itself goes after itself.
+    h.keys("C-q C-x");
+    h.wait_until(|h| h.screen.row(0).ends_with("^X"));
+    assert_eq!(h.eval("(key-binding \"C-q C-q\")"), "term-send-key");
+    assert_eq!(h.eval("(key-binding \"C-q C-l\")"), "term-recenter");
+    // The option names the key; the next terminal is bound by it, and a key
+    // put back among the editor's, C-c, is the editor's again.
+    h.eval(
+        r#"(set-option! 'term-escape-key "C-]")
+           (set-option! 'term-emacs-keys (cons "C-c" (option 'term-emacs-keys)))
+           (term-start "*term2*" '("env" "PS1=$ " "sh" "-i"))"#,
+    );
+    h.wait_until(|h| h.screen.row(0).starts_with("$"));
+    assert_eq!(h.eval("(key-binding \"C-q\")"), "term-send-key");
+    assert_eq!(h.eval("(key-binding \"C-] C-k\")"), "term-char-mode");
+    assert_eq!(h.eval("(key-binding \"C-] C-c\")"), "term-send-key");
+    assert_eq!(h.eval("(key-binding \"C-c v\")"), "term");
+    h.keys("C-] C-x");
+    h.wait_until(|h| h.screen.row(0).ends_with("^X"));
 }
 
 /// A shell in a directory of its own with a subdirectory `sub`, in a frame
@@ -244,7 +255,7 @@ fn the_buffer_is_in_the_directory_of_the_shell() {
 #[test]
 fn a_listing_beside_the_terminal_follows_the_shell() {
     let (mut h, _dir, top) = shell_in_directory();
-    h.keys("C-c C-d");
+    h.keys("C-q C-d");
     // The listing is in a window to the right; the terminal keeps the keys.
     assert_eq!(h.eval("(length (window-list))"), "2");
     assert_eq!(h.eval("(buffer-name)"), "\"*term*\"");
@@ -271,7 +282,7 @@ fn a_listing_beside_the_terminal_follows_the_shell() {
     );
 
     // Again selects the listing; `c` on a directory sends the shell there.
-    h.keys("C-c C-d ^");
+    h.keys("C-q C-d ^");
     assert_eq!(h.eval("(dired-directory)"), format!("{top:?}"));
     assert_eq!(h.eval("(term-dired-terminal)"), "\"*term*\"");
     h.keys("c");

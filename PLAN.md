@@ -179,7 +179,10 @@ if it does not, those tests are marked to run outside it.
 Done 2026-11-20: the `amacs-term` crate (VT state machine, key encoding),
 the terminal in a buffer with spans, `make-process` on a pseudo-terminal,
 `term-mode` with semi-char keys, scrollback, point following the cursor,
-the window following its size, and `C-c v`. Still to do in a later pass:
+the window following its size, and `C-c v`. Decided 2026-11-20: `C-c`
+goes to the program, as in any terminal, and one escape key (`C-q`, the
+`term-escape-key` option, as the tmux prefix) leads to the terminal's
+commands and sends a reserved key. Still to do in a later pass:
 OSC 7 and OSC 133 shell integration (prompt motion, and the directory of
 a shell that `/proc` does not show; the local shell's directory is tracked
 through `/proc` since 2026-11-20, with `term-dired` on top), the title in the mode line, and a line mode (editing the input as
