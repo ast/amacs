@@ -212,6 +212,14 @@ fn spawn_on_pty(
     })
 }
 
+/// The directory that a program is in now, where the system tells: Linux
+/// does, through `/proc`. A directory that was deleted under the program
+/// does not count.
+pub(crate) fn process_directory(pid: u32) -> Option<PathBuf> {
+    let directory = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+    directory.is_dir().then_some(directory)
+}
+
 /// Takes a pending byte buffer as text. A character cut by the end of a
 /// chunk waits in the buffer for its rest, unless `all` says there is none
 /// to come.

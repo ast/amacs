@@ -216,3 +216,74 @@ fn a_single_reserved_key_can_be_sent_without_char_mode() {
     h.type_text("Z");
     h.wait_until(|h| h.screen.row(0).ends_with("abcZ"));
 }
+
+/// A shell in a directory of its own with a subdirectory `sub`, in a frame
+/// wide enough for a listing beside it.
+fn shell_in_directory() -> (Harness, tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let top = dir.path().canonicalize().unwrap();
+    std::fs::create_dir(top.join("sub")).unwrap();
+    std::fs::write(top.join("sub/file.txt"), "").unwrap();
+    let top = top.to_str().unwrap().to_owned();
+    let mut h = Harness::new(100, 10);
+    h.eval(&format!(
+        r#"(set-option! 'dired-icons #f)
+           (term-start "*term*" '("env" "PS1=$ " "sh" "-i") {top:?})"#
+    ));
+    h.wait_until(|h| h.screen.row(0).starts_with("$"));
+    (h, dir, top)
+}
+
+#[test]
+fn the_buffer_is_in_the_directory_of_the_shell() {
+    let (mut h, _dir, top) = shell_in_directory();
+    assert_eq!(h.eval("(working-directory)"), format!("{top:?}"));
+    h.type_text("cd sub").keys("RET");
+    let sub = format!("\"{top}/sub\"");
+    h.wait_until(|h| h.eval("(working-directory)") == sub);
+}
+
+#[test]
+fn a_listing_beside_the_terminal_follows_the_shell() {
+    let (mut h, _dir, top) = shell_in_directory();
+    h.keys("C-c C-d");
+    // The listing is in a window to the right; the terminal keeps the keys.
+    assert_eq!(h.eval("(length (window-list))"), "2");
+    assert_eq!(h.eval("(buffer-name)"), "\"*term*\"");
+    assert_eq!(
+        h.eval("(with-selected-window (cadr (window-list)) (dired-directory))"),
+        format!("{top:?}")
+    );
+    assert!(
+        h.screen.row(0).contains(&format!("{top}:")),
+        "{}",
+        h.screen.row(0)
+    );
+
+    h.type_text("cd sub").keys("RET");
+    h.wait_until(|h| h.screen.row(1).contains("file.txt"));
+    assert_eq!(h.eval("(buffer-name)"), "\"*term*\"");
+    // The listing that was left is not kept.
+    assert_eq!(
+        h.eval("(length (filter (lambda (b) (with-current-buffer b (eq? (major-mode) 'dired-mode))) (buffer-list)))"),
+        "1"
+    );
+
+    // Again selects the listing; `c` on a directory sends the shell there.
+    h.keys("C-c C-d ^");
+    assert_eq!(h.eval("(dired-directory)"), format!("{top:?}"));
+    assert_eq!(h.eval("(term-dired-terminal)"), "\"*term*\"");
+    h.keys("c");
+    let sub = format!("\"{top}/sub\"");
+    h.wait_until(|h| h.eval("(dired-directory)") == sub);
+    h.keys("^ ^ c");
+    h.wait_until(|h| h.eval("(dired-directory)") == format!("{top:?}"));
+
+    // A listing that is gone is not followed, and nothing complains.
+    h.keys("q");
+    h.eval(r#"(select-window (car (filter (lambda (w) (equal? (window-buffer w) "*term*")) (window-list))))"#);
+    h.type_text("cd sub").keys("RET");
+    h.wait_until(|h| h.eval("(working-directory)") == sub);
+    assert_eq!(h.eval("(hash-table-count %term-dired-links)"), "0");
+    assert_eq!(h.echo(), "");
+}

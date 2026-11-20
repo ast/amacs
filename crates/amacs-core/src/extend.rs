@@ -19,6 +19,7 @@ use crate::display::walk_row;
 use crate::editor::Editor;
 use crate::env::EnvState;
 use crate::error::{CmdError, CmdResult};
+use crate::frame::FrameId;
 use crate::script::Value;
 use crate::window::WindowId;
 
@@ -80,13 +81,38 @@ impl Editor {
         self.selected()
     }
 
-    /// Selects a window of the current frame.
+    /// Whether a window is still there, in any frame.
+    pub fn window_live(&self, id: WindowId) -> bool {
+        self.windows.contains_key(id)
+    }
+
+    /// The frame of a window. The minibuffer window is a real window of its
+    /// frame but not a leaf of its layout; it is selected while a prompt is
+    /// open, and `with-selected-window` must be able to restore it.
+    fn window_frame(&self, id: WindowId) -> CmdResult<FrameId> {
+        self.frames
+            .iter()
+            .find(|(_, frame)| frame.minibuffer_window == id || frame.layout.leaves().contains(&id))
+            .map(|(frame, _)| frame)
+            .ok_or_else(|| CmdError::msg("That window is no longer there"))
+    }
+
+    /// The selected window of the frame that a window is in.
+    pub fn frame_selected_window(&self, id: WindowId) -> CmdResult<WindowId> {
+        Ok(self.frames[self.window_frame(id)?].selected)
+    }
+
+    /// Selects a window. A window of another frame makes that frame the
+    /// current one for the rest of the script, or until a window of the
+    /// first frame is selected again: code that runs for a program, not
+    /// for a key, reaches the windows of every frame this way.
     pub fn select_window(&mut self, id: WindowId) -> CmdResult {
-        // The minibuffer window is a real window of the frame but not a leaf
-        // of its layout; it is selected while a prompt is open, and
-        // `with-selected-window` must be able to restore it.
-        if id != self.minibuffer_window() && !self.frame().layout.leaves().contains(&id) {
-            return Err(CmdError::msg("That window is not in this frame"));
+        let frame = self.window_frame(id)?;
+        if frame != self.current_frame() {
+            if self.script.restore_frame.is_none() {
+                self.script.restore_frame = Some(self.current_frame());
+            }
+            self.select_frame(frame);
         }
         self.frame_mut().selected = id;
         Ok(())

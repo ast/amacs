@@ -20,9 +20,16 @@ it returns. The buffer's own point is used, and is left where the body
 puts it.")
 
 (define (%call-in-window window thunk)
-  (let ((previous (selected-window)))
+  ;; The window may be in another frame: that frame gets its own selected
+  ;; window back too.
+  (let ((previous (selected-window))
+        (theirs (frame-selected-window window)))
     (select-window window)
-    (unwind-protect (thunk) (select-window previous))))
+    (unwind-protect
+     (thunk)
+     (begin
+       (when (window-live? theirs) (select-window theirs))
+       (select-window previous)))))
 
 (define-syntax with-selected-window
   (syntax-rules ()
@@ -32,7 +39,8 @@ puts it.")
 (set-documentation! 'with-selected-window
   "(with-selected-window window body ...)
 Runs the body with a window selected, and so its buffer current, and
-selects the window that was selected before again.")
+selects the window that was selected before again. The window may be one
+of another frame.")
 
 (define-syntax save-excursion
   (syntax-rules ()

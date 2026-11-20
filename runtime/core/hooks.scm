@@ -9,6 +9,8 @@
 ;;;   kill-buffer-hook   after a buffer is killed, with its name
 ;;;   window-size-change-hook  after the text area of a window changed
 ;;;                      size, or the window came to show another buffer
+;;;   term-directory-hook  after the program in a terminal changed
+;;;                      directory, with the buffer's name and the directory
 ;;; Every mode also has a hook named after it, such as `rust-mode-hook`.
 
 (define %hooks (make-hash-table))

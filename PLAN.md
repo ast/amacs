@@ -180,8 +180,9 @@ Done 2026-11-20: the `amacs-term` crate (VT state machine, key encoding),
 the terminal in a buffer with spans, `make-process` on a pseudo-terminal,
 `term-mode` with semi-char keys, scrollback, point following the cursor,
 the window following its size, and `C-c v`. Still to do in a later pass:
-OSC 7 and OSC 133 shell integration (directory tracking and prompt
-motion), the title in the mode line, and a line mode (editing the input as
+OSC 7 and OSC 133 shell integration (prompt motion, and the directory of
+a shell that `/proc` does not show; the local shell's directory is tracked
+through `/proc` since 2026-11-20, with `term-dired` on top), the title in the mode line, and a line mode (editing the input as
 text). Char mode and a one-off key sender were added 2026-11-20.
 
 ## M12: Claude Code in amacs over the Agent Client Protocol

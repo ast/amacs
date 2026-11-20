@@ -10,12 +10,14 @@
 //! which keys go to the program.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use amacs_term::{HISTORY, Palette, Row, TermEvent, Terminal};
 
 use crate::buffer::BufferId;
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
+use crate::process::process_directory;
 use crate::script::{ScriptCall, ScriptFn, ScriptTarget, Value};
 
 /// Feed at most this many line breaks before taking what scrolled off, so
@@ -26,7 +28,7 @@ pub(crate) struct TerminalState {
     process: u64,
     term: Terminal,
     /// Called with the buffer's name, an event and its argument: `title`,
-    /// `bell`, `clipboard`, `exit`.
+    /// `bell`, `clipboard`, `directory`, `exit`.
     handler: Option<ScriptFn>,
     /// The rows of the live screen as last written into the buffer.
     rows: Vec<Row>,
@@ -103,6 +105,9 @@ impl Editor {
             },
         );
         self.terminals.by_process.insert(process, buffer);
+        if let Some(directory) = self.terminal_directory(buffer) {
+            self.buffers[buffer].directory = Some(directory);
+        }
         self.terminal_sync(buffer);
         Ok(())
     }
@@ -148,6 +153,30 @@ impl Editor {
             rest = after;
         }
         self.terminal_sync(buffer);
+        self.terminal_follow_directory(buffer);
+    }
+
+    /// The directory that the program of a terminal is in.
+    fn terminal_directory(&self, buffer: BufferId) -> Option<PathBuf> {
+        let process = self.terminal_process(buffer)?;
+        process_directory(self.process_pid(process).ok()?)
+    }
+
+    /// Makes the directory of the program the buffer's, and tells the
+    /// handler when it changed. A shell that changes directory writes a
+    /// prompt afterwards, so looking after each output is often enough.
+    fn terminal_follow_directory(&mut self, buffer: BufferId) {
+        let Some(directory) = self.terminal_directory(buffer) else {
+            return;
+        };
+        if self.buffers[buffer].directory.as_ref() == Some(&directory) {
+            return;
+        }
+        let argument = Value::str(directory.to_string_lossy());
+        self.buffers[buffer].directory = Some(directory);
+        let handler = self.terminals.by_buffer[&buffer].handler.clone();
+        let name = self.buffers[buffer].name.clone();
+        self.terminal_notify(&handler, &name, "directory", argument);
     }
 
     /// Moves the lines that scrolled off the screen into the buffer, above

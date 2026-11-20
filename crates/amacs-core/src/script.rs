@@ -163,7 +163,7 @@ pub(crate) struct ScriptState {
     /// The frame each promise was made in.
     promise_frames: HashMap<u64, crate::frame::FrameId>,
     /// The frame to go back to when the running call is done.
-    restore_frame: Option<crate::frame::FrameId>,
+    pub(crate) restore_frame: Option<crate::frame::FrameId>,
     /// The command that the running call is part of, also when the call
     /// is code that waited and goes on.
     running_command: Option<String>,

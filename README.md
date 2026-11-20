@@ -391,6 +391,18 @@ and the editor's socket in its environment. The sixteen ANSI colours come
 from the theme (the `fg-term-*` palette entries); the rest are xterm's.
 Truecolor, bold, italic, underline and inverse all show.
 
+A terminal buffer is in the directory that its shell is in: after a `cd`
+in the shell, `C-x C-f` and `C-x d` start from there. The editor asks the
+system where the shell is each time it writes, which needs Linux and no
+set-up of the shell; it does not see a `cd` in a shell on another machine.
+
+`C-c C-d` (`term-dired`) shows that directory in the file manager, in a
+window beside the terminal, and the window follows the shell from then on:
+each `cd` shows the new directory. The terminal leads. Moving about in the
+listing leaves the shell where it is, and `c` there sends the shell to the
+directory at point with a `cd` typed at its prompt. The window follows
+until it is closed or shows something else.
+
 To give terminals a colour scheme of their own, apart from the editor's
 theme, set the `term` face and the `fg-term-*` palette entries in
 `init.scm`:
@@ -408,7 +420,8 @@ theme, set the `term` face and the `fg-term-*` palette entries in
 ```
 
 It is written in `runtime/lib/term.scm`, on the `amacs-term` crate and the
-process and span primitives of the core.
+process and span primitives of the core; the listing that follows is
+`runtime/lib/term-dired.scm`.
 
 ## Coding agents
 

@@ -127,6 +127,8 @@ the ones of `term-emacs-keys`."
      (message "Bell in " buffer)]
     [(clipboard)
      (kill-new argument)]
+    [(directory)
+     (run-hooks 'term-directory-hook buffer argument)]
     [(exit)
      (when (member buffer (buffer-list))
        (with-current-buffer buffer

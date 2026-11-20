@@ -990,7 +990,14 @@ pub const API: &[ApiFn] = api! {
         |ed, _| Ok(Value::List(ed.window_list().into_iter().map(|id| Value::Int(window_number(id))).collect()));
     "selected-window" (0, Some(0)) "The selected window, as a number." =>
         |ed, _| Ok(Value::Int(window_number(ed.selected_window())));
-    "select-window" (1, Some(1)) "Select a window of the frame." =>
+    "window-live?" (1, Some(1)) "Whether a window is still there, in any frame." =>
+        |ed, args| Ok(ed.window_by_number(int(args, 0)?).is_ok_and(|window| ed.window_live(window)).into());
+    "frame-selected-window" (1, Some(1)) "The selected window of the frame that a window is in, which need not be the current frame." =>
+        |ed, args| {
+            let window = ed.window_by_number(int(args, 0)?)?;
+            Ok(Value::Int(window_number(ed.frame_selected_window(window)?)))
+        };
+    "select-window" (1, Some(1)) "Select a window. A window of another frame makes that frame the current one until the code is done, or until a window of the first frame is selected again, as with-selected-window does." =>
         |ed, args| {
             let window = ed.window_by_number(int(args, 0)?)?;
             ed.select_window(window)?;

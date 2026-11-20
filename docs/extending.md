@@ -46,8 +46,9 @@ editor runs `pre-command-hook` and `post-command-hook` around every command,
 `after-save-hook` around the writing of a buffer to its file,
 `kill-buffer-hook` after a buffer is killed, with its name,
 `window-size-change-hook` when the text area of a window changes size or
-comes to show another buffer, and a hook named after each mode when the
-mode is switched.
+comes to show another buffer, `term-directory-hook` when the program in a
+terminal has changed directory, with the buffer's name and the directory,
+and a hook named after each mode when the mode is switched.
 
 The functions of `before-save-hook` run in the buffer that is about to be
 saved, and what they change is written. They run before the formatter of
@@ -76,7 +77,11 @@ The primitives act on the current buffer: `point`, `goto-char`, `insert`,
 
 Buffers are named by strings and windows by numbers: `(window-list)`,
 `(selected-window)`, `(select-window w)`, `(window-buffer w)`,
-`(window-start w)`, `(window-end w)`, `(window-point w)`.
+`(window-start w)`, `(window-end w)`, `(window-point w)`. `(window-list)`
+is about the current frame, but a window's number is good in any:
+`(window-live? w)` says whether it is still there, and
+`with-selected-window` reaches a window of another frame, which code that
+runs for a program rather than for a key may need.
 
 ## Waiting without blocking
 

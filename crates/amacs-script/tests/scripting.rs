@@ -680,7 +680,7 @@ fn the_editor_can_be_asked_about_itself() {
     );
     assert_eq!(
         h.eval("(procedure-location add-hook!)"),
-        "\"runtime/core/hooks.scm:24:1\""
+        "\"runtime/core/hooks.scm:26:1\""
     );
     assert_eq!(
         h.eval("(describe 'read-string)"),
