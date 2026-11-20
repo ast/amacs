@@ -1,6 +1,7 @@
 //! The procedures that are written in Rust.
 
 mod data;
+mod json;
 mod lists;
 mod numbers;
 mod system;
@@ -18,6 +19,7 @@ pub(crate) fn install(core: &mut Core) {
     lists::install(core);
     text::install(core);
     data::install(core);
+    json::install(core);
     system::install(core);
 }
 

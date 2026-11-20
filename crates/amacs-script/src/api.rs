@@ -1103,7 +1103,7 @@ pub const API: &[ApiFn] = api! {
 
     // Processes that go on running
 
-    "%make-process" (8, Some(8)) "Start a program that goes on running: a name for it, the program, its arguments as a list of strings, the directory to run in or #f for the working directory, an alist of environment variables to set, a filter or #f, a sentinel or #f, and #f for pipes or a list of columns and rows for a pseudo-terminal of that size. Returns the process's number. See `make-process`." =>
+    "%make-process" (8, Some(9)) "Start a program that goes on running: a name for it, the program, its arguments as a list of strings, the directory to run in or #f for the working directory, an alist of environment variables to set, a filter or #f, a sentinel or #f, #f for pipes or a list of columns and rows for a pseudo-terminal of that size, and optionally a filter for standard error or #f to merge it into the output. Returns the process's number. See `make-process`." =>
         |ed, args| {
             let pty = match &args[7] {
                 Value::Bool(false) => None,
@@ -1141,6 +1141,7 @@ pub const API: &[ApiFn] = api! {
                 directory,
                 &environment,
                 procedure_or_false(args, 5)?,
+                if args.len() > 8 { procedure_or_false(args, 8)? } else { None },
                 procedure_or_false(args, 6)?,
                 pty,
             )?;

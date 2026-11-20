@@ -40,6 +40,10 @@ properties, each a symbol and a value:
                pseudo-terminal of that size (80 by 24 unless given), as a
                shell or a full screen program needs; its standard error
                then comes with its output
+  'stderr      a procedure called with the process and the text the program
+               writes to standard error, keeping it apart from the output,
+               which a protocol on standard output needs; without it the
+               error is merged into the output
 
 The program runs in a process group of its own. Nothing waits for it, so
 typing goes on meanwhile. An error if the program cannot be started."
@@ -56,7 +60,8 @@ typing goes on meanwhile. An error if the program cannot be started."
                                  (let ((pty (%property properties 'pty #f)))
                                    (cond [(pair? pty) pty]
                                          [pty '(80 24)]
-                                         [else #f])))))
+                                         [else #f]))
+                                 (%property properties 'stderr #f))))
     (when buffer
       (hash-table-set! %process-buffers process buffer))
     process))

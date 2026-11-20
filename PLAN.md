@@ -184,142 +184,100 @@ OSC 7 and OSC 133 shell integration (directory tracking and prompt
 motion), the title in the mode line, and a line mode (editing the input as
 text). Char mode and a one-off key sender were added 2026-11-20.
 
-## M12: Claude Code in the terminal, the editor as its IDE
+## M12: Claude Code in amacs over the Agent Client Protocol
 
-The idea is the one the VS Code and JetBrains extensions use: `claude`
-keeps its own interface, and the editor supplies context and shows diffs,
-through the protocol those extensions speak. Verified from the
-reverse-engineered description in claudecode.nvim's `PROTOCOL.md` and the
-flags of Claude Code 2.1.303: the editor writes `~/.claude/ide/PORT.lock`
-(`pid`, `workspaceFolders`, `ideName`, `transport: "ws"`, a random
-`authToken`), serves MCP over a WebSocket on `127.0.0.1:PORT`, checks the
-`x-claude-code-ide-authorization` header, and launches `claude` with
-`CLAUDE_CODE_SSE_PORT` and `ENABLE_IDE_INTEGRATION=true` or `--ide`.
+Decided 2026-11-20 with Albin: use the standard protocol and the tools as
+intended, not a reverse-engineered one. So Claude lives in amacs over the
+Agent Client Protocol (agentclientprotocol.com), JSON-RPC over stdio, the
+protocol Zed, Neovim and Emacs's agent-shell use. Claude Code speaks it
+through the official adapter `claude-agent-acp` (nixpkgs has 0.36.1), and
+Gemini, Codex, Goose and others speak it too, so the layer is agent-neutral
+from the start. The terminal of M11 stays, for shells and for running
+`claude`'s own interface when wanted; the integrated experience is ACP.
+
+The earlier idea, a WebSocket IDE bridge reverse-engineered from the VS Code
+extension (`~/.claude/ide/PORT.lock`, an MCP server over a WebSocket, the
+`x-claude-code-ide-authorization` header), is dropped. The `crates/amacs-ide`
+binary and `runtime/lib/ide.scm` are not built.
+
+### Confirmed by a handshake (2026-11-20)
+
+Against the installed adapter: `initialize` returns protocol version 1,
+`loadSession`, session capabilities (close, delete, fork, list, resume) and
+`authMethods: []`, so the user's own `claude` login is used with no auth
+step. `session/new` returns the `sessionId`, the models (default, Opus 1M,
+Fable, Sonnet, Haiku), the permission modes (default, acceptEdits, plan,
+bypassPermissions and so on), `configOptions` for mode, model and effort,
+and then a `session/update` with `available_commands_update` listing every
+slash command. All structured, nothing to scrape.
 
 ### Parts
 
-- **`crates/amacs-ide`**, a small binary like `amacs-mcp`: a WebSocket
-  server (`tungstenite`, no async runtime) that speaks JSON-RPC, writes the
-  lock file, checks the token, and forwards every tool call as an
-  evaluation of `(ide-tool "name" params)` to the editor over the socket,
-  returning the result. It knows the lock-file conventions and nothing
-  about what the tools mean. The directory, file name and header are
-  flags, so another agent's variant of the protocol is a flag away.
-- **An `Eval` that waits** on the wire protocol (version 11): a flag on
-  `ClientMsg::Eval` makes the server answer when the code's promise
-  settles instead of at once. `amacsclient --eval --wait` and the MCP
-  `eval` tool gain it too. This is what `openDiff` needs (it blocks until
-  the user accepts or rejects) and what the askpass helper of M14 needs.
-- **JSON primitives**: `(json-read text)` and `(json-write value)` over
-  alists with symbol keys, vectors, strings, numbers, booleans and `'null`.
-- **`runtime/lib/agent.scm`**, agent-neutral: sessions (name, project,
-  buffer, backend), the compose buffer, sending, context references,
-  attention. Nothing in it names Claude.
-- **`runtime/lib/agents/claude.scm`**: the Claude Code backend: how to
-  start it (`claude`, `--continue` or `--resume` with a prefix argument,
-  in the project root, with the IDE port in its environment), the
-  reference syntax `@path#L3-9`, its slash commands as editor commands,
-  and the IDE tools in Scheme.
-- **`runtime/lib/ide.scm`**: the tools, as procedures that may wait:
-  `getCurrentSelection` and `getLatestSelection` from the region of the
-  user's selected window, `getOpenEditors` from the file buffers,
-  `getWorkspaceFolders` from the projects, `openFile`, `getDiagnostics`
-  from the language server's (a primitive to list them is needed),
-  `checkDocumentDirty`, `saveDocument`, `close_tab`, `closeAllDiffTabs`,
-  and `openDiff`: a diff buffer of the proposed change, `C-c C-c` writes
-  the new text into the buffer and saves it and answers `FILE_SAVED`,
-  `C-c C-k` answers `DIFF_REJECTED`. `selection_changed` is sent,
-  debounced, when point or the region moves in a file buffer, and
-  `at_mentioned` when the user sends a region as context.
+- **`runtime/lib/json.scm`**: JSON in Scheme. Objects are symbol-keyed
+  association lists, arrays are vectors, so `{}` and `[]` never collide;
+  `(json-ref obj 'key)` reads a field. Done 2026-11-20.
+- **`runtime/lib/acp.scm`**: the client, on `make-process` (pipes) and the
+  JSON. Newline-delimited JSON-RPC: send requests with ids and match their
+  replies, dispatch the agent's `session/update` notifications, and answer
+  the methods the client implements. `initialize`, `session/new`,
+  `session/load` and `session/resume`, `session/prompt`, `session/cancel`,
+  `session/set_mode` and the config options. The client side: `fs/read_text_file`
+  and `fs/write_text_file`, answered from buffers so unsaved text is seen;
+  `terminal/*`, answered with `make-process`; and
+  `session/request_permission`, answered by a key menu.
+- **`runtime/lib/agent.scm`**, agent-neutral: a backend is an ACP command
+  and a few procedures (how to point at code, its pretty name). Sessions,
+  the compose buffer, context references, attention, the quick keys.
+  Nothing names Claude.
+- **`runtime/lib/agents/claude.scm`**: the Claude backend, the command
+  `claude-agent-acp`, the reference syntax `@path#L3-9`, and the binding
+  of `C-c c`. `(define-agent 'gemini ...)` adds another agent; the
+  `agent-default` option picks one.
+- **The conversation buffer** `*agent: project*`, built on `section.scm`
+  as the git buffer is: a section per turn, agent text with Markdown faces,
+  thoughts folded, each tool call a section with its title, status and diff
+  in diff faces, the plan as a checklist, the model, mode and token use in
+  the mode line. `RET` on a file location goes there; `TAB` folds.
 
 ### What the user gets
 
 | Key | Does |
 |---|---|
-| `C-c c c` | Start Claude for this project, or switch to it; with `C-u`, continue the last conversation; with `C-u C-u`, pick one to resume |
-| `C-c c t` | Show or hide the session's window |
-| `C-c c p` | The compose buffer: a Markdown buffer for the prompt. `C-c C-c` sends it (as a bracketed paste and `RET`), `C-c C-k` clears it, `M-p` and `M-n` walk earlier prompts, `C-c C-r` inserts a reference to the region or the file, `C-c C-y` inserts the region as a fenced block |
-| `C-c c s` | Send the region, or a reference to it, as context, without leaving the buffer |
-| `C-c c e` | Send the diagnostic at point with a request to fix it |
-| `C-c c k`, `C-c c y`, `C-c c n`, `C-c c RET` | Interrupt; answer yes, no, or press return in the session from anywhere |
-| `C-c c /` | A menu of slash commands (`/clear`, `/compact`, `/model`, `/cost`, and so on) |
-| `C-c c d` | The diff of the project since the last prompt was sent (`git diff` against a stash made at sending) |
-| `C-c c b` | The sessions, to switch between projects |
-| `C-c c o` | Copy the last fenced code block of the session's output |
+| `C-c c c` | Start Claude for this project, or switch to it; with `C-u`, resume a conversation |
+| `C-c c p` | The compose buffer: write the prompt, `C-c C-c` sends it, `M-p` and `M-n` walk earlier prompts, `C-c C-r` inserts a reference to the region |
+| `C-c c s` | Send a reference to the region as context |
+| `C-c c k`, `C-c c y`, `C-c c n` | Cancel the turn; answer a permission request yes or no, from anywhere |
+| `C-c c m` | Set the mode (plan, accept edits, ...) or the model, from the config options |
+| `C-c c /` | A slash command, from `available_commands` |
+| `C-c c b` | Switch between sessions |
 
-Attention: a bell from a session that is not on screen shows in the echo
-area and the mode line (`[claude!]`), and `C-c c a` goes to it. Claude's
-`terminal_bell` notification channel is what rings on a permission prompt;
-a `Notification` hook that runs `amacsclient --eval` is documented as the
-sharper alternative for people who want the message text.
+Attention: a turn that ends or a permission request while the buffer is not
+on screen shows in the echo area and the mode line, and `C-c c a` goes to
+it.
 
 ### Tests
 
-The IDE bridge is tested as the MCP server is, in
-`crates/amacs-server/tests`: a test connects to the WebSocket with the
-token, lists tools and calls `getCurrentSelection` and `openDiff`, and
-accepts the diff by pressing keys in the harness. The agent commands are
-tested with `fake-tty` standing in for `claude`.
+A fake ACP agent (an example binary that speaks the protocol) drives the
+client in `crates/amacs-script/tests`: initialize, a session, a prompt, the
+updates rendered, a permission request answered, a diff shown. The JSON has
+its own tests. The real `claude-agent-acp` is tried by hand, since it spends
+the user's quota.
 
 ### Steps
 
-1. JSON primitives; the waiting `Eval`; a diagnostics primitive.
-2. `agent.scm`: sessions, compose buffer, references, attention, with a
-   `sh` backend for tests.
-3. `agents/claude.scm` without the IDE: start, continue, send, answer.
-4. `amacs-ide` and `ide.scm`; `openDiff`.
-5. The rest of the keys, docs in README and `docs/extending.md`.
-
-## M13: A native agent buffer over ACP
-
-The Agent Client Protocol (agentclientprotocol.com, JSON-RPC over stdio)
-is what Zed, Neovim and Emacs's agent-shell use to talk to coding agents.
-Claude Code speaks it through the adapter `claude-agent-acp` (nixpkgs has
-0.36.1), Gemini CLI, Codex, Goose, OpenCode and others speak it directly
-or through adapters. Protocol version 1 is stable; the Rust SDK exists but
-is future-based and the protocol is small, so the client is written in
-Scheme on `make-process` and the JSON primitives.
-
-### Parts
-
-- **`runtime/lib/acp.scm`**: the client. `initialize` with the client's
-  capabilities (`fs.readTextFile` and `writeTextFile`, answered from
-  buffers so unsaved text is seen; `terminal`, answered with `make-process`
-  on pipes and captured output), `session/new` and `session/load`,
-  `session/prompt`, `session/cancel`, `session/set_mode`, and the
-  `session/update` notifications: message chunks, thoughts, tool calls
-  with their status and diffs, plans, available commands, modes, usage.
-  `session/request_permission` becomes a key menu (`menu.scm`): allow
-  once, always, reject, with `C-c c y` and `C-c c n` answering from any
-  buffer, as in M12.
-- **The conversation buffer** `*agent: project*`, built on `section.scm`
-  as the git buffer is: a section per turn, agent text with Markdown
-  faces, thoughts folded, each tool call a section with its title, status
-  and diff in diff faces, the plan as a checklist, usage and mode in the
-  mode line. `RET` on a location goes there; `TAB` folds.
-- **The backend seam** in `agent.scm`: a backend is a record of
-  procedures (`start`, `send`, `cancel`, `set-mode`, `reference-format`,
-  `alive?`); M12 adds the terminal backend, M13 the ACP one. The compose
-  buffer and all `C-c c` keys work the same over both. `(define-agent
-  'gemini '("gemini" "--experimental-acp") ...)` registers another agent;
-  the `agent-default` option picks one.
-
-### Risks to check in the first step
-
-Whether `claude-agent-acp` uses the subscription login of the `claude`
-command (the adapter wraps the Agent SDK, which runs the CLI, so it
-should); and how much of Claude Code's product (plan mode, subagents,
-hooks, slash commands) survives the adapter. If too little does, M13 is
-still worth it for the other agents, and Claude stays in the terminal.
-
-### Steps
-
-1. A spike: `claude-agent-acp` over `make-process`, one prompt, the
-   updates printed into a buffer.
-2. `acp.scm` complete, with a fake agent (an example binary that speaks
-   ACP) for tests.
-3. The conversation buffer, permissions, modes, the backend seam.
-4. A second agent, docs.
+1. JSON (`json.scm`). Done 2026-11-20.
+2. `acp.scm`: the transport and the handshake, `make-process` on pipes,
+   requests and replies, notifications; a prompt's updates printed to a
+   buffer, with a fake agent for tests. Done 2026-11-20 as a first slice:
+   `claude`, `claude-send`, `claude-cancel`; standard error kept apart
+   from the protocol (a `'stderr` filter on `make-process`); the client's
+   `fs/read_text_file` and `fs/write_text_file` and a permission prompt.
+   Confirmed live: Claude answered over ACP.
+3. The conversation buffer on `section.scm`; the compose buffer and
+   references; `session/prompt` and cancel.
+4. Permissions, modes and models, slash commands; the client's
+   `fs/*` and `terminal/*` methods.
+5. The backend seam and a second agent; attention; docs.
 
 ## M14: Remote files
 

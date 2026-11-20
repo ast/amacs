@@ -140,23 +140,25 @@ the ones of `term-emacs-keys`."
 (define-option 'term-title ""
   "The title that the program in a terminal buffer last set.")
 
-(define (term-start name command)
+(define (term-start name command . directory)
   "Starts a command, a list of the program and its arguments, on a
 pseudo-terminal the size of the selected window, with its screen in a
-buffer of the name, which is shown in the selected window. Returns the
-buffer's name."
-  (switch-to-buffer name)
-  (term-mode)
-  (let* ((size (%term-window-size))
-         (process (make-process name command
-                                'pty size
-                                'buffer name
-                                'environment (%term-environment)
-                                'directory (working-directory))))
-    (%make-terminal name process (car size) (cadr size)
-                    (option 'term-scrollback-lines)
-                    %term-handle-event)
-    name))
+buffer of the name, which is shown in the selected window. The optional
+argument is the directory to run in; the working directory is used
+otherwise. Returns the buffer's name."
+  (let ((dir (if (null? directory) (working-directory) (car directory))))
+    (switch-to-buffer name)
+    (term-mode)
+    (let* ((size (%term-window-size))
+           (process (make-process name command
+                                  'pty size
+                                  'buffer name
+                                  'environment (%term-environment)
+                                  'directory dir)))
+      (%make-terminal name process (car size) (cadr size)
+                      (option 'term-scrollback-lines)
+                      %term-handle-event)
+      name)))
 
 (define (%term-buffers)
   (filter (lambda (name) (terminal-buffer? name)) (buffer-list)))

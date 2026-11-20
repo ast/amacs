@@ -35,7 +35,8 @@ const BACKLOG: usize = 256;
 
 /// What the threads of a process report.
 enum Incoming {
-    Output(u64, Vec<u8>),
+    /// Bytes from a program; the bool is true for its standard error.
+    Output(u64, bool, Vec<u8>),
     /// A reader reached the end of what the program writes.
     Closed(u64),
     /// The program ended: its exit code, or `None` for a signal.
@@ -86,10 +87,15 @@ struct Process {
     /// Where to send input; `None` once the input has been closed.
     input: Option<Sender<Vec<u8>>>,
     filter: Option<ScriptFn>,
+    /// Where the program's standard error goes, apart from its output, for
+    /// a protocol on standard output. `None` merges it into the output.
+    stderr_filter: Option<ScriptFn>,
     sentinel: Option<ScriptFn>,
     /// Output not yet given to the filter: what arrived since the last
     /// poll, after the bytes of a character that the last chunk cut.
     pending: Vec<u8>,
+    /// The same for standard error, when it has a filter of its own.
+    pending_err: Vec<u8>,
     /// Readers that have not reached the end.
     readers: usize,
     /// The exit status once the program has ended.
@@ -103,7 +109,8 @@ struct Process {
 /// A program just started, however it was started.
 struct Spawned {
     pid: u32,
-    readers: Vec<Box<dyn Read + Send>>,
+    /// Each reader with whether it is the program's standard error.
+    readers: Vec<(bool, Box<dyn Read + Send>)>,
     writer: Option<Box<dyn Write + Send>>,
     /// Waits for the program to end and gives its exit code, or `None`
     /// for a signal.
@@ -136,12 +143,12 @@ fn spawn_on_pipes(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn()?;
-    let mut readers: Vec<Box<dyn Read + Send>> = Vec::new();
+    let mut readers: Vec<(bool, Box<dyn Read + Send>)> = Vec::new();
     if let Some(stdout) = child.stdout.take() {
-        readers.push(Box::new(stdout));
+        readers.push((false, Box::new(stdout)));
     }
     if let Some(stderr) = child.stderr.take() {
-        readers.push(Box::new(stderr));
+        readers.push((true, Box::new(stderr)));
     }
     let writer = child
         .stdin
@@ -192,7 +199,7 @@ fn spawn_on_pty(
     let pid = child.process_id().unwrap_or(0);
     Ok(Spawned {
         pid,
-        readers: vec![reader],
+        readers: vec![(false, reader)],
         writer: Some(writer),
         wait: Box::new(move || {
             let status = child.wait().ok()?;
@@ -205,42 +212,43 @@ fn spawn_on_pty(
     })
 }
 
-impl Process {
-    /// Takes the pending output as text. A character cut by the end of a
-    /// chunk waits for its rest, unless `all` says there is none to come.
-    fn take_text(&mut self, all: bool) -> String {
-        let bytes = std::mem::take(&mut self.pending);
-        let mut text = String::new();
-        let mut rest = &bytes[..];
-        loop {
-            match std::str::from_utf8(rest) {
-                Ok(valid) => {
-                    text.push_str(valid);
-                    break;
-                }
-                Err(error) => {
-                    let valid = error.valid_up_to();
-                    text.push_str(&String::from_utf8_lossy(&rest[..valid]));
-                    match error.error_len() {
-                        Some(bad) => {
-                            text.push(char::REPLACEMENT_CHARACTER);
-                            rest = &rest[valid + bad..];
-                        }
-                        None if all => {
-                            text.push(char::REPLACEMENT_CHARACTER);
-                            break;
-                        }
-                        None => {
-                            self.pending = rest[valid..].to_vec();
-                            break;
-                        }
+/// Takes a pending byte buffer as text. A character cut by the end of a
+/// chunk waits in the buffer for its rest, unless `all` says there is none
+/// to come.
+fn decode_pending(buffer: &mut Vec<u8>, all: bool) -> String {
+    let bytes = std::mem::take(buffer);
+    let mut text = String::new();
+    let mut rest = &bytes[..];
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(valid) => {
+                text.push_str(valid);
+                break;
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                text.push_str(&String::from_utf8_lossy(&rest[..valid]));
+                match error.error_len() {
+                    Some(bad) => {
+                        text.push(char::REPLACEMENT_CHARACTER);
+                        rest = &rest[valid + bad..];
+                    }
+                    None if all => {
+                        text.push(char::REPLACEMENT_CHARACTER);
+                        break;
+                    }
+                    None => {
+                        *buffer = rest[valid..].to_vec();
+                        break;
                     }
                 }
             }
         }
-        text
     }
+    text
+}
 
+impl Process {
     fn live(&self) -> bool {
         self.exited.is_none()
     }
@@ -285,6 +293,7 @@ impl Editor {
         directory: Option<PathBuf>,
         environment: &[(String, String)],
         filter: Option<ScriptFn>,
+        stderr_filter: Option<ScriptFn>,
         sentinel: Option<ScriptFn>,
         pty: Option<(u16, u16)>,
     ) -> CmdResult<u64> {
@@ -308,9 +317,9 @@ impl Editor {
         let id = self.processes.next_id;
 
         let readers = spawned.readers.len();
-        for output in spawned.readers {
+        for (is_stderr, output) in spawned.readers {
             let (sender, waker) = (self.processes.sender.clone(), self.waker.clone());
-            std::thread::spawn(move || read_output(id, output, &sender, &waker));
+            std::thread::spawn(move || read_output(id, is_stderr, output, &sender, &waker));
         }
 
         let input = spawned.writer.map(|mut writer| {
@@ -348,8 +357,10 @@ impl Editor {
                 pid: spawned.pid,
                 input,
                 filter,
+                stderr_filter,
                 sentinel,
                 pending: Vec::new(),
+                pending_err: Vec::new(),
                 readers,
                 exited: None,
                 reported: false,
@@ -499,13 +510,19 @@ impl Editor {
         let mut touched: Vec<u64> = Vec::new();
         while let Ok(incoming) = self.processes.incoming.try_recv() {
             let id = match incoming {
-                Incoming::Output(id, _) | Incoming::Closed(id) | Incoming::Exited(id, _) => id,
+                Incoming::Output(id, ..) | Incoming::Closed(id) | Incoming::Exited(id, _) => id,
             };
             let Some(process) = self.processes.processes.get_mut(&id) else {
                 continue;
             };
             match incoming {
-                Incoming::Output(_, bytes) => process.pending.extend_from_slice(&bytes),
+                // Standard error goes to its own filter when there is one,
+                // so a protocol on standard output stays whole; otherwise it
+                // is merged into the output.
+                Incoming::Output(_, true, bytes) if process.stderr_filter.is_some() => {
+                    process.pending_err.extend_from_slice(&bytes)
+                }
+                Incoming::Output(_, _, bytes) => process.pending.extend_from_slice(&bytes),
                 Incoming::Closed(_) => process.readers = process.readers.saturating_sub(1),
                 Incoming::Exited(_, status) => process.exited = Some(status),
             }
@@ -529,12 +546,18 @@ impl Editor {
                     feeds.push((buffer, bytes));
                 }
             } else {
-                let text = process.take_text(ended);
+                let text = decode_pending(&mut process.pending, ended);
                 if !text.is_empty()
                     && let Some(filter) = &process.filter
                 {
                     calls.push((filter.clone(), vec![Value::Int(id as i64), text.into()]));
                 }
+            }
+            let err = decode_pending(&mut process.pending_err, ended);
+            if !err.is_empty()
+                && let Some(filter) = &process.stderr_filter
+            {
+                calls.push((filter.clone(), vec![Value::Int(id as i64), err.into()]));
             }
             if ended && !process.reported {
                 process.reported = true;
@@ -569,6 +592,7 @@ impl Editor {
 /// Reads what a program writes until it closes the stream, in chunks.
 fn read_output(
     id: u64,
+    is_stderr: bool,
     mut output: Box<dyn Read + Send>,
     sender: &SyncSender<Incoming>,
     waker: &crate::completion::Waker,
@@ -579,7 +603,7 @@ fn read_output(
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 if sender
-                    .send(Incoming::Output(id, buffer[..n].to_vec()))
+                    .send(Incoming::Output(id, is_stderr, buffer[..n].to_vec()))
                     .is_err()
                 {
                     return;
@@ -604,8 +628,10 @@ mod tests {
             pid: 1,
             input: None,
             filter: None,
+            stderr_filter: None,
             sentinel: None,
             pending: pending.to_vec(),
+            pending_err: Vec::new(),
             readers: 0,
             exited: None,
             reported: false,
@@ -617,18 +643,18 @@ mod tests {
     fn a_character_cut_by_a_chunk_waits_for_its_rest() {
         let mut process = process_with("a\u{e9}".as_bytes());
         process.pending.truncate(2);
-        assert_eq!(process.take_text(false), "a");
+        assert_eq!(decode_pending(&mut process.pending, false), "a");
         process.pending.push("\u{e9}".as_bytes()[1]);
         process.pending.extend_from_slice(b"b");
-        assert_eq!(process.take_text(false), "\u{e9}b");
+        assert_eq!(decode_pending(&mut process.pending, false), "\u{e9}b");
     }
 
     #[test]
     fn bad_bytes_become_the_replacement_character() {
         let mut process = process_with(b"a\xffb\xc3");
-        assert_eq!(process.take_text(false), "a\u{fffd}b");
+        assert_eq!(decode_pending(&mut process.pending, false), "a\u{fffd}b");
         assert_eq!(process.pending, b"\xc3");
-        assert_eq!(process.take_text(true), "\u{fffd}");
+        assert_eq!(decode_pending(&mut process.pending, true), "\u{fffd}");
     }
 
     #[test]

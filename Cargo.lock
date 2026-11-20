@@ -146,6 +146,7 @@ version = "0.1.0"
 dependencies = [
  "indexmap",
  "proptest",
+ "serde_json",
  "stacker",
 ]
 
