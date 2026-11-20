@@ -82,7 +82,10 @@ impl Editor {
 
     /// Selects a window of the current frame.
     pub fn select_window(&mut self, id: WindowId) -> CmdResult {
-        if !self.frame().layout.leaves().contains(&id) {
+        // The minibuffer window is a real window of the frame but not a leaf
+        // of its layout; it is selected while a prompt is open, and
+        // `with-selected-window` must be able to restore it.
+        if id != self.minibuffer_window() && !self.frame().layout.leaves().contains(&id) {
             return Err(CmdError::msg("That window is not in this frame"));
         }
         self.frame_mut().selected = id;

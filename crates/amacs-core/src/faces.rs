@@ -263,6 +263,8 @@ struct Cache {
     /// The faces themselves and then the combinations, by [`FaceId`].
     table: Vec<FaceAttrs>,
     combined: HashMap<(FaceId, Vec<FaceId>), FaceId>,
+    /// Faces with the attributes of a span laid over them.
+    applied: HashMap<(FaceId, FaceAttrs), FaceId>,
 }
 
 impl Default for Faces {
@@ -419,6 +421,7 @@ impl Faces {
                 })
                 .collect();
             cache.combined.clear();
+            cache.applied.clear();
             cache.version = self.version;
         }
         f(&mut cache)
@@ -479,6 +482,45 @@ impl Faces {
 
     /// The face table for a frontend, indexed by [`FaceId`]: the faces
     /// themselves, and then the combinations made so far.
+    /// The face for text in face `base` with attributes laid over it that
+    /// belong to no named face: a span's colours replace the face's where
+    /// they are given, and its weight, slant, underline and inversion are
+    /// added. The result is a face of its own, made as first asked for.
+    pub fn with_attrs(&self, base: FaceId, over: FaceAttrs) -> FaceId {
+        if over == FaceAttrs::default() {
+            return base;
+        }
+        self.with_cache(|cache| {
+            if let Some(id) = cache.applied.get(&(base, over)) {
+                return *id;
+            }
+            let under = cache
+                .table
+                .get(base.0 as usize)
+                .copied()
+                .unwrap_or_default();
+            let attrs = FaceAttrs {
+                fg: over.fg.or(under.fg),
+                bg: over.bg.or(under.bg),
+                bold: under.bold || over.bold,
+                italic: under.italic || over.italic,
+                underline: under.underline || over.underline,
+                inverse: under.inverse != over.inverse,
+                underline_color: over.underline_color.or(under.underline_color),
+                box_color: over.box_color.or(under.box_color),
+            };
+            let id = match cache.table.iter().position(|existing| *existing == attrs) {
+                Some(index) => FaceId(index as u32),
+                None => {
+                    cache.table.push(attrs);
+                    FaceId(cache.table.len() as u32 - 1)
+                }
+            };
+            cache.applied.insert((base, over), id);
+            id
+        })
+    }
+
     pub fn table(&self) -> Vec<FaceAttrs> {
         self.with_cache(|cache| cache.table.clone())
     }

@@ -22,7 +22,10 @@ amacs-tty = { path = "crates/amacs-tty" }
 amacs-scheme = { path = "crates/amacs-scheme" }
 amacs-script = { path = "crates/amacs-script" }
 amacs-testkit = { path = "crates/amacs-testkit" }
+amacs-term = { path = "crates/amacs-term" }
 
+# The VT state machine of Alacritty, for the terminal in a buffer.
+alacritty_terminal = { version = "0.26", default-features = false }
 anyhow = "1"
 bitflags = { version = "2", features = ["serde"] }
 cosmic-text = "0.19"
@@ -56,7 +59,11 @@ wayland-client = "0.31"
 # Vulkan only: the window is a Wayland one.
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "vulkan", "wgsl"] }
 pollster = "0.4"
+# Pseudo-terminals, with the controlling terminal set in the child.
+portable-pty = "0.9"
 raw-window-handle = "0.6"
+# Signals to the programs that Scheme code starts.
+rustix = { version = "1", features = ["process"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

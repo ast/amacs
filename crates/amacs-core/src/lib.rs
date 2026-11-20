@@ -25,11 +25,13 @@ mod kill_ring;
 mod lsp;
 mod minibuffer;
 mod mouse;
+mod process;
 mod project;
 mod redisplay;
 mod script;
 mod sexp;
 mod snippet;
+mod terminal;
 mod undo_view;
 mod window;
 

@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use amacs_proto::FaceId;
+use amacs_proto::{FaceAttrs, FaceId};
 use amacs_treesit::{Highlight, Highlights};
 
 use crate::buffer::Buffer;
@@ -62,6 +62,10 @@ pub(crate) struct Decorations<'a> {
     faces: &'a Faces,
     /// Faces laid over ranges of chars.
     ranges: Vec<(Range<usize>, FaceId)>,
+    /// The buffer's spans that reach into what is shown, in order.
+    spans: &'a [(Range<usize>, FaceAttrs)],
+    /// The buffer's own default face, under everything, or the theme's.
+    default: FaceId,
     /// The line to mark as current.
     hl_line: Option<usize>,
     /// The column that lines should end before, when whitespace is shown.
@@ -232,9 +236,18 @@ impl Editor {
             ),
             None => (Vec::new(), false),
         };
+        let spans = buffer.spans();
+        let first = spans.partition_point(|(span, _)| span.end <= shown.start);
+        let last = spans.partition_point(|(span, _)| span.start < shown.end);
+        let default = buffer
+            .default_face()
+            .and_then(|name| self.faces.face_id(name))
+            .unwrap_or(faces::DEFAULT);
         Decorations {
             faces: &self.faces,
             ranges,
+            spans: &spans[first..last.max(first)],
+            default,
             hl_line: self
                 .mode_on(buffer, HL_LINE_MODE)
                 .then(|| text.line_of(point)),
@@ -283,6 +296,12 @@ impl Decorations<'_> {
         if self.in_region(pos, row.line, row.base_column + column) {
             return faces::REGION;
         }
+        // A char with no syntax face of its own takes the buffer's default.
+        let base = if base == faces::DEFAULT {
+            self.default
+        } else {
+            base
+        };
         let mut over = [faces::DEFAULT; 12];
         let mut count = 0;
         let mut add = |face: FaceId| {
@@ -313,15 +332,22 @@ impl Decorations<'_> {
                 add(*face);
             }
         }
-        self.combine(base, &over[..count])
+        let face = self.combine(base, &over[..count]);
+        // The span at the position, if any, by bisection: the spans are in
+        // order and apart.
+        let index = self.spans.partition_point(|(span, _)| span.end <= pos);
+        match self.spans.get(index) {
+            Some((span, attrs)) if span.contains(&pos) => self.faces.with_attrs(face, *attrs),
+            _ => face,
+        }
     }
 
     /// The face of the cells after the end of a line's text.
     pub fn fill(&mut self, line: usize) -> FaceId {
         if self.hl_line == Some(line) {
-            self.combine(faces::DEFAULT, &[faces::HL_LINE])
+            self.combine(self.default, &[faces::HL_LINE])
         } else {
-            faces::DEFAULT
+            self.default
         }
     }
 }

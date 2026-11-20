@@ -47,9 +47,11 @@ Working now:
   that kill or save many buffers at once (below)
 - A Model Context Protocol server (`amacs-mcp`) through which a language
   model uses, inspects and changes the running editor: see `docs/ai.md`
+- A terminal emulator (`C-c v`): a shell or any program on a
+  pseudo-terminal, its screen in an ordinary buffer (below)
 
-Not yet: a terminal emulator, Org, spelling, remote files, and the rest of
-the later milestones. `TODO.md` lists what is left.
+Not yet: Org, spelling, remote files, and the rest of the later
+milestones. `TODO.md` lists what is left.
 
 ## Building and running
 
@@ -355,6 +357,58 @@ marks the changed lines of a file beside their numbers.
 Both are written in Scheme, in `runtime/lib/dired.scm` and
 `runtime/lib/git.scm`; `docs/extending.md` has all their keys and the parts
 that other code can use.
+
+## The terminal
+
+`C-c v` opens a terminal: a shell on a pseudo-terminal, its screen shown in
+an ordinary buffer, as eat and vterm do in Emacs. `C-c V` opens one in
+another window. Both go to a terminal already running in the project, or
+start a shell; with a prefix argument they always start another. Full
+programs run in it: `vim`, `htop`, `less`, and a language model's terminal
+interface.
+
+Because the screen is a buffer, every buffer command works on it: `C-s` to
+search, `M-w` to copy, the kill ring, the mark. The lines that scroll off
+the top stay as text (`term-scrollback-lines`, 10000). Keys go to the
+program, except those of the `term-emacs-keys` option (`C-x`, `C-c`, `M-x`,
+`M-:`, `M-o` and a few more), so the editor's own commands still work; this
+is eat's semi-char mode. `C-c C-c` sends an interrupt, `C-c C-y` sends the
+last kill, and `<paste>` is sent as a bracketed paste.
+
+To send one of the reserved keys to the program, `C-c C-q` sends the next
+key raw, so `C-c C-q C-x` sends `C-x`. For a program that needs the
+reserved keys all the time, such as a shell with its own `C-x`, a
+full-screen editor or tmux, `C-c C-k` enters char mode, where every key
+goes to the program; the mode line shows `Char`. From char mode, `C-c C-j`
+returns to semi-char mode, and `C-c` followed by any other key is sent to
+the program.
+
+Point follows the program's cursor until you move it away, to select or
+copy; `C-c C-l` brings it back, and so does the next key sent to the
+program. The terminal takes the size of the window that shows it. The
+program runs with `TERM=xterm-256color`, `COLORTERM=truecolor`, `AMACS=1`
+and the editor's socket in its environment. The sixteen ANSI colours come
+from the theme (the `fg-term-*` palette entries); the rest are xterm's.
+Truecolor, bold, italic, underline and inverse all show.
+
+To give terminals a colour scheme of their own, apart from the editor's
+theme, set the `term` face and the `fg-term-*` palette entries in
+`init.scm`:
+
+```scheme
+;; The background and foreground of terminal buffers.
+(set-face! 'term 'bg "#1e1e2e" 'fg "#cdd6f4")
+;; The sixteen colours that programs name, normal then bright.
+(set-palette-overrides!
+  '((fg-term-black "#45475a") (bg-term-black "#45475a")
+    (fg-term-red "#f38ba8") (fg-term-green "#a6e3a1")
+    (fg-term-yellow "#f9e2af") (fg-term-blue "#89b4fa")
+    (fg-term-magenta "#f5c2e7") (fg-term-cyan "#94e2d5")
+    (fg-term-white "#bac2de") (fg-term-black-bright "#585b70")))
+```
+
+It is written in `runtime/lib/term.scm`, on the `amacs-term` crate and the
+process and span primitives of the core.
 
 ## Smaller things
 

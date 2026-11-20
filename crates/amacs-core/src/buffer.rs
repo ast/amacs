@@ -3,6 +3,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use amacs_proto::FaceAttrs;
 use amacs_text::{Edit, MarkerId, MarkerSet, Text, Transaction, UndoTree};
 use amacs_treesit::{Highlights, IndentParams, Language, Syntax};
 use slotmap::new_key_type;
@@ -73,8 +74,16 @@ pub struct Buffer {
     /// buffer, when that is not the directory of its file: for buffers
     /// that show a directory or what a program wrote about one.
     pub directory: Option<PathBuf>,
+    /// A face whose colours are the buffer's default, in place of the
+    /// theme's: the background of a terminal, say. `None` is the theme.
+    default_face: Option<String>,
     /// Faces laid over stretches of the text by code, with their names.
     text_faces: Vec<(Range<usize>, String)>,
+    /// Colours and attributes laid over stretches of the text without a
+    /// face of a name: sorted by start and never overlapping, so that the
+    /// one at a position is found by bisection. A terminal's screen is
+    /// drawn with these.
+    spans: Vec<(Range<usize>, FaceAttrs)>,
     /// Marks beside lines, by line counted from 0, each the name of the
     /// face it is drawn in: what differs from the last commit, for one.
     line_signs: HashMap<usize, String>,
@@ -133,7 +142,9 @@ impl Buffer {
             auto_saved_tick: None,
             read_only: false,
             directory: None,
+            default_face: None,
             text_faces: Vec::new(),
+            spans: Vec::new(),
             line_signs: HashMap::new(),
             tab_width: 8,
             line_numbers: LineNumbers::Off,
@@ -381,6 +392,7 @@ impl Buffer {
         self.undo = UndoTree::new();
         self.pending = None;
         self.text_faces.clear();
+        self.spans.clear();
         self.line_signs.clear();
         self.mark_set = false;
         self.mark_active = false;
@@ -425,7 +437,7 @@ impl Buffer {
         }
         self.parts().insert(pos, s);
         self.tick += 1;
-        if !self.text_faces.is_empty() {
+        if !self.text_faces.is_empty() || !self.spans.is_empty() {
             let added = s.chars().count();
             for (range, _) in &mut self.text_faces {
                 if range.start >= pos {
@@ -434,6 +446,15 @@ impl Buffer {
                 if range.end > pos {
                     range.end += added;
                 }
+            }
+            // The spans are in order and apart, so their ends are in order
+            // too: those that end at or before the insertion stay.
+            let first = self.spans.partition_point(|(range, _)| range.end <= pos);
+            for (range, _) in &mut self.spans[first..] {
+                if range.start >= pos {
+                    range.start += added;
+                }
+                range.end += added;
             }
         }
     }
@@ -465,6 +486,22 @@ impl Buffer {
             }
             self.text_faces.retain(|(face, _)| !face.is_empty());
         }
+        if !self.spans.is_empty() {
+            let moved = |pos: usize| {
+                if pos >= range.end {
+                    pos - range.len()
+                } else {
+                    pos.min(range.start)
+                }
+            };
+            let first = self
+                .spans
+                .partition_point(|(span, _)| span.end <= range.start);
+            for (span, _) in &mut self.spans[first..] {
+                *span = moved(span.start)..moved(span.end);
+            }
+            self.spans.retain(|(span, _)| !span.is_empty());
+        }
         self.parts().delete(range)
     }
 
@@ -491,6 +528,88 @@ impl Buffer {
 
     pub fn text_faces(&self) -> &[(Range<usize>, String)] {
         &self.text_faces
+    }
+
+    /// The name of the buffer's default face, if it has one of its own.
+    pub fn default_face(&self) -> Option<&str> {
+        self.default_face.as_deref()
+    }
+
+    /// Gives the buffer a default face of its own, or `None` for the
+    /// theme's default.
+    pub fn set_default_face(&mut self, face: Option<String>) {
+        self.default_face = face;
+    }
+
+    /// Replaces a stretch of the text regardless of the read-only flag and
+    /// without recording undo, for buffers that the editor itself writes,
+    /// such as a terminal's. Markers and spans move as for any edit.
+    pub fn splice_raw(&mut self, range: Range<usize>, text: &str) {
+        let len = self.len();
+        let range = range.start.min(len)..range.end.min(len);
+        if !range.is_empty() {
+            self.raw_delete(range.clone());
+        }
+        if !text.is_empty() {
+            self.raw_insert(range.start, text);
+        }
+    }
+
+    // Spans: colours without a face
+
+    /// Lays colours and attributes over a stretch of the text, in place of
+    /// whatever spans covered it. `None` colours leave those under them.
+    pub fn add_span(&mut self, range: Range<usize>, attrs: FaceAttrs) {
+        self.replace_spans(range.clone(), [(range, attrs)]);
+    }
+
+    /// Replaces the spans within `range` with `spans`, which must be in
+    /// order, apart, and within `range`. Spans that reach into `range`
+    /// from either side are cut at its edge.
+    pub fn replace_spans(
+        &mut self,
+        range: Range<usize>,
+        spans: impl IntoIterator<Item = (Range<usize>, FaceAttrs)>,
+    ) {
+        let len = self.len();
+        let range = range.start.min(len)..range.end.min(len);
+        let first = self
+            .spans
+            .partition_point(|(span, _)| span.end <= range.start);
+        let last = self
+            .spans
+            .partition_point(|(span, _)| span.start < range.end);
+        let mut replaced: Vec<(Range<usize>, FaceAttrs)> = Vec::new();
+        if let Some((before, attrs)) = self.spans.get(first)
+            && before.start < range.start
+        {
+            replaced.push((before.start..range.start, *attrs));
+        }
+        let after = (first < last)
+            .then(|| self.spans[last - 1].clone())
+            .filter(|(span, _)| span.end > range.end)
+            .map(|(span, attrs)| (range.end..span.end, attrs));
+        replaced.extend(
+            spans
+                .into_iter()
+                .map(|(span, attrs)| (span.start.max(range.start)..span.end.min(range.end), attrs))
+                .filter(|(span, _)| !span.is_empty()),
+        );
+        replaced.extend(after);
+        self.spans.splice(first..last.max(first), replaced);
+    }
+
+    /// Takes away the spans that touch a range, or all of them.
+    pub fn clear_spans(&mut self, range: Option<Range<usize>>) {
+        match range {
+            Some(range) => self.replace_spans(range, []),
+            None => self.spans.clear(),
+        }
+    }
+
+    /// The spans, in order.
+    pub fn spans(&self) -> &[(Range<usize>, FaceAttrs)] {
+        &self.spans
     }
 
     /// Replaces the marks beside lines: the line, counted from 0, and the
@@ -738,5 +857,64 @@ mod tests {
         assert_eq!(buffer.marker(marker), 6);
         buffer.undo().unwrap();
         assert_eq!(buffer.marker(marker), 4);
+    }
+
+    fn red() -> FaceAttrs {
+        FaceAttrs {
+            fg: Some(amacs_proto::Color::rgb(255, 0, 0)),
+            ..FaceAttrs::default()
+        }
+    }
+
+    fn blue() -> FaceAttrs {
+        FaceAttrs {
+            bg: Some(amacs_proto::Color::rgb(0, 0, 255)),
+            ..FaceAttrs::default()
+        }
+    }
+
+    fn ranges(buffer: &Buffer) -> Vec<Range<usize>> {
+        buffer
+            .spans()
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_span_takes_the_place_of_the_spans_under_it() {
+        let mut buffer = Buffer::new("spans");
+        buffer.reset("0123456789".into());
+        buffer.add_span(0..4, red());
+        buffer.add_span(6..10, red());
+        // Over the middle: the first is cut short, the last starts later.
+        buffer.add_span(2..8, blue());
+        assert_eq!(ranges(&buffer), vec![0..2, 2..8, 8..10]);
+        assert_eq!(buffer.spans()[1].1, blue());
+        // Within one span: it is split around the new one.
+        buffer.add_span(4..5, red());
+        assert_eq!(ranges(&buffer), vec![0..2, 2..4, 4..5, 5..8, 8..10]);
+        buffer.clear_spans(Some(3..9));
+        assert_eq!(ranges(&buffer), vec![0..2, 2..3, 9..10]);
+        buffer.clear_spans(None);
+        assert!(buffer.spans().is_empty());
+    }
+
+    #[test]
+    fn spans_stay_on_their_text_as_it_moves() {
+        let mut buffer = Buffer::new("spans");
+        buffer.reset("abcdef".into());
+        buffer.add_span(1..3, red());
+        buffer.add_span(4..6, blue());
+        buffer.insert(0, "XX").unwrap();
+        assert_eq!(ranges(&buffer), vec![3..5, 6..8]);
+        // An insertion inside a span widens it.
+        buffer.insert(4, "YY").unwrap();
+        assert_eq!(ranges(&buffer), vec![3..7, 8..10]);
+        // A deletion across spans shortens them, and one deleted whole goes.
+        buffer.delete(5..9).unwrap();
+        assert_eq!(ranges(&buffer), vec![3..5, 5..6]);
+        buffer.delete(3..6).unwrap();
+        assert!(buffer.spans().is_empty());
     }
 }

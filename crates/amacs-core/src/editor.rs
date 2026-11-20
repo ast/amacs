@@ -25,6 +25,7 @@ use crate::kill_ring::KillRing;
 use crate::lsp::LspState;
 use crate::minibuffer::MinibufferState;
 use crate::mouse::Mouse;
+use crate::process::ProcessState;
 use crate::script::{ScriptCall, ScriptFn, ScriptState, ScriptTarget, Value};
 use crate::snippet::ActiveSnippet;
 use crate::undo_view::UndoView;
@@ -163,6 +164,8 @@ pub struct Editor {
     /// it replaces.
     natives: HashMap<String, fn(&mut Editor) -> CmdResult>,
     pub(crate) extend: ExtendState,
+    pub(crate) processes: ProcessState,
+    pub(crate) terminals: crate::terminal::Terminals,
     /// Keymaps by name: [`GLOBAL_MAP`], [`MINIBUFFER_MAP`], and one per mode,
     /// named after the mode.
     keymaps: HashMap<String, Keymap>,
@@ -194,6 +197,11 @@ pub struct Editor {
     /// Prefix argument of the command that is running.
     current_prefix: Option<Prefix>,
     pub(crate) last_key: Option<Key>,
+    /// The text last pasted into a buffer that binds `<paste>`.
+    last_paste: Option<String>,
+    /// What each window showed and how much of it, at the last layout, to
+    /// tell when a size changes.
+    window_sizes: HashMap<WindowId, (BufferId, usize, usize)>,
     this_command: Option<String>,
     last_command: Option<String>,
 
@@ -239,6 +247,8 @@ impl Editor {
             keymaps: HashMap::new(),
             natives: HashMap::new(),
             extend: ExtendState::default(),
+            processes: ProcessState::default(),
+            terminals: crate::terminal::Terminals::default(),
             script: ScriptState::new(),
             faces: Faces::default(),
             lsp: LspState::default(),
@@ -258,6 +268,8 @@ impl Editor {
             prefix_arg: None,
             current_prefix: None,
             last_key: None,
+            last_paste: None,
+            window_sizes: HashMap::new(),
             this_command: None,
             last_command: None,
             default_directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
@@ -663,7 +675,42 @@ impl Editor {
         self.minibuffer_hint = None;
         self.cancel_pending();
         self.cancel_key_prompt();
+        // A mode that wants the text itself binds `<paste>`; a terminal
+        // hands it to its program.
+        let key = Key::named(NamedKey::Paste);
+        if let Some(command) = self.key_binding(&[key]) {
+            self.last_paste = Some(text.to_owned());
+            self.last_key = Some(key);
+            self.execute(&command);
+            return;
+        }
         self.execute_with("yank", |ed| ed.insert(text));
+    }
+
+    /// The name of the command that is running, if one is.
+    pub fn this_command(&self) -> Option<&str> {
+        self.this_command.as_deref()
+    }
+
+    /// The key that ran the command that is running, as `last-key` gives
+    /// it, or the last one pressed.
+    pub fn last_key(&self) -> Option<Key> {
+        self.last_key
+    }
+
+    /// The text last pasted into a buffer that binds `<paste>`.
+    pub fn last_paste(&self) -> Option<&str> {
+        self.last_paste.as_deref()
+    }
+
+    /// Columns of a window that show text: without the line numbers.
+    pub fn window_width(&self, id: WindowId) -> usize {
+        self.text_width(id)
+    }
+
+    /// Rows of a window that show text: without the mode line.
+    pub fn window_height(&self, id: WindowId) -> usize {
+        self.windows[id].text_rows()
     }
 
     /// Runs `body` with the bookkeeping of a command called `name`.
@@ -779,6 +826,7 @@ impl Editor {
         self.environment_poll();
         self.lsp_poll(now);
         self.extend_poll(now);
+        self.process_poll();
         self.completion_poll(now);
         if self.auto_revert_due.is_none_or(|due| due <= now) {
             self.auto_revert_due = Some(now + AUTO_REVERT_INTERVAL);
@@ -953,6 +1001,7 @@ impl Editor {
 
     pub fn request_exit(&mut self) {
         self.lsp_shutdown_all();
+        self.kill_all_processes();
         self.exit = true;
     }
 
@@ -986,6 +1035,13 @@ impl Editor {
 
     pub fn buffer(&self) -> &Buffer {
         &self.buffers[self.window().buffer]
+    }
+
+    /// Gives a buffer a default face of its own; see [`Buffer::set_default_face`].
+    pub fn set_buffer_default_face(&mut self, id: BufferId, face: Option<String>) {
+        if let Some(buffer) = self.buffers.get_mut(id) {
+            buffer.set_default_face(face);
+        }
     }
 
     pub fn buffer_mut(&mut self) -> &mut Buffer {
@@ -1208,6 +1264,7 @@ impl Editor {
             return;
         }
         self.lsp_detach(id);
+        self.terminal_detach(id);
         self.buffer_order.retain(|other| *other != id);
         let replacement = match self.buffer_order.first() {
             Some(first) => *first,
@@ -1231,6 +1288,8 @@ impl Editor {
             if let Some(file) = &buffer.file {
                 self.remove_auto_save(file);
             }
+            // The buffer is gone, so the hook gets its name.
+            self.run_hook("kill-buffer-hook", vec![Value::str(buffer.name)]);
         }
     }
 
@@ -1330,6 +1389,26 @@ impl Editor {
             w: cols,
             h: echo_rows,
         };
+        self.note_window_sizes();
+    }
+
+    /// Runs `window-size-change-hook` when the text area of a window of the
+    /// frame is not the size it was, or shows another buffer.
+    fn note_window_sizes(&mut self) {
+        let mut changed = false;
+        for id in self.frame().layout.leaves() {
+            let window = &self.windows[id];
+            let (_, width) = crate::redisplay::text_area(window, &self.buffers[window.buffer]);
+            let now = (window.buffer, width, window.text_rows());
+            if self.window_sizes.insert(id, now) != Some(now) {
+                changed = true;
+            }
+        }
+        let windows = &self.windows;
+        self.window_sizes.retain(|id, _| windows.contains_key(*id));
+        if changed {
+            self.run_hook("window-size-change-hook", Vec::new());
+        }
     }
 }
 

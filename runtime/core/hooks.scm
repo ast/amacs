@@ -6,6 +6,9 @@
 ;;;   after-save-hook    after a buffer is written to its file, in it
 ;;;   pre-command-hook   before every command
 ;;;   post-command-hook  after every command
+;;;   kill-buffer-hook   after a buffer is killed, with its name
+;;;   window-size-change-hook  after the text area of a window changed
+;;;                      size, or the window came to show another buffer
 ;;; Every mode also has a hook named after it, such as `rust-mode-hook`.
 
 (define %hooks (make-hash-table))

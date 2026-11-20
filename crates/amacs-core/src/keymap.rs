@@ -22,6 +22,10 @@ pub enum Lookup<'a> {
 #[derive(Debug, Clone, Default)]
 pub struct Keymap {
     bindings: HashMap<Key, Binding>,
+    /// The command for any single key that no active keymap binds, as the
+    /// `[t]` binding of Emacs: a terminal sends every other key to its
+    /// program.
+    default: Option<String>,
 }
 
 impl Keymap {
@@ -49,6 +53,16 @@ impl Keymap {
         if let Binding::Prefix(map) = entry {
             map.bind(rest, command);
         }
+    }
+
+    /// Sets, or with `None` removes, the command for the keys that no
+    /// active keymap binds.
+    pub fn set_default(&mut self, command: Option<&str>) {
+        self.default = command.map(str::to_owned);
+    }
+
+    pub fn default_binding(&self) -> Option<&str> {
+        self.default.as_deref()
     }
 
     /// Removes the binding of a key sequence, if it has one. Prefix maps left
@@ -112,7 +126,9 @@ impl Keymap {
 }
 
 /// Looks `keys` up in several keymaps, earlier ones taking precedence. The
-/// sequence is a prefix if it is one in any map that does not bind it outright.
+/// sequence is a prefix if it is one in any map that does not bind it
+/// outright. A single key that no map binds goes to the first default
+/// binding, if a map has one.
 pub fn lookup_in<'a>(maps: &[&'a Keymap], keys: &[Key]) -> Lookup<'a> {
     let mut result = Lookup::Unbound;
     for map in maps {
@@ -121,6 +137,12 @@ pub fn lookup_in<'a>(maps: &[&'a Keymap], keys: &[Key]) -> Lookup<'a> {
             Lookup::Prefix => result = Lookup::Prefix,
             Lookup::Unbound => {}
         }
+    }
+    if result == Lookup::Unbound
+        && keys.len() == 1
+        && let Some(name) = maps.iter().find_map(|map| map.default_binding())
+    {
+        return Lookup::Command(name);
     }
     result
 }
@@ -164,6 +186,37 @@ mod tests {
         map.bind_str("C-c v", "vterm");
         assert_eq!(map.lookup(&keys("C-c")), Lookup::Prefix);
         assert_eq!(map.lookup(&keys("C-c v")), Lookup::Command("vterm"));
+    }
+
+    #[test]
+    fn a_default_binding_takes_the_keys_that_nothing_binds() {
+        let mut mode = Keymap::new();
+        mode.set_default(Some("send-key"));
+        mode.bind_str("C-c C-c", "send-interrupt");
+        let mut global = Keymap::new();
+        global.bind_str("C-x C-f", "find-file");
+        global.bind_str("M-x", "execute-extended-command");
+        let maps = [&mode, &global];
+        assert_eq!(lookup_in(&maps, &keys("a")), Lookup::Command("send-key"));
+        assert_eq!(lookup_in(&maps, &keys("C-d")), Lookup::Command("send-key"));
+        assert_eq!(
+            lookup_in(&maps, &keys("M-x")),
+            Lookup::Command("execute-extended-command")
+        );
+        // Keys that lead further are still prefixes, and what follows them
+        // is not caught by the default.
+        assert_eq!(lookup_in(&maps, &keys("C-x")), Lookup::Prefix);
+        assert_eq!(
+            lookup_in(&maps, &keys("C-x C-f")),
+            Lookup::Command("find-file")
+        );
+        assert_eq!(lookup_in(&maps, &keys("C-x C-z")), Lookup::Unbound);
+        assert_eq!(
+            lookup_in(&maps, &keys("C-c C-c")),
+            Lookup::Command("send-interrupt")
+        );
+        mode.set_default(None);
+        assert_eq!(lookup_in(&[&mode, &global], &keys("a")), Lookup::Unbound);
     }
 
     #[test]

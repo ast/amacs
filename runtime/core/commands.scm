@@ -116,7 +116,10 @@ sequences are strings in Emacs notation: \"C-x C-f\", \"M-<left>\", \"H-c\"."
 
 (define (define-key map keys command)
   "Binds a key sequence to a command in a keymap: the name of a mode, or
-'global or 'minibuffer."
+'global or 'minibuffer. With #t for the keys, the command is the keymap's
+default: it runs for any single key that no active keymap binds, and
+`last-key` says which. A mode that binds \"<paste>\" gets pasted text
+through `last-paste` instead of having it inserted."
   (%bind-key map keys command))
 
 (define (undefine-key map keys)

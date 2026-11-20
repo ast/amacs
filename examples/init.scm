@@ -22,11 +22,29 @@
 (set-option! 'subpixel-order "none")
 
 ;; The theme. Palette entries can be replaced in every theme at once; the
-;; values are other palette names or colours such as "#aa0000".
+;; values are other palette names or colours such as "#aa0000". The
+;; fg-term-* and bg-term-* entries are the sixteen colours that programs
+;; in a terminal buffer name; here they are Catppuccin Mocha, to match the
+;; Alacritty config. This one call sets the whole override list.
 (set-palette-overrides! '((comment yellow-faint)
-                          (string green-warmer)))
+                          (string green-warmer)
+                          ;; Terminal: normal colours, then bright.
+                          (fg-term-black "#45475a") (bg-term-black "#45475a")
+                          (fg-term-red "#f38ba8") (fg-term-green "#a6e3a1")
+                          (fg-term-yellow "#f9e2af") (fg-term-blue "#89b4fa")
+                          (fg-term-magenta "#f5c2e7") (fg-term-cyan "#94e2d5")
+                          (fg-term-white "#bac2de")
+                          (fg-term-black-bright "#585b70") (fg-term-red-bright "#f38ba8")
+                          (fg-term-green-bright "#a6e3a1") (fg-term-yellow-bright "#f9e2af")
+                          (fg-term-blue-bright "#89b4fa") (fg-term-magenta-bright "#f5c2e7")
+                          (fg-term-cyan-bright "#94e2d5") (fg-term-white-bright "#a6adc8")))
 (load-theme 'modus-operandi-tinted)
 (set-option! 'themes-to-toggle '(modus-operandi-tinted modus-vivendi-tinted))
+
+;; Terminal buffers get their own dark background and foreground, apart
+;; from the light editor theme, like the Alacritty terminal (Catppuccin
+;; Mocha). The sixteen named colours above are what programs draw with.
+(set-face! 'term 'bg "#1e1e2e" 'fg "#cdd6f4")
 
 ;;; Editing defaults
 

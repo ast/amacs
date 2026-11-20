@@ -146,14 +146,21 @@ doing any work:
 
 ## Later milestones in the plan
 
-None started.
+`PLAN.md` lays out the next four: processes and a terminal (M11), Claude
+Code in the terminal with the editor as its IDE (M12), a native agent
+buffer over the Agent Client Protocol (M13) and remote files (M14). None
+started.
 
-- [ ] Terminal emulator.
+- [x] Terminal emulator (M11): a shell or program on a pseudo-terminal in
+      a buffer (`C-c v`), with scrollback, colours, point following the
+      cursor, semi-char and char keys, and a configurable terminal palette
+      and background. Later: a line mode, OSC 7 and OSC 133 shell
+      integration, the title in the mode line.
+- [ ] AI features inside the editor (M12, M13).
+- [ ] Remote files (M14).
 - [ ] Org.
 - [ ] Spelling.
-- [ ] Remote files (tramp).
 - [ ] age encryption.
-- [ ] AI features inside the editor.
 
 ## Things that bit before
 
@@ -179,7 +186,9 @@ None started.
 - A session of Claude Code keeps the `amacs-mcp` it started. After a
   change to the wire protocol its tools fail until the session is started
   anew.
-- `amacsclient --json --eval '...'`: the flag goes before `--eval`. In zsh
+- `amacsclient --json --eval '...'`: the flag goes before `--eval`, and
+  `--eval` takes one expression: a second argument is a file to visit,
+  which the client then waits for. In zsh
   use single quotes and `(quote x)` instead of `'x`, or put the code in a
   file and `load` it.
 - rustfmt rewraps lines, so re-read a file after formatting before making

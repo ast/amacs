@@ -30,13 +30,24 @@ Advice changes a command without replacing it, whoever defined it:
 (remove-advice! 'kill-buffer 'ask)
 ```
 
+A keymap can have a default: `(define-key 'term-mode #t 'term-send-key)`
+runs the command for any single key that no active keymap binds, and
+`(last-key)` tells the command which key it was. Keys that the global map
+binds, such as `C-x C-f` and `M-x`, keep working; a mode that wants one of
+them binds it outright. A mode that binds `"<paste>"` gets pasted text
+through `(last-paste)` instead of having it inserted. `(window-width)` and
+`(window-height)` are the size of the text area of a window.
+
 ## Hooks
 
 `(add-hook! 'name procedure)` and `(remove-hook! 'name procedure)`. The
 editor runs `pre-command-hook` and `post-command-hook` around every command,
 `find-file-hook` when a file is first visited, `before-save-hook` and
-`after-save-hook` around the writing of a buffer to its file, and a hook
-named after each mode when the mode is switched.
+`after-save-hook` around the writing of a buffer to its file,
+`kill-buffer-hook` after a buffer is killed, with its name,
+`window-size-change-hook` when the text area of a window changes size or
+comes to show another buffer, and a hook named after each mode when the
+mode is switched.
 
 The functions of `before-save-hook` run in the buffer that is about to be
 saved, and what they change is written. They run before the formatter of
@@ -105,6 +116,41 @@ save, hands the waiting to `(run-later thunk)`: the procedure runs once
 the running code has returned to the editor, outside any buffer made
 current for it.
 
+## Programs that go on running
+
+`run-process` waits for a program to end. A process made with
+`make-process` goes on as long as it likes, and the editor hears from it as
+it writes:
+
+```scheme
+(define p (make-process "shell" '("sh")
+                        'filter (lambda (p text) (message text))
+                        'sentinel (lambda (p status) (message "ended: " status))))
+(process-send-string p "echo hello\n")
+(process-send-eof p)
+```
+
+A program on a pseudo-terminal is started with `'pty`, either `#t` or a
+list of columns and rows; its screen then belongs in a terminal buffer,
+which `runtime/lib/term.scm` builds. See the terminal in the README.
+
+A process is a number. The properties after the command are `'filter`, a
+procedure called with the process and the text its program writes, as it
+writes it, on the editor's thread; `'sentinel`, called with the process and
+its exit status when it ends, after the filter has had all the output, with
+`#f` for a status if a signal ended it; `'buffer`, the name of a buffer the
+process belongs to, into which the output goes when there is no filter, and
+whose killing ends the process; `'directory`, where to run; and
+`'environment`, an alist of variables to set over those of the directory's
+project. `(process-live? p)`, `(process-exit-status p)`,
+`(process-buffer p)`, `(get-buffer-process name)`, `(signal-process p 'int)`,
+`(interrupt-process p)`, `(kill-process p)` and `(delete-process p)`, which
+ends the program without word to the sentinel and forgets the process, do
+what they say. `(process-list)` is every process not yet deleted, and
+`M-x list-processes` shows them. Nothing waits for a process, so typing is
+never held by one; every program still running is ended when the editor
+exits.
+
 ## The pointer
 
 What is done with the pointer becomes keys, bound like any others:
@@ -167,7 +213,11 @@ a buffer and decorates it:
 `%replace-buffer-text!` sets the whole text, read-only or not, without undo
 history. `add-face!` lays a face over a stretch of text, which stays on that
 text as the text around it changes; `clear-faces!` takes them away, and
-`set-face!` defines new faces. A major mode gives the buffer its keys:
+`set-face!` defines new faces. Where the colours are not worth a face of
+their own, as in the output of a program, `(add-span! 0 4 'fg "#ff0000"
+'bg 'bg-dim 'bold #t)` lays them over the text directly, with the
+attributes of `set-face!` and `inverse`; a span takes the place of the
+spans under it, and `clear-spans!` takes them away. A major mode gives the buffer its keys:
 `(define-major-mode report-mode #f "Report" "...")` and then
 `(define-key 'report-mode "g" 'report-refresh)`. What the feature knows about
 each of its buffers it keeps itself, in a hash table by buffer name.

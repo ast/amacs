@@ -8,10 +8,14 @@ publish.workspace = true
 
 [dependencies]
 amacs-lsp.workspace = true
+amacs-term.workspace = true
 amacs-proto.workspace = true
 amacs-text.workspace = true
 amacs-treesit.workspace = true
+anyhow.workspace = true
 nucleo.workspace = true
+portable-pty.workspace = true
+rustix.workspace = true
 serde_json.workspace = true
 slotmap.workspace = true
 thiserror.workspace = true

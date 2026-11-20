@@ -48,6 +48,9 @@ pub enum NamedKey {
     MotionMouse(u8),
     /// The button was let go after the pointer had moved.
     DragMouse(u8),
+    /// Text was pasted. It is not a key that is pressed, but a mode binds
+    /// it as one to take the text itself, with `last-paste`.
+    Paste,
 }
 
 /// Makes the key of a kind that has a given number.
@@ -92,6 +95,7 @@ impl NamedKey {
         (NamedKey::End, "<end>"),
         (NamedKey::PageUp, "<prior>"),
         (NamedKey::PageDown, "<next>"),
+        (NamedKey::Paste, "<paste>"),
     ];
 }
 

@@ -21,6 +21,7 @@ const FILES: &[(&str, &str)] = &[
     file!("core/hooks.scm"),
     file!("core/buffers.scm"),
     file!("core/modes.scm"),
+    file!("core/processes.scm"),
     file!("core/themes.scm"),
     file!("core/tools.scm"),
     file!("modes/languages.scm"),
@@ -31,6 +32,7 @@ const FILES: &[(&str, &str)] = &[
     file!("lib/ibuffer.scm"),
     file!("lib/git.scm"),
     file!("lib/markdown.scm"),
+    file!("lib/term.scm"),
     file!("core/test.scm"),
     file!("core/debug.scm"),
 ];
