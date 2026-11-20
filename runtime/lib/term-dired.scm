@@ -43,7 +43,7 @@ follows, or #f."
   (for-each
    (lambda (window)
      (guard (e (#t (message "The listing cannot follow " terminal ": "
-                            (condition-message e))))
+                            (error-object-message e))))
        (with-selected-window window
          (unless (equal? (dired-directory) (expand-file-name directory))
            (dired-open directory)))))
@@ -55,12 +55,16 @@ follows, or #f."
   "Show the directory that the shell of this terminal is in, in a window
 beside it that follows the shell from then on: when the shell changes
 directory, so does the listing. Selects that window if it is there
-already. In the listing, `c` sends the shell to the directory at point."
+already, in this frame. In the listing, `c` sends the shell to the
+directory at point."
   (unless (terminal-buffer?)
     (error "This is not a terminal with a running program"))
   (let* ((terminal (buffer-name))
          (directory (working-directory))
-         (windows (%term-dired-windows terminal)))
+         ;; A listing in another frame keeps following, but is no use
+         ;; from here: a command cannot leave its frame selected.
+         (windows (filter (lambda (window) (member window (window-list)))
+                          (%term-dired-windows terminal))))
     (if (pair? windows)
         (select-window (car windows))
         (let ((from (selected-window))
@@ -93,16 +97,15 @@ a `cd` at its prompt."
       (error "This listing follows no terminal: see term-dired"))
     (unless (terminal-buffer? terminal)
       (error "The program of the terminal has ended"))
-    (let* ((row (dired-row-at-point))
-           (directory (if (and row (eq? (dired-row-kind row) 'directory))
-                          (dired-row-path row)
-                          (dired-directory))))
-      (with-current-buffer terminal
-        (terminal-paste (string-append "cd " (%term-dired-quote directory)))
-        (terminal-send-key "RET"))
-      ;; The shell says nothing when it is there already.
-      (unless (equal? directory (dired-directory))
-        (dired-open directory)))))
+    (let ((directory (dired-directory-at-point)))
+      (if (equal? directory (with-current-buffer terminal (working-directory)))
+          ;; The shell is there already, so nothing would move the listing.
+          (dired-open directory)
+          ;; The listing follows once the shell has arrived, not before: the
+          ;; terminal leads.
+          (with-current-buffer terminal
+            (terminal-paste (string-append "cd " (%term-dired-quote directory)))
+            (terminal-send-key "RET"))))))
 
 (term-define-key "C-d" 'term-dired)
 (define-key 'dired-mode "c" 'dired-cd-terminal)

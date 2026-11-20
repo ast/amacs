@@ -114,6 +114,46 @@ binding would not catch them."
 ;; terminal.
 (define %term-bound-keys #f)
 
+(define (%term-escape-sequence key)
+  ;; The key after the escape key, as a key sequence.
+  (string-append (car %term-bound-keys) " " key))
+
+(define (%term-unbind-keys!)
+  ;; Takes back what was bound for the reserved keys of the last build: the
+  ;; escape key's map, and the editor's keys that char mode sent on.
+  (undefine-key 'term-mode (car %term-bound-keys))
+  (for-each (lambda (key) (undefine-key 'term-char-mode key))
+            (cdr %term-bound-keys)))
+
+(define (%term-bind-semi-char-keys!)
+  ;; Every key the editor binds goes to the program, except the reserved
+  ;; ones, which keep their meaning.
+  (define-key 'term-mode #t 'term-send-key)
+  (for-each (lambda (key)
+              (if (member key %term-bound-keys)
+                  (undefine-key 'term-mode key)
+                  (define-key 'term-mode key 'term-send-key)))
+            (%term-all-keys)))
+
+(define (%term-bind-escape-keys!)
+  ;; After the escape key, a reserved key goes to the program, the escape
+  ;; key itself among them; the terminal's commands come after it too.
+  (for-each (lambda (key)
+              (define-key 'term-mode (%term-escape-sequence key) 'term-send-key))
+            %term-bound-keys)
+  (for-each (lambda (binding)
+              (define-key 'term-mode (%term-escape-sequence (car binding))
+                (cdr binding)))
+            %term-escape-commands))
+
+(define (%term-bind-char-keys!)
+  ;; In char mode the keys that semi-char mode keeps for the editor go to
+  ;; the program too, so they are bound here to override the global
+  ;; prefixes; only the escape key stays, as the way out.
+  (define-key 'term-char-mode #t 'term-send-key)
+  (for-each (lambda (key) (define-key 'term-char-mode key 'term-send-key))
+            (cdr %term-bound-keys)))
+
 (define (%term-bind-keys!)
   "Binds the keys of term-mode and term-char-mode as the options
 `term-escape-key` and `term-emacs-keys` say now. Each terminal started
@@ -121,34 +161,11 @@ does this, so a change of the options needs no more; nothing is done when
 they have not changed."
   (let ((reserved (%term-reserved-keys)))
     (unless (equal? reserved %term-bound-keys)
-      (let ((escape (car reserved)))
-        (when %term-bound-keys
-          (undefine-key 'term-mode (car %term-bound-keys))
-          (for-each (lambda (key) (undefine-key 'term-char-mode key))
-                    (cdr %term-bound-keys)))
-        (define-key 'term-mode #t 'term-send-key)
-        (for-each (lambda (key)
-                    (if (member key reserved)
-                        (undefine-key 'term-mode key)
-                        (define-key 'term-mode key 'term-send-key)))
-                  (%term-all-keys))
-        ;; After the escape key, a reserved key goes to the program, the
-        ;; escape key itself among them.
-        (for-each (lambda (key)
-                    (define-key 'term-mode (string-append escape " " key)
-                      'term-send-key))
-                  reserved)
-        (for-each (lambda (binding)
-                    (define-key 'term-mode (string-append escape " " (car binding))
-                      (cdr binding)))
-                  (reverse %term-escape-commands))
-        ;; In char mode the keys that semi-char mode keeps for the editor go
-        ;; to the program too, so they are bound here to override the global
-        ;; prefixes; only the escape key stays, as the way out.
-        (define-key 'term-char-mode #t 'term-send-key)
-        (for-each (lambda (key) (define-key 'term-char-mode key 'term-send-key))
-                  (cdr reserved))
-        (set! %term-bound-keys reserved)))))
+      (when %term-bound-keys (%term-unbind-keys!))
+      (set! %term-bound-keys reserved)
+      (%term-bind-semi-char-keys!)
+      (%term-bind-escape-keys!)
+      (%term-bind-char-keys!))))
 
 (define (term-define-key key command)
   "Binds a command to a key pressed after the `term-escape-key` in terminal
@@ -160,8 +177,7 @@ escape key when the option is changed."
               (filter (lambda (binding) (not (equal? (car binding) key)))
                       %term-escape-commands)))
   (when %term-bound-keys
-    (define-key 'term-mode (string-append (car %term-bound-keys) " " key)
-      command)))
+    (define-key 'term-mode (%term-escape-sequence key) command)))
 
 ;;; The buffers
 

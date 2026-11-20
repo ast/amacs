@@ -21,15 +21,17 @@ puts it.")
 
 (define (%call-in-window window thunk)
   ;; The window may be in another frame: that frame gets its own selected
-  ;; window back too.
+  ;; window back too. A window that the body closed is not selected again.
   (let ((previous (selected-window))
         (theirs (frame-selected-window window)))
     (select-window window)
     (unwind-protect
      (thunk)
      (begin
-       (when (window-live? theirs) (select-window theirs))
-       (select-window previous)))))
+       (when (and (not (equal? theirs previous)) (window-live? theirs))
+         (select-window theirs))
+       (when (window-live? previous)
+         (select-window previous))))))
 
 (define-syntax with-selected-window
   (syntax-rules ()

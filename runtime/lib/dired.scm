@@ -275,6 +275,16 @@ if point is on no file."
   "The full name of the file that point is on in the file manager."
   (dired-row-path (dired-row-at-point)))
 
+(define (dired-directory-at-point)
+  "The directory that point is on in the file manager, or the listing's own
+directory when point is on a file or on no file."
+  (let* ((state (dired-state))
+         (index (%dired-row-index state))
+         (row (and index (vector-ref (dired-state-rows state) index))))
+    (if (and row (eq? (dired-row-kind row) 'directory))
+        (dired-row-path row)
+        (dired-directory))))
+
 (define (dired-marked-files)
   "The full names of the files marked with *, in the order listed; if none
 is marked, the file that point is on."
