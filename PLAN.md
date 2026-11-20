@@ -274,7 +274,9 @@ the user's quota.
    `fs/read_text_file` and `fs/write_text_file` and a permission prompt.
    Confirmed live: Claude answered over ACP.
 3. The conversation buffer on `section.scm`; the compose buffer and
-   references; `session/prompt` and cancel.
+   references; `session/prompt` and cancel. The compose buffer, the chat
+   layout, prompt history and references done 2026-11-20; the conversation
+   is still plain streamed text (the `section.scm` view is still to do).
 4. Permissions, modes and models, slash commands; the client's
    `fs/*` and `terminal/*` methods.
 5. The backend seam and a second agent; attention; docs.

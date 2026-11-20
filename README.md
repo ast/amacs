@@ -410,6 +410,40 @@ theme, set the `term` face and the `fg-term-*` palette entries in
 It is written in `runtime/lib/term.scm`, on the `amacs-term` crate and the
 process and span primitives of the core.
 
+## Coding agents
+
+A coding agent lives in the editor over the Agent Client Protocol
+(agentclientprotocol.com), the standard way editors drive agents, as Zed
+and others do. Claude Code speaks it through the `claude-agent-acp` adapter,
+which uses your own `claude` login; other agents speak it too, so the layer
+is not tied to one.
+
+`C-c c c` starts Claude for the project and shows two windows: the
+conversation above and a compose buffer below. Write a prompt in the compose
+buffer, as long as you like, and `C-c C-c` sends it; the reply streams into
+the conversation. `M-p` and `M-n` walk earlier prompts, `C-c C-k` clears the
+buffer. From a file you are reading, select some code and `C-c c r` adds a
+reference to it (`@path#L3-9`) to the prompt. When the agent wants to change
+a file or run something, it asks in the minibuffer; it reads and writes
+files through the editor, so it sees your unsaved edits.
+
+| Key | Does |
+|---|---|
+| `C-c c c` | Start Claude for the project, or show its windows |
+| `C-c c p` | Show the compose buffer |
+| `C-c C-c` | In the compose buffer, send the prompt |
+| `C-c C-k` | Clear the compose buffer |
+| `M-p`, `M-n` | Earlier and later prompts |
+| `C-c c r` | Add a reference to the region of the current file to the prompt |
+| `C-c c l` | Ask a one-line question in the minibuffer |
+| `C-c c k` | Cancel the current turn |
+
+The adapter comes from `claude-agent-acp`; set `acp-command` if it is
+elsewhere. It is written in `runtime/lib/acp.scm`, on the process and JSON
+primitives. The conversation is shown as plain streamed text for now; a
+richer view with tool calls and diffs, permission and model controls, and
+other agents are next.
+
 ## Smaller things
 
 Four minor modes lay marks over the text. Turn them on in a mode hook with

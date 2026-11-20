@@ -90,8 +90,18 @@ fn editor_keys_keep_their_meaning_and_point_can_leave_the_cursor() {
 fn an_interrupt_and_the_end_of_the_program() {
     let mut h = shell(40, 6);
     h.type_text("sleep 30").keys("RET");
+    // Wait until the shell has echoed the command and started running it,
+    // so the interrupt lands on the sleep and not on an empty prompt.
+    h.wait_until(|h| h.text().contains("sleep 30\n"));
     h.keys("C-c C-c");
-    h.wait_until(|h| h.screen.row(1).starts_with("$") || h.screen.row(2).starts_with("$"));
+    // A second prompt appears once the sleep is interrupted.
+    h.wait_until(|h| {
+        h.text()
+            .lines()
+            .filter(|line| line.starts_with("$"))
+            .count()
+            >= 2
+    });
     h.type_text("exit 3").keys("RET");
     h.wait_until(|h| h.eval("(terminal-buffer?)") == "#f");
     let text = h.eval("(buffer-string)");
