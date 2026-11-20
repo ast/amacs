@@ -6,6 +6,11 @@ The goal is a daemon with thin terminal and Wayland frontends.
 The Scheme is the editor's own, made so that the editor can be changed while
 it runs: see `docs/scheme.md`.
 
+![A chapter of The Count of Monte Cristo in a buffer, with the lines that contain a name listed below it](docs/images/editing.png)
+
+*A chapter of* The Count of Monte Cristo *in a buffer; `C-s` lists the
+lines that contain what is typed, and narrows as it grows.*
+
 ## Status
 
 Milestones M0 to M10 of the plan are done: the editor runs in a terminal or
@@ -335,6 +340,10 @@ listings side by side the other one is offered as where to. `+` makes a
 directory, `b` goes to a directory of the `dired-quick-access` option and
 `r` to one shown before.
 
+![A listing of the chapters of The Count of Monte Cristo, with four of them marked](docs/images/dired.png)
+
+*A directory in the file manager, with four files marked by `m`.*
+
 Opening a file that is not text, such as a picture or a disc image, hands
 it to `xdg-open` (the `dired-open-program` option), and `E` does that for
 any file.
@@ -402,6 +411,12 @@ each `cd` shows the new directory. The terminal leads. Moving about in the
 listing leaves the shell where it is, and `c` there sends the shell to the
 directory at point with a `cd` typed at its prompt. The window follows
 until it is closed or shows something else.
+
+![A terminal beside a listing of the directory its shell is in](docs/images/terminal.png)
+
+*A shell in a terminal buffer, after `C-q C-d`: the listing on the right
+followed the shell into the directory of the chapters, and the shell's
+colours show.*
 
 To give terminals a colour scheme of their own, apart from the editor's
 theme, set the `term` face and the `fg-term-*` palette entries in
