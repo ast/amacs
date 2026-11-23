@@ -168,7 +168,6 @@ started.
       `markdown-mode`, in the picture from `screen`).
 - [ ] Remote files (M14).
 - [ ] Org.
-- [ ] Spelling.
 - [ ] age encryption.
 
 ## Things that bit before

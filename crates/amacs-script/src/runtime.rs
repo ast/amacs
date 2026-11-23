@@ -32,6 +32,7 @@ const FILES: &[(&str, &str)] = &[
     file!("lib/menu.scm"),
     file!("lib/ibuffer.scm"),
     file!("lib/git.scm"),
+    file!("lib/spell.scm"),
     file!("lib/markdown.scm"),
     file!("lib/term.scm"),
     file!("lib/term-dired.scm"),

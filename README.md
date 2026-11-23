@@ -54,8 +54,10 @@ Working now:
   model uses, inspects and changes the running editor: see `docs/ai.md`
 - A terminal emulator (`C-c v`): a shell or any program on a
   pseudo-terminal, its screen in an ordinary buffer (below)
+- Spelling: a wave under the misspelled words on screen, in several
+  languages at once, with Hunspell's dictionaries (below)
 
-Not yet: Org, spelling, remote files, and the rest of the later
+Not yet: Org, remote files, and the rest of the later
 milestones. `TODO.md` lists what is left.
 
 ## Building and running
@@ -486,6 +488,37 @@ elsewhere. It is written in `runtime/lib/acp.scm`, on the process and JSON
 primitives and on `runtime/lib/section.scm`. Choosing the mode and the
 model, slash commands, a menu of keys for permissions, several sessions and
 other agents are next.
+
+## Spelling
+
+The misspelled words on screen have a wave under them: all of the text in
+prose, and the comments and strings in code. `M-$` corrects the one at
+point, or else the nearest: choose among what the dictionaries suggest, or
+type what it should be. `C-M-$` goes through all of the buffer.
+
+| In the list of `M-$` | Does |
+|---|---|
+| a suggestion, or text of your own | Puts it in the word's place |
+| `@word` | Saves the word in your own list, `~/.config/amacs/spelling/words` |
+| `*word` | Accepts the word until the editor exits |
+| `+word` | Saves the word in `.spelling` at the root of the project |
+
+The dictionaries are those of Hunspell, an `.aff` and a `.dic` file for
+each language, found where `DICPATH` says and in `hunspell` under the
+system's data directories. A buffer can be in several languages, and a
+word is right if one of them knows it:
+
+```scheme
+(set-option! 'spell-languages '("en_US" "sv_SE"))
+```
+
+`M-x spell-set-languages` chooses them for one buffer. Words are looked up
+in a thread of their own, so drawing never waits for a dictionary: a word
+seen for the first time is marked a moment later, and the word being typed
+not until it is left. The words glued to digits or to the punctuation of
+code, addresses, file names and words all in capitals are not checked.
+`docs/extending.md` has the rest; the commands are in
+`runtime/lib/spell.scm`.
 
 ## Smaller things
 

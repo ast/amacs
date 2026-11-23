@@ -346,6 +346,49 @@ sections that fold, and the menus from `runtime/lib/menu.scm`:
 (key-menu "Push" '(("-f" "Force" "--force")) '(("p" "Push" push)))
 ```
 
+## Spelling
+
+`spell-mode` marks the misspelled words that a window shows; it is on in
+text, code and configuration modes. `runtime/lib/spell.scm` is the code, on
+top of a few primitives: the editor looks words up itself, in a thread of
+its own.
+
+| Key or command | Does |
+|---|---|
+| `M-$` | Correct the misspelled word at point, or the nearest in the window |
+| `C-M-$` | Correct every misspelled word of the buffer in turn |
+| `M-x spell-next` / `spell-previous` | Move to the next or the previous one |
+| `M-x spell-set-languages` | Choose the languages of this buffer; with a prefix argument, of all |
+| `M-x spell-reload` | Read the dictionaries and the lists of words again |
+| `M-x spell-mode` | Turn the marks off or on in this buffer |
+
+| Option | Says |
+|---|---|
+| `spell-languages` | The dictionaries to use, by name: `("en_US" "sv_SE")` |
+| `spell-dictionary-path` | Where they are, if not where the system has them |
+| `spell-only-in` | The kinds of syntax to check, or `#f` for all of the text |
+| `spell-not-in` | The kinds of syntax not to check when all of the text is |
+| `spell-personal-file`, `spell-project-file` | The lists of words that are right anyway |
+
+The kinds of syntax are the names of the faces that draw them, and
+`(syntax-at pos)` gives the one at a position. Where spelling is checked
+is decided by the hooks of the modes, which can be changed:
+
+```scheme
+(remove-hook! 'prog-mode-hook spell-in-code)       ; not in code
+(add-hook! 'markdown-mode-hook                     ; nor in headings
+  (lambda () (set-local! 'spell-not-in '("code" "link" "heading"))))
+(set-face! 'misspelled 'underline 'wavy 'underline-color 'red)
+```
+
+The parts are there for other code: `(spell-misspellings start end)` gives
+the misspelled words of the buffer as `(start end)` lists and
+`(spell-suggest "word")` what a word may have been meant to be; both wait
+for the dictionaries without blocking. `(spell-accept! "word")` makes a
+word right until the editor exits, in one buffer only with a second
+argument, `(spell-save-word "word" file)` adds it to a list of words, and
+`(spell-correct-word start end)` asks the user about one word.
+
 ## Loading code
 
 `(load "file.scm")` runs a file; loading it again after a change replaces
