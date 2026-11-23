@@ -34,8 +34,8 @@ properties, each a symbol and a value:
                filter, the output is inserted at its end, and killing
                the buffer ends the process
   'directory   where to run; the working directory unless given
-  'environment an alist of environment variables to set, over those of
-               the directory's project
+  'environment environment variables to set, over those of the
+               directory's project: a list of lists of a name and a value
   'pty         #t, or a list of columns and rows, to run the program on a
                pseudo-terminal of that size (80 by 24 unless given), as a
                shell or a full screen program needs; its standard error

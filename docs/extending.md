@@ -148,8 +148,8 @@ its exit status when it ends, after the filter has had all the output, with
 `#f` for a status if a signal ended it; `'buffer`, the name of a buffer the
 process belongs to, into which the output goes when there is no filter, and
 whose killing ends the process; `'directory`, where to run; and
-`'environment`, an alist of variables to set over those of the directory's
-project. `(process-live? p)`, `(process-exit-status p)`,
+`'environment`, variables to set over those of the directory's project, a
+list of lists of a name and a value. `(process-live? p)`, `(process-exit-status p)`,
 `(process-buffer p)`, `(get-buffer-process name)`, `(signal-process p 'int)`,
 `(interrupt-process p)`, `(kill-process p)` and `(delete-process p)`, which
 ends the program without word to the sentinel and forgets the process, do

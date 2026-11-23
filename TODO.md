@@ -1,11 +1,13 @@
 # What is left
 
-State on 2026-11-19. Milestones M0 to M10 of the original plan are in, and
+State on 2026-11-23. Milestones M0 to M10 of the original plan are in, and
 since then: tooling for language models (the MCP server), mouse selection
 and buttons as keys, the file manager driven by the pointer, Markdown,
 files looked at before they are read, a renderer in parts with a second
-backend that draws with the GPU, and typing ahead while a command waits for
-a program. What is done is in the history; this file is what is not.
+backend that draws with the GPU, typing ahead while a command waits for
+a program, a terminal emulator, a coding agent over the Agent Client
+Protocol, and spelling. What is done is in the history; this file is what
+is not.
 
 Start by reading `CLAUDE.md`, then `docs/extending.md` and `docs/ai.md`.
 Features go in Scheme under `runtime/`; Rust only for missing primitives.
@@ -148,7 +150,7 @@ doing any work:
 
 `PLAN.md` lays out the next three: processes and a terminal (M11), a coding
 agent over the Agent Client Protocol (M12) and remote files (M14). M11 is
-in but for a later pass, M12 is at its fourth step of five, and M14 is not
+in but for a later pass, M12 is at its last step of five, and M14 is not
 started.
 
 - [x] Terminal emulator (M11): a shell or program on a pseudo-terminal in
@@ -158,11 +160,15 @@ started.
       integration, the title in the mode line.
 - [ ] A coding agent inside the editor (M12). In: the protocol client,
       the compose buffer, and the conversation as sections with tool
-      calls, diffs and the plan. Left: choosing the mode and the model,
-      slash commands, a menu of keys for permissions, `terminal/*`,
-      several sessions, the seam for other agents, attention when a turn
-      ends out of sight. A redraw of the conversation writes the whole
-      buffer; `section.scm` may need to redraw one section.
+      calls, diffs and the plan; leave asked with the tool call and
+      answered by keys; the mode, the model and the other options; slash
+      commands; `terminal/*`. Left: several sessions, the seam for other
+      agents (`agent.scm`, with nothing in it naming Claude), attention
+      when a turn ends or leave is asked out of sight (`C-c c a`), and
+      docs. A request for leave from the real adapter is still to be tried
+      by hand. Slash commands are not completed in the compose buffer.
+      A redraw of the conversation writes the whole buffer; `section.scm`
+      may need to redraw one section.
 - [ ] An empty Markdown buffer draws its first row in the colour of a
       removed line (seen in the compose buffer and in any empty buffer in
       `markdown-mode`, in the picture from `screen`).

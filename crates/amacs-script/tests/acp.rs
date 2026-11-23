@@ -390,6 +390,330 @@ fn a_diff_is_made_from_the_text_before_and_after() {
     );
 }
 
+// Leave
+
+/// Hands the editor a request for leave to do the tool call `rm`, as a line
+/// from the agent, and keeps what the editor sends in `replies`, newest
+/// first.
+fn ask_leave(h: &mut Harness) {
+    h.eval(
+        r"(define replies '())
+          (set! %acp-send (lambda (message) (set! replies (cons message replies))))",
+    );
+    feed(
+        h,
+        &json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "rm",
+            "title": "Remove the build",
+            "status": "pending",
+        }),
+    );
+    let line = json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "session/request_permission",
+        "params": {
+            "sessionId": "stub",
+            "toolCall": {"toolCallId": "rm"},
+            "options": [
+                {"optionId": "allow-once", "name": "Yes", "kind": "allow_once"},
+                {"optionId": "allow-always", "name": "Yes, always", "kind": "allow_always"},
+                {"optionId": "allow-here", "name": "Yes, here", "kind": "allow_always"},
+                {"optionId": "reject", "name": "No", "kind": "reject_once"},
+            ],
+        },
+    });
+    h.eval(&format!("(%acp-filter #f {:?})", format!("{line}\n")));
+    see(h, "asks leave");
+}
+
+/// What the editor sent last, which is its answer to the request for
+/// leave once it has given one.
+fn answer(h: &mut Harness) -> Value {
+    let line: String = serde_json::from_str(&h.eval("(json-encode (car replies))")).unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+fn chose(option: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {"outcome": {"outcome": "selected", "optionId": option}},
+    })
+}
+
+#[test]
+fn leave_is_asked_with_the_tool_call_and_not_in_the_minibuffer() {
+    let mut h = talking();
+    ask_leave(&mut h);
+    // The tool call says so, with a key for each answer, and is open.
+    let row = row_of(&h, "Remove the build");
+    assert_eq!(h.screen.row(row), "▾ Remove the build  asks leave");
+    assert_eq!(h.screen.row(row + 1), "  y  Yes");
+    assert_eq!(h.screen.row(row + 2), "  a  Yes, always");
+    assert_eq!(h.screen.row(row + 3), "  1  Yes, here");
+    assert_eq!(h.screen.row(row + 4), "  n  No");
+    assert_eq!(h.screen.face_at(row, 20).fg, h.face("agent-asks").fg);
+    // The echo area and the mode line say so too, and nothing is answered:
+    // what is typed goes where it was going.
+    assert!(
+        h.echo().contains("Claude asks leave: Remove the build"),
+        "{}",
+        h.echo()
+    );
+    assert!(h.screen.text().contains("asks leave, working]"));
+    h.type_text("still typing");
+    assert_eq!(
+        h.eval(r#"(buffer-string "*claude prompt*")"#),
+        "\"still typing\""
+    );
+    assert_eq!(h.eval("replies"), "()");
+}
+
+#[test]
+fn c_c_c_y_allows_once_from_anywhere() {
+    let mut h = talking();
+    ask_leave(&mut h);
+    h.keys("C-c c y");
+    assert_eq!(answer(&mut h), chose("allow-once"));
+    assert!(
+        h.echo().contains("Allowed: Remove the build"),
+        "{}",
+        h.echo()
+    );
+    // The question is gone from the tool call and from the mode line.
+    h.wait_until(|h| !h.screen.text().contains("asks leave"));
+    assert!(h.screen.text().contains("Remove the build  pending"));
+    // And there is nothing more to answer.
+    h.keys("C-c c y");
+    assert!(h.echo().contains("not asking leave"), "{}", h.echo());
+}
+
+#[test]
+fn c_c_c_n_refuses() {
+    let mut h = talking();
+    ask_leave(&mut h);
+    h.keys("C-c c n");
+    assert_eq!(answer(&mut h), chose("reject"));
+}
+
+#[test]
+fn every_answer_is_in_a_menu_of_keys() {
+    let mut h = talking();
+    ask_leave(&mut h);
+    h.keys("C-c c o");
+    let screen = h.screen.text();
+    assert!(
+        screen.contains("Claude asks leave: Remove the build"),
+        "{screen}"
+    );
+    assert!(screen.contains(" a   Yes, always"), "{screen}");
+    h.keys("1");
+    assert_eq!(answer(&mut h), chose("allow-here"));
+}
+
+#[test]
+fn ret_on_an_answer_gives_it() {
+    let mut h = talking();
+    ask_leave(&mut h);
+    go_to(&mut h, "  a  Yes, always");
+    h.keys("RET");
+    assert_eq!(answer(&mut h), chose("allow-always"));
+}
+
+#[test]
+fn a_cancelled_turn_leaves_the_question_unanswered() {
+    let mut h = talking();
+    ask_leave(&mut h);
+    h.keys("C-c c k");
+    // The cancel went first, then the word that nothing was chosen.
+    assert_eq!(
+        answer(&mut h),
+        json!({"jsonrpc": "2.0", "id": 7, "result": {"outcome": {"outcome": "cancelled"}}})
+    );
+    assert!(
+        h.eval("(json-encode (cadr replies))")
+            .contains("session/cancel")
+    );
+    h.wait_until(|h| !h.screen.text().contains("asks leave"));
+}
+
+#[test]
+fn each_answer_gets_a_key_by_its_kind() {
+    let mut h = Harness::new(80, 24);
+    assert_eq!(
+        h.eval(
+            r#"(map car (%acp-option-keys
+                         (map (lambda (kind) (json-object 'optionId kind 'name kind 'kind kind))
+                              '("reject_always" "allow_once" "allow_once" "odd" "reject_once"
+                                "allow_always"))))"#
+        ),
+        r#"("r" "y" "1" "2" "n" "a")"#
+    );
+}
+
+#[test]
+fn a_part_of_a_file_is_read_by_line_and_limit() {
+    let mut h = Harness::new(80, 24);
+    assert_eq!(
+        h.eval(r#"(%acp-slice "a\nb\nc\nd\n" #f #f)"#),
+        r#""a\nb\nc\nd\n""#
+    );
+    assert_eq!(h.eval(r#"(%acp-slice "a\nb\nc\nd\n" 2 2)"#), r#""b\nc""#);
+    assert_eq!(h.eval(r#"(%acp-slice "a\nb\nc\nd" 3 #f)"#), r#""c\nd""#);
+    assert_eq!(h.eval(r#"(%acp-slice "a\nb" 9 1)"#), r#""""#);
+}
+
+// With an agent that speaks the protocol
+
+/// A harness in which `fake-acp` has been started in a directory and is
+/// ready for a prompt, with point in the compose buffer.
+fn with_fake_agent(dir: &std::path::Path) -> Harness {
+    let mut h = Harness::new(80, 40);
+    h.session.editor_mut().set_default_directory(dir);
+    let agent = amacs_testkit::example_path("fake-acp");
+    h.eval(&format!(
+        "(set-option! 'acp-command (list {:?}))",
+        agent.display().to_string()
+    ));
+    h.keys("C-c c c");
+    see(&mut h, "Ready.");
+    h.wait_until(|h| h.eval("(length %acp-commands)") == "2");
+    h
+}
+
+#[test]
+fn leave_asked_by_an_agent_is_given_and_the_turn_goes_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = with_fake_agent(dir.path());
+    h.type_text("ask me").keys("C-c C-c");
+    see(&mut h, "Remove the build  asks leave");
+    h.keys("C-c c o a");
+    see(&mut h, "You chose: allow-always");
+    see(&mut h, "— end_turn —");
+    assert!(h.screen.text().contains("Remove the build  completed"));
+    h.eval("(claude-quit)");
+}
+
+#[test]
+fn a_program_is_run_for_an_agent_that_asks() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = with_fake_agent(dir.path());
+    h.type_text("run it").keys("C-c C-c");
+    see(&mut h, "— end_turn —");
+    let screen = h.screen.text();
+    // The agent got the exit status and the output, of both streams, and
+    // could not ask again once it had let the terminal go.
+    assert!(
+        screen.contains("It ended with 3 and wrote 2 lines. Truncated: false. Released: true."),
+        "{screen}"
+    );
+    // The tool call shows what the program wrote, where the agent works
+    // and with the variable it set, and how it ended.
+    let name = dir.path().file_name().unwrap().to_str().unwrap();
+    assert!(screen.contains("▾ Run the greeting  failed"), "{screen}");
+    assert!(screen.contains(&format!("  hello from {name}")), "{screen}");
+    assert!(screen.contains("  oops"), "{screen}");
+    assert!(screen.contains("  [exit 3]"), "{screen}");
+    h.eval("(claude-quit)");
+}
+
+#[test]
+fn only_the_end_of_much_output_is_kept() {
+    let mut h = Harness::new(80, 24);
+    assert_eq!(
+        h.eval(
+            r#"(define t (vector #f "" #f #f '() 10 0 #f #f))
+               (%acp-terminal-output! "t" t "abcdefgh")
+               (%acp-terminal-output! "t" t "ijkl")
+               (list (vector-ref t 1) (vector-ref t 2) (vector-ref t 6))"#
+        ),
+        r#"("cdefghijkl" #t 10)"#
+    );
+    // The limit is in bytes: chars of two bytes each fill it twice as fast.
+    assert_eq!(
+        h.eval(
+            r#"(define t (vector #f "" #f #f '() 10 0 #f #f))
+               (%acp-terminal-output! "t" t "ååååååå")
+               (list (vector-ref t 1) (vector-ref t 6))"#
+        ),
+        r#"("ååå" 6)"#
+    );
+}
+
+#[test]
+fn the_mode_and_the_model_are_chosen_among_what_the_agent_offers() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = with_fake_agent(dir.path());
+    assert!(h.screen.text().contains("[fake-model, default]"));
+    h.keys("C-c c m");
+    // Each option is offered with its value now.
+    let screen = h.screen.text();
+    assert!(
+        screen.contains("Mode") && screen.contains("Default"),
+        "{screen}"
+    );
+    h.type_text("Mode").keys("RET");
+    assert!(h.screen.text().contains("Plans, and changes nothing"));
+    h.type_text("Plan").keys("RET");
+    see(&mut h, "[fake-model, plan]");
+    assert!(h.echo().contains("Mode: Plan"), "{}", h.echo());
+    // Values that come in groups are offered alike.
+    h.keys("C-c c m");
+    h.type_text("Model").keys("RET");
+    h.type_text("Faker").keys("RET");
+    see(&mut h, "[faker-model, plan]");
+    h.eval("(claude-quit)");
+}
+
+#[test]
+fn an_agent_with_modes_and_no_options_has_its_mode_set() {
+    let mut h = talking();
+    h.eval(
+        r#"(define asked '())
+           (set! %acp-request
+             (lambda (method params callback)
+               (set! asked (list method (json-encode params)))
+               (callback '() #f)))
+           (set! %acp-modes
+             (json-decode "{\"currentModeId\":\"code\",\"availableModes\":[{\"id\":\"code\",\"name\":\"Code\"},{\"id\":\"ask\",\"name\":\"Ask\"}]}"))"#,
+    );
+    // The mode is all there is to set, so its values are offered at once.
+    h.keys("C-c c m");
+    h.type_text("Ask").keys("RET");
+    assert_eq!(
+        h.eval("asked"),
+        r#"("session/set_mode" "{\"sessionId\":\"stub\",\"modeId\":\"ask\"}")"#,
+        "the editor writes the fields in the order it was given them"
+    );
+    assert_eq!(h.eval("%acp-mode"), "\"ask\"");
+}
+
+#[test]
+fn a_slash_command_is_chosen_and_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = with_fake_agent(dir.path());
+    h.keys("C-c c /");
+    assert!(h.screen.text().contains("Make the conversation shorter"));
+    h.type_text("/compact").keys("RET");
+    see(&mut h, "You said: /compact");
+    see(&mut h, "— end_turn —");
+    // One that takes something asks for it, with the agent's hint.
+    h.keys("C-c c /");
+    h.type_text("/review").keys("RET");
+    assert!(
+        h.prompt().contains("/review (which change):"),
+        "{}",
+        h.prompt()
+    );
+    h.type_text("the last").keys("RET");
+    see(&mut h, "You said: /review the last");
+    // It is among the prompts that M-p brings back.
+    assert_eq!(h.eval("(last %acp-history)"), "\"/review the last\"");
+    h.eval("(claude-quit)");
+}
+
 #[test]
 fn a_whole_turn_with_an_agent_that_speaks_the_protocol() {
     let dir = tempfile::tempdir().unwrap();

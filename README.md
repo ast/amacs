@@ -451,10 +451,23 @@ is not tied to one.
 `C-c c c` starts Claude for the project and shows two windows: the
 conversation above and a compose buffer below. Write a prompt in the compose
 buffer, as long as you like, and `C-c C-c` sends it. `M-p` and `M-n` walk
-earlier prompts, `C-c C-k` clears the buffer. From a file you are reading, select some code and `C-c c r` adds a
-reference to it (`@path#L3-9`) to the prompt. When the agent wants to change
-a file or run something, it asks in the minibuffer; it reads and writes
-files through the editor, so it sees your unsaved edits.
+earlier prompts, `C-c C-k` clears the buffer. From a file you are reading,
+select some code and `C-c c r` adds a reference to it (`@path#L3-9`) to the
+prompt. The agent reads and writes files through the editor, so it sees your
+unsaved edits.
+
+When the agent wants leave to change a file or run something, it does not
+take the minibuffer from you. The tool call says that it asks leave and
+lists the answers the agent offers, each with a key; the echo area and the
+mode line say so too. Answer when it suits, from any buffer: `C-c c y`
+allows it this once, `C-c c n` refuses, and `C-c c o` shows every answer in
+a menu of keys, such as allowing it always. In the conversation, `y` and `o`
+do the same, and `RET` on an answer gives it.
+
+`C-c c m` sets the mode (plan, accept edits and so on), the model, or
+whatever else the agent lets be set: choose which, then its value, from what
+the agent tells of. `C-c c /` sends one of the agent's slash commands,
+chosen by name, and asks for what the command takes if it takes something.
 
 The conversation is a buffer of sections, as the git buffers are. Each
 prompt heads a turn, and under it comes the answer as it streams, coloured
@@ -478,16 +491,22 @@ work.
 | `C-c c r` | Add a reference to the region of the current file to the prompt |
 | `C-c c l` | Ask a one-line question in the minibuffer |
 | `C-c c k` | Cancel the current turn |
+| `C-c c y`, `C-c c n` | Allow once, or refuse, what the agent asks leave for |
+| `C-c c o` | Every answer to what the agent asks leave for, in a menu of keys |
+| `C-c c m` | Set the mode, the model or another option of the session |
+| `C-c c /` | Send a slash command |
 | `TAB` | In the conversation, fold or open the section at point |
-| `RET` | In the conversation, go to the file and line at point |
+| `RET` | In the conversation, go to the file and line at point, or give the answer at point |
+| `y`, `o`, `m`, `/` | In the conversation, as `C-c c` and the same key |
 | `M-n`, `M-p` | In the conversation, the next and the previous turn |
 | `g` | In the conversation, draw it again |
 
 The adapter comes from `claude-agent-acp`; set `acp-command` if it is
 elsewhere. It is written in `runtime/lib/acp.scm`, on the process and JSON
-primitives and on `runtime/lib/section.scm`. Choosing the mode and the
-model, slash commands, a menu of keys for permissions, several sessions and
-other agents are next.
+primitives and on `runtime/lib/section.scm`. An agent that has no shell of
+its own can have the editor run programs for it (the protocol's
+`terminal/*`), and the tool call shows what they write; Claude Code runs its
+own. Several sessions and other agents are next.
 
 ## Spelling
 

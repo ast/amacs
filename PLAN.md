@@ -294,7 +294,27 @@ the user's quota.
    as drawn; if long conversations feel slow, `section.scm` needs a way to
    redraw one section.
 4. Permissions, modes and models, slash commands; the client's
-   `fs/*` and `terminal/*` methods.
+   `fs/*` and `terminal/*` methods. Done 2026-11-23. Leave is not asked in
+   the minibuffer, which took whatever was being typed for an answer: the
+   request waits with its tool call, which lists the agent's options with a
+   key each, and `C-c c y`, `C-c c n` and `C-c c o` (a menu of keys) answer
+   it from anywhere; a cancelled turn answers what waits with `cancelled`,
+   as the protocol asks. `C-c c m` sets any of the `configOptions` with
+   `session/set_config_option`, and falls back on `session/set_mode` for an
+   agent that only has `modes`. `C-c c /` sends one of
+   `available_commands`. `fs/read_text_file` honours `line` and `limit`.
+   `terminal/create`, `output`, `wait_for_exit`, `kill` and `release` run
+   programs on `make-process`, keep the end of the output within the byte
+   limit, and show it under the tool call that names the terminal. The
+   adapter of Claude Code (0.107.0) never calls `terminal/*`: it runs its
+   own commands and sends their output as text, or as `_meta.terminal_output`
+   to a client that says it draws those, which amacs does not say. So the
+   terminals are for other agents, and are tried with `fake-acp` only.
+   Checked against the real adapter without a prompt: the options (mode,
+   model, effort, fast mode, ultracode, agent) with names and descriptions,
+   seventy commands with their hints, and the answer of
+   `session/set_config_option`. A request for leave from the real adapter
+   has not been tried; its options are read from the adapter's source.
 5. The backend seam and a second agent; attention; docs.
 
 ## M14: Remote files

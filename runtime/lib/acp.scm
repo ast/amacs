@@ -5,8 +5,9 @@
 ;;; coding agents. Claude Code speaks it through the `claude-agent-acp`
 ;;; adapter. This client starts the agent, opens a session, sends prompts
 ;;; written in a compose buffer, answers the agent when it reads or writes a
-;;; file, and asks the user when the agent wants to do something that needs
-;;; leave.
+;;; file or runs a program, and shows the user what the agent wants leave
+;;; for, to be answered when it suits: nothing is asked in the minibuffer
+;;; while something else is being typed.
 ;;;
 ;;; The conversation is a buffer of sections, as the git buffers are: a
 ;;; section for each turn, with the agent's thoughts folded away, its tool
@@ -40,12 +41,37 @@ and its arguments. The default is the Claude Code adapter.")
 ;; there is, in tokens; #f until the agent has said.
 (define %acp-used #f)
 (define %acp-size #f)
+;; What of the session can be set, as the agent tells of it: the mode, the
+;; model and whatever else, each an object with its values and the one now.
+(define %acp-options '())
+;; The modes as agents told of them before there were options, kept for an
+;; agent that has no option for the mode.
+(define %acp-modes #f)
+;; The slash commands that the agent knows, objects with a name, a
+;; description and perhaps a hint of what to write after the name.
+(define %acp-commands '())
+;; What the agent has asked leave for and has no answer to yet, oldest
+;; first. Each is a vector of the id of the request, the id of the tool
+;; call, and the options: lists of a key, a label, the id to answer with and
+;; the kind.
+(define %acp-permissions '())
+;; The programs run for the agent, by the ids they were given. Each is a
+;; vector of the process, what it has written, whether the start of that
+;; was dropped, how it ended (#f while it runs, then a pair of the exit
+;; status and the signal), the requests that wait for it to end, how many
+;; bytes of output to keep, how many are kept, whether the editor ended it,
+;; and whether the agent is done with it.
+(define %acp-terminals (make-hash-table))
+(define %acp-next-terminal 0)
+;; The tool call that shows a terminal, by the id of the terminal.
+(define %acp-terminal-tools (make-hash-table))
 
 (set-face! 'agent-prompt 'fg 'blue 'bold #t)
 (set-face! 'agent-tool 'bold #t)
 (set-face! 'agent-pending 'fg 'fg-dim)
 (set-face! 'agent-done 'fg 'fg-added)
 (set-face! 'agent-failed 'fg 'fg-removed 'bold #t)
+(set-face! 'agent-asks 'fg 'yellow-warmer 'bold #t)
 
 (define (%acp-get object key)
   ;; A field of an object of JSON, with null and a missing field both #f.
@@ -124,7 +150,8 @@ comes."
       [(equal? kind "tool_call") (%acp-tool-call! update)]
       [(equal? kind "tool_call_update") (%acp-tool-update! update)]
       [(equal? kind "plan") (%acp-plan! (%acp-list (%acp-get update 'entries)))]
-      [(equal? kind "available_commands_update") #f]
+      [(equal? kind "available_commands_update")
+       (set! %acp-commands (%acp-list (%acp-get update 'availableCommands)))]
       [(equal? kind "current_mode_update")
        (set! %acp-mode (%acp-get update 'currentModeId))
        (%acp-show-state)]
@@ -148,6 +175,32 @@ comes."
   (cond [(equal? method "fs/read_text_file") (%acp-fs-read id params)]
         [(equal? method "fs/write_text_file") (%acp-fs-write id params)]
         [(equal? method "session/request_permission") (%acp-permission id params)]
+        [(equal? method "terminal/create") (%acp-terminal-create id params)]
+        [(equal? method "terminal/output")
+         (%acp-with-terminal id params
+           (lambda (terminal)
+             (%acp-respond id (json-object 'output (vector-ref terminal 1)
+                                           'truncated (vector-ref terminal 2)
+                                           'exitStatus (if (vector-ref terminal 3)
+                                                           (%acp-terminal-exit terminal)
+                                                           'null)))))]
+        [(equal? method "terminal/wait_for_exit")
+         (%acp-with-terminal id params
+           (lambda (terminal)
+             (if (vector-ref terminal 3)
+                 (%acp-respond id (%acp-terminal-exit terminal))
+                 (vector-set! terminal 4 (cons id (vector-ref terminal 4))))))]
+        [(equal? method "terminal/kill")
+         (%acp-with-terminal id params
+           (lambda (terminal)
+             (%acp-terminal-end! terminal)
+             (%acp-respond id '())))]
+        [(equal? method "terminal/release")
+         (%acp-with-terminal id params
+           (lambda (terminal)
+             (%acp-terminal-end! terminal)
+             (vector-set! terminal 8 #t)
+             (%acp-respond id '())))]
         [else (%acp-respond-error id -32601 (string-append "amacs does not support " method))]))
 
 (define (%acp-buffer-visiting path)
@@ -163,7 +216,20 @@ comes."
          (content (cond [buffer (buffer-string buffer)]
                         [(file-exists? path) (read-file path)]
                         [else ""])))
-    (%acp-respond id (json-object 'content content))))
+    (%acp-respond id (json-object 'content (%acp-slice content
+                                                       (%acp-get params 'line)
+                                                       (%acp-get params 'limit))))))
+
+(define (%acp-slice text line limit)
+  ;; The lines of a text from a line, counted from 1, and no more of them
+  ;; than a limit; all of it when neither is given.
+  (if (not (or line limit))
+      text
+      (let* ((lines (string-split text #\newline))
+             (skip (min (length lines) (max 0 (- (or line 1) 1))))
+             (rest (list-tail lines skip)))
+        (string-join (if (and limit (< limit (length rest))) (list-head rest limit) rest)
+                     "\n"))))
 
 (define (%acp-fs-write id params)
   (let* ((path (json-ref params 'path))
@@ -174,26 +240,232 @@ comes."
     (when buffer (with-current-buffer buffer (revert-buffer)))
     (%acp-respond id '())))
 
-(define (%acp-permission id params)
-  ;; The agent wants leave for a tool call. Ask, and pick an option.
-  (let* ((tool (json-ref (json-ref params 'toolCall) 'title))
-         (options (vector->list (or (json-ref params 'options) #()))))
-    (run-later
-     (lambda ()
-       (let ((allow (y-or-n? (string-append "Claude: " (or tool "a tool call") " — allow? "))))
-         (let ((option (%acp-choose-option options allow)))
-           (if option
-               (%acp-respond id (json-object 'outcome (json-object 'outcome "selected" 'optionId option)))
-               (%acp-respond id (json-object 'outcome (json-object 'outcome "cancelled"))))))))))
+;;; Leave for a tool call
+;;;
+;;; The agent asks, and waits. The request is shown with the tool call it
+;;; is about, with a key for each answer the agent offers, and is answered
+;;; by a command; the user is not stopped in what they are doing.
 
-(define (%acp-choose-option options allow)
-  "The id of an option to answer with: an allow-once when allowing, a
-reject-once when not."
-  (let ((want (if allow '("allow_once" "allow_always") '("reject_once" "reject_always"))))
-    (let loop ((rest options))
-      (cond [(null? rest) (and (pair? options) (json-ref (car options) 'optionId))]
-            [(member (json-ref (car rest) 'kind) want) (json-ref (car rest) 'optionId)]
-            [else (loop (cdr rest))]))))
+(define (%acp-option-keys options)
+  ;; A key for each option: y to allow once, a to allow always, n to refuse
+  ;; once, r to refuse always, and a digit for one whose key is taken or
+  ;; whose kind is not known.
+  (let loop ((rest options) (taken '()) (digit 1) (out '()))
+    (if (null? rest)
+        (reverse out)
+        (let* ((option (car rest))
+               (kind (%acp-get option 'kind))
+               (wanted (cond [(equal? kind "allow_once") "y"]
+                             [(equal? kind "allow_always") "a"]
+                             [(equal? kind "reject_once") "n"]
+                             [(equal? kind "reject_always") "r"]
+                             [else #f]))
+               (free? (and wanted (not (member wanted taken))))
+               (key (if free? wanted (number->string digit))))
+          (loop (cdr rest)
+                (cons key taken)
+                (if free? digit (+ digit 1))
+                (cons (list key
+                            (or (%acp-get option 'name) kind "?")
+                            (%acp-get option 'optionId)
+                            kind)
+                      out))))))
+
+(define (%acp-permission id params)
+  (let* ((tool (%acp-get params 'toolCall))
+         (call (%acp-get tool 'toolCallId))
+         (request (vector id call
+                          (%acp-option-keys (%acp-list (%acp-get params 'options))))))
+    ;; What the request says of the tool call is news of it, and makes it
+    ;; known if it was not.
+    (if call
+        (%acp-tool-update! tool)
+        (%acp-note "[The agent asks leave for something it does not name]"))
+    (set! %acp-permissions (append %acp-permissions (list request)))
+    (%acp-changed!)
+    (%acp-show-state)
+    (message "Claude asks leave: " (%acp-request-title request)
+             " (C-c c y allows, C-c c n refuses, C-c c o chooses)")))
+
+(define (%acp-request-title request)
+  (let ((item (hash-table-ref %acp-tools (vector-ref request 1) #f)))
+    (or (and item (%acp-get (vector-ref item 1) 'title)) "a tool call")))
+
+(define (%acp-request-for call)
+  ;; The request that waits for an answer about a tool call, or #f.
+  (and call
+       (find (lambda (request) (equal? (vector-ref request 1) call)) %acp-permissions)))
+
+(define (%acp-answer! request option)
+  ;; Answers a request with the id of an option, or with #f to say that
+  ;; nothing was chosen. A request that is no longer waiting is left alone.
+  (when (memq request %acp-permissions)
+    (set! %acp-permissions
+      (filter (lambda (other) (not (eq? other request))) %acp-permissions))
+    (%acp-respond (vector-ref request 0)
+                  (json-object 'outcome
+                               (if option
+                                   (json-object 'outcome "selected" 'optionId option)
+                                   (json-object 'outcome "cancelled"))))
+    (let ((item (hash-table-ref %acp-tools (vector-ref request 1) #f)))
+      (when item (%acp-turn-set-drawn! (vector-ref item 2) #f)))
+    (%acp-changed!)
+    (%acp-show-state)))
+
+(define (%acp-option-of request kinds)
+  ;; The first option of the first of the kinds that the request has one of.
+  (let loop ((kinds kinds))
+    (and (pair? kinds)
+         (or (find (lambda (option) (equal? (list-ref option 3) (car kinds)))
+                   (vector-ref request 2))
+             (loop (cdr kinds))))))
+
+(define (%acp-asked)
+  (when (null? %acp-permissions)
+    (error "Claude is not asking leave for anything"))
+  (car %acp-permissions))
+
+(define-command (claude-allow)
+  "Allow, this once, what Claude has asked leave for the longest. Works from
+any buffer. C-c c o shows the other answers, such as allowing it always."
+  (let* ((request (%acp-asked))
+         (title (%acp-request-title request))
+         (option (%acp-option-of request '("allow_once"))))
+    (unless option
+      (error "Nothing here allows it just this once; C-c c o shows the choices"))
+    (%acp-answer! request (caddr option))
+    (message "Allowed: " title)))
+
+(define-command (claude-refuse)
+  "Refuse what Claude has asked leave for the longest. Works from any
+buffer."
+  (let* ((request (%acp-asked))
+         (title (%acp-request-title request))
+         (option (%acp-option-of request '("reject_once" "reject_always"))))
+    (%acp-answer! request (and option (caddr option)))
+    (message "Refused: " title)))
+
+(define-command (claude-answer)
+  "Show the answers that Claude offers to what it has asked leave for the
+longest, each with its key, and give the one whose key is pressed."
+  (let* ((request (%acp-asked))
+         (title (%acp-request-title request))
+         (choice (car (key-menu (string-append "Claude asks leave: " title)
+                                '()
+                                (map (lambda (option) (list-head option 3))
+                                     (vector-ref request 2))))))
+    (%acp-answer! request choice)
+    (message "Answered: " title)))
+
+;;; Programs run for the agent
+;;;
+;;; An agent that has no shell of its own asks the editor to run a program,
+;;; and then for what it wrote and how it ended. Claude Code runs its own
+;;; and does not ask.
+
+;; How much of the output of a program is kept when the agent names no
+;; limit, in bytes.
+(define %acp-terminal-limit 1000000)
+
+(define (%acp-bytes text)
+  ;; How many bytes a text is as UTF-8, which the agent's limit is in.
+  (let loop ((chars (string->list text)) (count 0))
+    (if (null? chars)
+        count
+        (loop (cdr chars)
+              (+ count (let ((code (char->integer (car chars))))
+                         (cond [(< code #x80) 1]
+                               [(< code #x800) 2]
+                               [(< code #x10000) 3]
+                               [else 4])))))))
+
+(define (%acp-with-terminal id params proc)
+  (let ((terminal (hash-table-ref %acp-terminals (%acp-get params 'terminalId) #f)))
+    (if (and terminal (not (vector-ref terminal 8)))
+        (proc terminal)
+        (%acp-respond-error id -32602 "amacs has no such terminal"))))
+
+(define (%acp-terminal-exit terminal)
+  (let ((exit (vector-ref terminal 3)))
+    (json-object 'exitCode (or (car exit) 'null) 'signal (or (cdr exit) 'null))))
+
+(define (%acp-terminal-end! terminal)
+  ;; Ends the program, if it runs. Its sentinel says so to who waits.
+  (let ((process (vector-ref terminal 0)))
+    (when (and process (not (vector-ref terminal 3)) (process-live? process))
+      (vector-set! terminal 7 #t)
+      (kill-process process))))
+
+(define (%acp-terminal-changed! name)
+  ;; The tool call that shows the terminal is drawn again.
+  (let ((item (hash-table-ref %acp-terminal-tools name #f)))
+    (when item
+      (%acp-turn-set-drawn! (vector-ref item 2) #f)
+      (%acp-changed!))))
+
+(define (%acp-terminal-create id params)
+  (let* ((command (%acp-get params 'command))
+         (arguments (%acp-list (%acp-get params 'args)))
+         (name (string-append "term-" (number->string %acp-next-terminal)))
+         (terminal (vector #f "" #f #f '()
+                           (or (%acp-get params 'outputByteLimit) %acp-terminal-limit)
+                           0 #f #f)))
+    (set! %acp-next-terminal (+ %acp-next-terminal 1))
+    (hash-table-set! %acp-terminals name terminal)
+    (guard (e (#t (hash-table-delete! %acp-terminals name)
+                  (%acp-respond-error id -32603
+                                      (if (error-object? e)
+                                          (error-object-message e)
+                                          "the program could not be started"))))
+      (vector-set! terminal 0
+        (make-process
+         (string-append "claude-" name)
+         ;; A command with no arguments and a space in it is a line for a
+         ;; shell, as some agents send.
+         (if (and (null? arguments) (string-search command " "))
+             (list "sh" "-c" command)
+             (cons command arguments))
+         'filter (lambda (process text) (%acp-terminal-output! name terminal text))
+         'sentinel (lambda (process status)
+                     (vector-set! terminal 3
+                       (cons status
+                             (and (not status)
+                                  (if (vector-ref terminal 7) "SIGKILL" "unknown"))))
+                     (for-each (lambda (waiting)
+                                 (%acp-respond waiting (%acp-terminal-exit terminal)))
+                               (vector-ref terminal 4))
+                     (vector-set! terminal 4 '())
+                     (%acp-terminal-changed! name))
+         'directory (or (%acp-get params 'cwd) %acp-root (working-directory))
+         'environment (map (lambda (variable)
+                             (list (%acp-get variable 'name) (%acp-get variable 'value)))
+                           (%acp-list (%acp-get params 'env)))))
+      (%acp-respond id (json-object 'terminalId name)))))
+
+(define (%acp-terminal-output! name terminal text)
+  ;; More of what the program writes. Past the limit the oldest goes: a
+  ;; char for each byte over, which is never too few.
+  (vector-set! terminal 1 (string-append (vector-ref terminal 1) text))
+  (vector-set! terminal 6 (+ (vector-ref terminal 6) (%acp-bytes text)))
+  (let ((over (- (vector-ref terminal 6) (vector-ref terminal 5))))
+    (when (> over 0)
+      (let* ((output (vector-ref terminal 1))
+             (cut (min over (string-length output))))
+        (vector-set! terminal 6 (- (vector-ref terminal 6)
+                                   (%acp-bytes (substring output 0 cut))))
+        (vector-set! terminal 1 (substring output cut (string-length output)))
+        (vector-set! terminal 2 #t))))
+  (%acp-terminal-changed! name))
+
+(define (%acp-end-terminals!)
+  ;; When the agent is gone, so are the programs it had the editor run.
+  (hash-table-walk %acp-terminals
+    (lambda (name terminal)
+      (let ((process (vector-ref terminal 0)))
+        (when (and process (not (vector-ref terminal 3)))
+          (delete-process process)))))
+  (set! %acp-terminals (make-hash-table))
+  (set! %acp-terminal-tools (make-hash-table)))
 
 ;;; The conversation, as it is known
 
@@ -251,7 +523,16 @@ reject-once when not."
   ;; With the turn it is of, since an update may come when that is over.
   (let ((item (vector 'tool fields (%acp-turn))))
     (hash-table-set! %acp-tools (%acp-get fields 'toolCallId) item)
+    (%acp-note-terminals! item)
     (%acp-add! item)))
+
+(define (%acp-note-terminals! item)
+  ;; Which terminals a tool call shows, to draw it again as they write.
+  (for-each
+   (lambda (part)
+     (when (equal? (%acp-get part 'type) "terminal")
+       (hash-table-set! %acp-terminal-tools (%acp-get part 'terminalId) item)))
+   (%acp-list (%acp-get (vector-ref item 1) 'content))))
 
 (define (%acp-tool-update! update)
   ;; An update carries only the fields that changed.
@@ -268,6 +549,7 @@ reject-once when not."
                            (cons (car rest)
                                  (filter (lambda (field) (not (eq? (car field) (caar rest))))
                                          fields)))])))
+          (%acp-note-terminals! item)
           (%acp-turn-set-drawn! (vector-ref item 2) #f)
           (%acp-changed!)))))
 
@@ -473,6 +755,25 @@ be #f for a file that is new."
                                                       " more lines")))
                          lines)))
          (%acp-line-sections index shown #f "  "))]
+      [(equal? type "terminal")
+       ;; The end of what the program wrote, which is where the news is.
+       (let* ((terminal (hash-table-ref %acp-terminals (%acp-get content 'terminalId) #f))
+              (lines (if terminal (%acp-text-lines (vector-ref terminal 1)) '()))
+              (count (length lines))
+              (shown (if (> count %acp-output-lines)
+                         (cons (string-append "… " (number->string (- count %acp-output-lines))
+                                              " lines before these")
+                               (list-tail lines (- count %acp-output-lines)))
+                         lines))
+              (exit (and terminal (vector-ref terminal 3))))
+         (%acp-line-sections
+          index
+          (append shown
+                  (cond [(not exit) '()]
+                        [(not (car exit)) (list "[ended by a signal]")]
+                        [(= (car exit) 0) '()]
+                        [else (list (string-append "[exit " (number->string (car exit)) "]"))]))
+          #f "  "))]
       [else '()])))
 
 (define (%acp-tool-section fields index)
@@ -484,11 +785,27 @@ be #f for a file that is new."
                             (list 'location (%acp-get location 'path) (%acp-get location 'line))))
                      (%acp-list (%acp-get fields 'locations))))
          (content (%acp-list (%acp-get fields 'content)))
-         (diff? (find (lambda (part) (equal? (%acp-get part 'type) "diff")) content)))
+         (diff? (find (lambda (part) (equal? (%acp-get part 'type) "diff")) content))
+         (request (%acp-request-for (%acp-get fields 'toolCallId))))
     (make-section
      (list 'tool index)
-     (list (cons title 'agent-tool) (cons "  " #f) (cons status (%acp-status-face status)))
+     (list (cons title 'agent-tool)
+           (cons "  " #f)
+           (if request
+               (cons "asks leave" 'agent-asks)
+               (cons status (%acp-status-face status))))
      (append
+      ;; The answers to give, each with its key; RET on one gives it.
+      (if request
+          (map (lambda (option n)
+                 (make-section (list 'leave n)
+                               (list (cons (string-append "  " (car option) "  " (cadr option))
+                                           'agent-asks))
+                               '()
+                               (list 'leave request (caddr option))))
+               (vector-ref request 2)
+               (iota (length (vector-ref request 2))))
+          '())
       (apply append (map %acp-content-sections content (iota (length content))))
       ;; Where it worked, unless a change says so already.
       (if diff?
@@ -505,8 +822,8 @@ be #f for a file that is new."
                locations
                (iota (length locations)))))
      (and (pair? locations) (car locations))
-     ;; A change and a failure are worth seeing without asking.
-     (not (or diff? (equal? status "failed"))))))
+     ;; A change, a failure and a question are worth seeing without asking.
+     (not (or diff? request (equal? status "failed"))))))
 
 (define (%acp-plan-section entries index)
   (let ((done (length (filter (lambda (entry) (equal? (%acp-get entry 'status) "completed"))
@@ -586,7 +903,9 @@ be #f for a file that is new."
 (define-major-mode agent-mode #f "Agent"
   "Major mode of the conversation with a coding agent. TAB folds and opens
 what is at point, RET goes to the file that a tool call or a line of a
-change is about, M-n and M-p move by turn. Start with C-c c c.")
+change is about, M-n and M-p move by turn. When the agent asks leave, y
+allows it, o shows every answer, and RET on an answer gives it. m sets the
+mode or the model, and / sends a slash command. Start with C-c c c.")
 
 (define (%acp-ensure-buffer)
   (switch-to-buffer %acp-buffer)
@@ -642,13 +961,14 @@ change is about, M-n and M-p move by turn. Start with C-c c c.")
 (define (%acp-read-options! options)
   ;; The model and the mode are among the options of the session that the
   ;; agent tells of, each with its category and its value now.
+  (set! %acp-options (%acp-list options))
   (for-each
    (lambda (option)
      (let ((category (%acp-get option 'category))
            (value (%acp-get option 'currentValue)))
        (cond [(equal? category "model") (set! %acp-model value)]
              [(equal? category "mode") (set! %acp-mode value)])))
-   (%acp-list options)))
+   %acp-options))
 
 (define (%acp-tokens count)
   ;; A count of tokens in few letters: 28k, 1M.
@@ -668,6 +988,7 @@ change is about, M-n and M-p move by turn. Start with C-c c c.")
                                (and %acp-used %acp-size
                                     (string-append (%acp-tokens %acp-used) "/"
                                                    (%acp-tokens %acp-size)))
+                               (and (pair? %acp-permissions) "asks leave")
                                (and %acp-busy "working")))))
       (with-current-buffer %acp-buffer
         (set-mode-line-text!
@@ -681,15 +1002,19 @@ plan."
 
 (define-command (agent-visit)
   "Go to the file that the tool call or the line of a change at point is
-about, at its line. Elsewhere, fold or open the section."
-  (let ((place (find (lambda (value) (and (pair? value) (eq? (car value) 'location)))
-                     (map section-value (section-chain-at-point %acp-view)))))
-    (if (not place)
-        (agent-toggle-section)
-        (begin
-          (find-file (expand-file-name (cadr place)
-                                       (or %acp-root (project-root) (working-directory))))
-          (when (caddr place) (goto-line (caddr place)))))))
+about, at its line. On an answer to what the agent asks leave for, give
+that answer. Elsewhere, fold or open the section."
+  (let* ((values (map section-value (section-chain-at-point %acp-view)))
+         (leave (and (pair? values) (pair? (car values)) (eq? (caar values) 'leave)
+                     (car values)))
+         (place (find (lambda (value) (and (pair? value) (eq? (car value) 'location)))
+                      values)))
+    (cond [leave (%acp-answer! (cadr leave) (caddr leave))]
+          [place
+           (find-file (expand-file-name (cadr place)
+                                        (or %acp-root (project-root) (working-directory))))
+           (when (caddr place) (goto-line (caddr place)))]
+          [else (agent-toggle-section)])))
 
 (define (%acp-turn-line from step)
   ;; The line of the nearest turn from a line, upwards or downwards, or #f.
@@ -722,7 +1047,9 @@ about, at its line. Elsewhere, fold or open the section."
  '(("TAB" agent-toggle-section) ("RET" agent-visit)
    ("n" next-line) ("p" previous-line)
    ("M-n" agent-next-turn) ("M-p" agent-previous-turn)
-   ("g" agent-redraw)))
+   ("g" agent-redraw)
+   ("y" claude-allow) ("o" claude-answer) ("m" claude-set-option)
+   ("/" claude-slash-command)))
 
 ;;; Commands
 
@@ -773,6 +1100,7 @@ already running. Write a prompt and send it with C-c C-c."
   (set! %acp-session #f)
   (set! %acp-next-id 0)
   (set! %acp-pending (make-hash-table))
+  (%acp-forget-session!)
   (set! %acp-root root)
   (with-current-buffer %acp-buffer (set-buffer-directory! root))
   (set! %acp-process
@@ -785,7 +1113,8 @@ already running. Write a prompt and send it with C-c C-c."
   (%acp-request "initialize"
     (json-object 'protocolVersion 1
                  'clientCapabilities (json-object
-                                      'fs (json-object 'readTextFile #t 'writeTextFile #t))
+                                      'fs (json-object 'readTextFile #t 'writeTextFile #t)
+                                      'terminal #t)
                  'clientInfo (json-object 'name "amacs" 'version "0.1.0"))
     (lambda (result error)
       (if error
@@ -800,7 +1129,8 @@ already running. Write a prompt and send it with C-c C-c."
           (%acp-note (string-append "[session/new failed: " (or (%acp-get error 'message) "?") "]"))
           (begin
             (set! %acp-session (%acp-get result 'sessionId))
-            (set! %acp-mode (%acp-get (%acp-get result 'modes) 'currentModeId))
+            (set! %acp-modes (%acp-get result 'modes))
+            (set! %acp-mode (%acp-get %acp-modes 'currentModeId))
             (%acp-read-options! (%acp-get result 'configOptions))
             (%acp-show-state)
             (%acp-note "Ready. Write a prompt below and send it with C-c C-c."))))))
@@ -810,14 +1140,25 @@ already running. Write a prompt and send it with C-c C-c."
   ;; on standard output, and dropped. Useful to log while debugging.
   #f)
 
-(define (%acp-sentinel process status)
-  (set! %acp-process #f)
+(define (%acp-forget-session!)
+  ;; What was known of a session that is over, or of the one before a new.
   (set! %acp-session #f)
   (set! %acp-busy #f)
   (set! %acp-model #f)
   (set! %acp-mode #f)
   (set! %acp-used #f)
   (set! %acp-size #f)
+  (set! %acp-options '())
+  (set! %acp-modes #f)
+  (set! %acp-commands '())
+  ;; Nobody is left to hear the answers.
+  (set! %acp-permissions '())
+  (%acp-end-terminals!))
+
+(define (%acp-sentinel process status)
+  (set! %acp-process #f)
+  (%acp-forget-session!)
+  (for-each (lambda (turn) (%acp-turn-set-drawn! turn #f)) %acp-turns)
   (%acp-show-state)
   (%acp-note (string-append "[Claude ended" (if status (string-append " (" (number->string status) ")") "") "]")))
 
@@ -971,10 +1312,141 @@ window that shows a file."
                      (string-append "[error: " (or (%acp-get error 'message) "?") "]")
                      (string-append "— " (or (%acp-get result 'stopReason) "done") " —"))))))
 
+;;; The mode, the model and the other options of the session
+
+(define (%acp-option-choices option)
+  ;; The values an option can have, as lists of the value, its name and its
+  ;; description or #f. They may come in groups, which are taken apart.
+  (define (choice entry)
+    (list (%acp-get entry 'value)
+          (or (%acp-get entry 'name) (%acp-get entry 'value))
+          (%acp-get entry 'description)))
+  (apply append
+         (map (lambda (entry)
+                (if (%acp-get entry 'group)
+                    (map choice (%acp-list (%acp-get entry 'options)))
+                    (list (choice entry))))
+              (%acp-list (%acp-get option 'options)))))
+
+(define (%acp-settable-options)
+  ;; The options with values to choose among. An agent that tells of modes
+  ;; but has no option for the mode gets one made of them.
+  (let ((options (filter (lambda (option) (pair? (%acp-option-choices option)))
+                         %acp-options))
+        (modes (%acp-list (%acp-get %acp-modes 'availableModes))))
+    (if (or (null? modes)
+            (find (lambda (option) (equal? (%acp-get option 'category) "mode")) options))
+        options
+        (cons (json-object 'name "Mode" 'category "mode" 'modes #t
+                           'currentValue %acp-mode
+                           'options (list->vector
+                                     (map (lambda (mode)
+                                            (json-object 'value (%acp-get mode 'id)
+                                                         'name (%acp-get mode 'name)
+                                                         'description (%acp-get mode 'description)))
+                                          modes)))
+              options))))
+
+(define (%acp-option-name option)
+  (or (%acp-get option 'name) (%acp-get option 'id) "?"))
+
+(define (%acp-candidate name note)
+  ;; Something to choose, with what is said beside it if anything is.
+  (if (and (string? note) (not (equal? note ""))) (list name note) name))
+
+(define-command (claude-set-option)
+  "Set the mode, the model or another option of the session with Claude:
+choose which, among those the agent tells of, and then its value. The mode
+line of the conversation shows the mode and the model in force."
+  (unless %acp-session (error "Claude is not running; C-c c c first"))
+  (let ((options (%acp-settable-options)))
+    (when (null? options) (error "The agent has told of nothing to set"))
+    (let* ((name (if (null? (cdr options))
+                     (%acp-option-name (car options))
+                     (completing-read
+                      "Set: "
+                      (map (lambda (option)
+                             (let ((now (find (lambda (choice)
+                                                (equal? (car choice) (%acp-get option 'currentValue)))
+                                              (%acp-option-choices option))))
+                               (%acp-candidate (%acp-option-name option) (and now (cadr now)))))
+                           options)
+                      'agent-option)))
+           (option (find (lambda (option) (equal? (%acp-option-name option) name)) options)))
+      (unless option (error (string-append "Nothing to set is called " name)))
+      (let* ((choices (%acp-option-choices option))
+             (picked (completing-read
+                      (string-append name ": ")
+                      (map (lambda (choice) (%acp-candidate (cadr choice) (caddr choice)))
+                           choices)
+                      'agent-value))
+             (choice (find (lambda (choice) (equal? (cadr choice) picked)) choices)))
+        (unless choice (error (string-append name " cannot be " picked)))
+        (%acp-set-option! option choice)))))
+
+(define (%acp-set-option! option choice)
+  (let ((name (%acp-option-name option))
+        (said (lambda (error)
+                (message "Claude would not set it: " (or (%acp-get error 'message) "?")))))
+    (if (%acp-get option 'modes)
+        (%acp-request "session/set_mode"
+          (json-object 'sessionId %acp-session 'modeId (car choice))
+          (lambda (result error)
+            (if error
+                (said error)
+                (begin
+                  (set! %acp-mode (car choice))
+                  (%acp-show-state)
+                  (message name ": " (cadr choice))))))
+        (%acp-request "session/set_config_option"
+          (json-object 'sessionId %acp-session
+                       'configId (%acp-get option 'id)
+                       'value (car choice))
+          (lambda (result error)
+            (if error
+                (said error)
+                (begin
+                  ;; The answer has every option, since one may change others.
+                  (when (%acp-get result 'configOptions)
+                    (%acp-read-options! (%acp-get result 'configOptions)))
+                  (%acp-show-state)
+                  (message name ": " (cadr choice)))))))))
+
+;;; Slash commands
+
+(define-command (claude-slash-command)
+  "Send one of the slash commands that Claude knows: choose it by name, and
+write what it takes after its name if it takes something."
+  (unless %acp-session (error "Claude is not running; C-c c c first"))
+  (when %acp-busy (error "Claude is still working; C-c c k to cancel"))
+  (when (null? %acp-commands) (error "The agent has told of no commands"))
+  (let* ((picked (completing-read
+                  "Command: "
+                  (map (lambda (command)
+                         (%acp-candidate (string-append "/" (%acp-get command 'name))
+                                         (%acp-get command 'description)))
+                       %acp-commands)
+                  'agent-command))
+         (command (find (lambda (command)
+                          (equal? (string-append "/" (%acp-get command 'name)) picked))
+                        %acp-commands)))
+    (unless command (error (string-append "Claude has no command " picked)))
+    (let* ((hint (%acp-get (%acp-get command 'input) 'hint))
+           (more (if hint
+                     (string-trim (read-string (string-append picked " (" hint "): ")))
+                     ""))
+           (text (if (equal? more "") picked (string-append picked " " more))))
+      (when %acp-busy (error "Claude is still working; C-c c k to cancel"))
+      (%acp-send-prompt text)
+      (set! %acp-history (append %acp-history (list text))))))
+
 (define-command (claude-cancel)
-  "Cancel the current Claude turn."
+  "Cancel the current Claude turn. What Claude was asking leave for goes
+unanswered."
   (when (and %acp-session %acp-busy)
     (%acp-notify "session/cancel" (json-object 'sessionId %acp-session))
+    ;; The protocol wants every question that waits answered so.
+    (for-each (lambda (request) (%acp-answer! request #f)) %acp-permissions)
     (message "Asked Claude to stop.")))
 
 (define-command (claude-quit)
@@ -982,8 +1454,9 @@ window that shows a file."
   (when (%acp-connected?)
     (delete-process %acp-process))
   (set! %acp-process #f)
-  (set! %acp-session #f)
-  (set! %acp-busy #f)
+  (%acp-forget-session!)
+  (for-each (lambda (turn) (%acp-turn-set-drawn! turn #f)) %acp-turns)
+  (%acp-changed!)
   (%acp-show-state)
   (message "Claude stopped."))
 
@@ -992,3 +1465,8 @@ window that shows a file."
 (global-set-key "C-c c l" 'claude-send)
 (global-set-key "C-c c r" 'claude-add-reference)
 (global-set-key "C-c c k" 'claude-cancel)
+(global-set-key "C-c c y" 'claude-allow)
+(global-set-key "C-c c n" 'claude-refuse)
+(global-set-key "C-c c o" 'claude-answer)
+(global-set-key "C-c c m" 'claude-set-option)
+(global-set-key "C-c c /" 'claude-slash-command)
