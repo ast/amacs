@@ -13,11 +13,12 @@ lines that contain what is typed, and narrows as it grows.*
 
 ## Status
 
-Milestones M0 to M10 of the plan are done: the editor runs in a terminal or
-a Wayland window, alone or as a server with any number of clients, edits
-files with syntax highlighting, indentation and language servers, has a file
-manager and a git interface, and is extended in Scheme while it runs, by
-people and by language models.
+Milestones M0 to M11 of the plan are done, and most of M12: the editor runs
+in a terminal or a Wayland window, alone or as a server with any number of
+clients, edits files with syntax highlighting, indentation and language
+servers, has a file manager, a git interface, a terminal emulator and a
+coding agent in it, and is extended in Scheme while it runs, by people and
+by language models.
 
 Working now:
 
@@ -54,6 +55,8 @@ Working now:
   model uses, inspects and changes the running editor: see `docs/ai.md`
 - A terminal emulator (`C-c v`): a shell or any program on a
   pseudo-terminal, its screen in an ordinary buffer (below)
+- A coding agent (`C-c c c`): Claude Code, or another agent that speaks
+  the Agent Client Protocol, with its conversation in a buffer (below)
 - Spelling: a wave under the misspelled words on screen, in several
   languages at once, with Hunspell's dictionaries (below)
 
@@ -62,12 +65,75 @@ milestones. `TODO.md` lists what is left.
 
 ## Building and running
 
-    nix develop          # Rust, libxkbcommon and pkg-config
+    nix develop          # Rust, libxkbcommon, libwayland and pkg-config
     cargo build --release
     target/release/amacs FILE...
 
+That builds four programs in `target/release`: `amacs`, the editor in a
+terminal and the server; `amacsclient`, which talks to the server;
+`amacs-gui`, the Wayland window; and `amacs-mcp`, for language models. With
+Nix alone, `nix run . -- FILE` builds and runs the editor, and `nix build`
+leaves the programs in `result/bin`.
+
 Keys follow Emacs defaults: `C-x C-f` opens a file, `C-x C-s` saves, `C-x C-c`
 quits, `M-x` runs a command by name, `M-:` evaluates a Scheme expression.
+
+Some features run other programs; the rest of the editor works without
+them:
+
+| Program | For |
+|---|---|
+| `rg` (ripgrep) | Listing and searching the files of a project |
+| `git` | The git views and the marks in the gutter |
+| `wl-copy`, `wl-paste` | The system clipboard |
+| `direnv` | The environment of a project's language servers and formatters |
+| Language servers and formatters | See "Language servers" |
+| `claude-agent-acp` | Claude Code as a coding agent |
+| Hunspell dictionaries | Spelling |
+| `xdg-open` | Opening what is not text from the file manager |
+
+## A first session
+
+Try the editor with the example configuration, without installing
+anything:
+
+    target/release/amacs --init examples/init.scm README.md
+
+Then, for example:
+
+1. `C-s`, type `server`, and move with `C-n` and `C-p` among the lines
+   that contain it; `RET` goes to the one selected, `C-g` back.
+2. `C-x C-f` and a file of Rust, such as `crates/amacs-text/src/lib.rs`.
+   It is highlighted and indented, and rust-analyzer starts if it is
+   installed: `M-.` goes to a definition and `M-,` back.
+3. `C-c p f` picks any file of the project by part of its name, and
+   `C-c /` searches the project as you type.
+4. `C-x g` shows the git status; `s` stages the change at point and
+   `c c` commits. `C-x d` lists a directory, and `C-x C-b` the buffers.
+5. `C-c v` opens a shell in a buffer, and `C-c c c` starts Claude for
+   the project, if `claude-agent-acp` is installed.
+6. `C-x 2` and `C-x 3` split the window, `M-o` goes to another, and
+   `C-x 1` leaves one.
+7. `M-:` and `(message "Hello from " (buffer-name))` runs Scheme in the
+   editor, and `C-h k` followed by a key says what the key does.
+8. `C-x C-c` quits, after asking about buffers that are not saved.
+
+To keep the configuration, copy it to where the editor looks for it, and
+change it to taste:
+
+    mkdir -p ~/.config/amacs && cp examples/init.scm ~/.config/amacs/init.scm
+
+For daily use the editor runs as a server, which keeps the buffers while
+windows and terminals come and go. A client starts the server if none is
+running:
+
+    amacsclient -c README.md       # a window
+    amacsclient -t README.md       # this terminal
+    export EDITOR=amacsclient      # for git commit and the like
+
+"Server and clients" below has the rest.
+
+## Working on the editor
 
 To work on the editor, `just restart` builds the editor and starts a server
 on a socket of its own, `$XDG_RUNTIME_DIR/amacs/dev.sock`, apart from one
@@ -481,6 +547,24 @@ when point is back at the end. The mode line names the model and the mode,
 says how much of the model's context is used, and says when the agent is at
 work.
 
+A session might go like this:
+
+1. In a file of the project, `C-c c c`. The conversation says "Ready."
+   and point is in the compose buffer.
+2. `C-c c m`, `Mode`, `Plan`: the agent is to plan and change nothing.
+   The mode line of the conversation now says so.
+3. `C-x o` back to the file, select a function, and `C-c c r`. The
+   compose buffer gets `@src/parser.rs#L40-72`.
+4. In the compose buffer, write "Why does this allocate for every token?
+   Propose a fix." after the reference, and `C-c C-c`.
+5. Read the answer as it comes. `TAB` on "Thinking" opens what the agent
+   thought, and `RET` on a tool call goes to the file it read.
+6. `C-c c m`, `Mode`, `Manual`, and a new prompt: "Do it." When the tool
+   call that edits the file says "asks leave", look at the diff under it
+   and press `C-c c y`, or `C-c c n` to refuse.
+7. `C-c c /` and `/compact` when the conversation has grown long.
+   `C-c c k` stops a turn that has gone astray.
+
 | Key | Does |
 |---|---|
 | `C-c c c` | Start Claude for the project, or show its windows |
@@ -749,21 +833,23 @@ The language server tests run against a small server of their own
 
 ## Layout
 
-| Crate           | Role                                                                        |
-| --------------- | --------------------------------------------------------------------------- |
-| `amacs-text`    | Rope, markers, undo tree                                                    |
-| `amacs-proto`   | Keys, input events and draw operations shared with frontends                |
-| `amacs-treesit` | Grammars, highlighting queries and indentation rules                        |
-| `amacs-lsp`     | Language Server Protocol transport, positions and URIs                      |
-| `amacs-core`    | Editor state, commands, keymaps, redisplay                                  |
-| `amacs-tty`     | Terminal frontend                                                           |
-| `amacs-server`  | The `amacs` binary: standalone editor, server, batch mode                   |
-| `amacs-client`  | The `amacsclient` binary and the connection code                            |
-| `amacs-gui`     | The `amacs-gui` binary: the Wayland window and its renderer                 |
-| `amacs-scheme`  | The editor's own Scheme: reader, compiler, virtual machine                  |
-| `amacs-script`  | Editor primitives for Scheme, and the session that runs the two together    |
-| `amacs-mcp`     | The `amacs-mcp` binary: a Model Context Protocol server for language models |
-| `amacs-testkit` | Headless frontend for tests                                                 |
+| Crate               | Role                                                                         |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `amacs-text`        | Rope, markers, undo tree                                                     |
+| `amacs-proto`       | Keys, input events and draw operations shared with frontends                 |
+| `amacs-treesit`     | Grammars, highlighting queries and indentation rules                         |
+| `amacs-lsp`         | Language Server Protocol transport, positions and URIs                       |
+| `amacs-core`        | Editor state, commands, keymaps, redisplay                                   |
+| `amacs-tty`         | Terminal frontend                                                            |
+| `amacs-server`      | The `amacs` binary: standalone editor, server, batch mode                    |
+| `amacs-client`      | The `amacsclient` binary and the connection code                             |
+| `amacs-gui`         | The `amacs-gui` binary: the Wayland window and its renderer                  |
+| `amacs-term`        | A terminal's screen as rows of text with faces, on Alacritty's state machine |
+| `amacs-gpu-surface` | The one unsafe call, which hands a GPU's driver a Wayland window             |
+| `amacs-scheme`      | The editor's own Scheme: reader, compiler, virtual machine                   |
+| `amacs-script`      | Editor primitives for Scheme, and the session that runs the two together     |
+| `amacs-mcp`         | The `amacs-mcp` binary: a Model Context Protocol server for language models  |
+| `amacs-testkit`     | Headless frontend for tests                                                  |
 
 `runtime/` holds the part of the editor written in Scheme, and its tests.
 
