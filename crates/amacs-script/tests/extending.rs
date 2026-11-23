@@ -308,3 +308,37 @@ fn what_is_typed_while_a_command_runs_a_program_waits_for_the_command() {
     assert_eq!(h.text(), "<x>yw!?");
     h.wait_until(|h| h.echo() == "evaluated");
 }
+
+#[test]
+fn code_can_put_text_on_the_mode_line_of_a_buffer() {
+    let mut h = Harness::new(80, 24);
+    h.eval(r#"(set-mode-line-text! "[at work]")"#);
+    assert!(
+        h.mode_line().contains("(Fundamental) [at work]"),
+        "{}",
+        h.mode_line()
+    );
+    assert_eq!(h.eval("(mode-line-text)"), "\"[at work]\"");
+    // It belongs to the buffer, and goes when asked.
+    h.eval(r#"(switch-to-buffer "other")"#);
+    assert!(!h.mode_line().contains("at work"), "{}", h.mode_line());
+    h.eval(r#"(switch-to-buffer "*scratch*") (set-mode-line-text! #f)"#);
+    assert!(!h.mode_line().contains("at work"), "{}", h.mode_line());
+}
+
+#[test]
+fn the_windows_that_show_a_buffer_are_found() {
+    let mut h = Harness::new(80, 24);
+    assert_eq!(
+        h.eval("(equal? (buffer-windows) (list (selected-window)))"),
+        "#t"
+    );
+    h.keys("C-x 2");
+    assert_eq!(h.eval("(length (buffer-windows \"*scratch*\"))"), "2");
+    h.eval(r#"(switch-to-buffer "other")"#);
+    assert_eq!(h.eval("(length (buffer-windows \"*scratch*\"))"), "1");
+    assert_eq!(
+        h.eval("(equal? (buffer-windows \"other\") (list (selected-window)))"),
+        "#t"
+    );
+}

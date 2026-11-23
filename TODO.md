@@ -146,9 +146,9 @@ doing any work:
 
 ## Later milestones in the plan
 
-`PLAN.md` lays out the next four: processes and a terminal (M11), Claude
-Code in the terminal with the editor as its IDE (M12), a native agent
-buffer over the Agent Client Protocol (M13) and remote files (M14). None
+`PLAN.md` lays out the next three: processes and a terminal (M11), a coding
+agent over the Agent Client Protocol (M12) and remote files (M14). M11 is
+in but for a later pass, M12 is at its fourth step of five, and M14 is not
 started.
 
 - [x] Terminal emulator (M11): a shell or program on a pseudo-terminal in
@@ -156,7 +156,16 @@ started.
       cursor, semi-char and char keys, and a configurable terminal palette
       and background. Later: a line mode, OSC 7 and OSC 133 shell
       integration, the title in the mode line.
-- [ ] AI features inside the editor (M12, M13).
+- [ ] A coding agent inside the editor (M12). In: the protocol client,
+      the compose buffer, and the conversation as sections with tool
+      calls, diffs and the plan. Left: choosing the mode and the model,
+      slash commands, a menu of keys for permissions, `terminal/*`,
+      several sessions, the seam for other agents, attention when a turn
+      ends out of sight. A redraw of the conversation writes the whole
+      buffer; `section.scm` may need to redraw one section.
+- [ ] An empty Markdown buffer draws its first row in the colour of a
+      removed line (seen in the compose buffer and in any empty buffer in
+      `markdown-mode`, in the picture from `screen`).
 - [ ] Remote files (M14).
 - [ ] Org.
 - [ ] Spelling.

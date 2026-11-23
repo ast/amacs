@@ -873,6 +873,17 @@ pub const API: &[ApiFn] = api! {
             ed.buffer_mut().directory = directory;
             Ok(Value::Void)
         };
+    "set-mode-line-text!" (1, Some(1)) "Set text that the mode line of the current buffer shows after its modes, for what code has to say about the buffer; #f for none." =>
+        |ed, args| {
+            let text = match &args[0] {
+                Value::Bool(false) => None,
+                _ => Some(string(args, 0)?.to_owned()),
+            };
+            ed.buffer_mut().mode_line = text;
+            Ok(Value::Void)
+        };
+    "mode-line-text" (0, Some(0)) "The text that set-mode-line-text! gave the current buffer, or #f." =>
+        |ed, _| Ok(ed.buffer().mode_line.clone().into());
 
     // Files
 
@@ -988,6 +999,11 @@ pub const API: &[ApiFn] = api! {
 
     "window-list" (0, Some(0)) "The windows of the frame, as numbers, the selected one first." =>
         |ed, _| Ok(Value::List(ed.window_list().into_iter().map(|id| Value::Int(window_number(id))).collect()));
+    "buffer-windows" (0, Some(1)) "The windows that show a buffer (default the current one), in every frame, as numbers, those of the current frame first." =>
+        |ed, args| {
+            let buffer = buffer_arg(ed, args, 0)?;
+            Ok(Value::List(ed.buffer_windows(buffer).into_iter().map(|id| Value::Int(window_number(id))).collect()))
+        };
     "selected-window" (0, Some(0)) "The selected window, as a number." =>
         |ed, _| Ok(Value::Int(window_number(ed.selected_window())));
     "window-live?" (1, Some(1)) "Whether a window is still there, in any frame." =>

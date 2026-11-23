@@ -1,9 +1,10 @@
 # The plan: terminal, agents, remote files
 
-Written 2026-11-20, after M0 to M10 of the original plan. Four milestones,
-in the order they depend on each other: processes and a terminal (M11),
-Claude Code in that terminal with the editor as its IDE (M12), a native
-agent buffer over the Agent Client Protocol (M13), and remote files (M14).
+Written 2026-11-20, after M0 to M10 of the original plan. Three milestones,
+in the order they depend on each other: processes and a terminal (M11), a
+coding agent in the editor over the Agent Client Protocol (M12), and remote
+files (M14). There is no M13: it was the native agent buffer, which became
+M12 when the IDE bridge that M12 was at first was dropped.
 Each milestone leaves the editor better on its own, and each later one
 builds on primitives the earlier ones add.
 
@@ -279,8 +280,19 @@ the user's quota.
    Confirmed live: Claude answered over ACP.
 3. The conversation buffer on `section.scm`; the compose buffer and
    references; `session/prompt` and cancel. The compose buffer, the chat
-   layout, prompt history and references done 2026-11-20; the conversation
-   is still plain streamed text (the `section.scm` view is still to do).
+   layout, prompt history and references done 2026-11-20. The conversation
+   on `section.scm` done 2026-11-23: a model of the turns that the buffer
+   is drawn from, thoughts folded, tool calls that change where they stand,
+   changes as diffs made in Scheme from the text before and after, the plan
+   as a list, `RET` to the file and line, and the model, the mode and the
+   use of the context on the mode line (`set-mode-line-text!`). Tried
+   against the real adapter, which sends the model and the mode among
+   `configOptions` (not in `models`) and the use of the context as
+   `usage_update` with `used` and `size`. A `fake-acp` example drives one
+   test through the whole protocol. A redraw writes the whole buffer anew:
+   7 ms for 3200 lines in the dev build, with the turns that are over kept
+   as drawn; if long conversations feel slow, `section.scm` needs a way to
+   redraw one section.
 4. Permissions, modes and models, slash commands; the client's
    `fs/*` and `terminal/*` methods.
 5. The backend seam and a second agent; attention; docs.

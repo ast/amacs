@@ -1,11 +1,13 @@
-//! The agent workflow: the compose buffer, prompt history, code references
-//! and the window layout. The connection and sending are stubbed, so no
-//! real agent runs; the protocol client is tried by hand against the real
-//! adapter.
+//! The agent workflow: the compose buffer, prompt history, code references,
+//! the window layout, and the conversation as sections. For most of it the
+//! connection is stubbed and what an agent would send is fed in; one test
+//! talks to `fake-acp`, an agent that speaks the protocol. The real adapter
+//! is tried by hand.
 
 mod common;
 
 use common::Harness;
+use serde_json::{Value, json};
 
 /// A harness with Claude's connection and sending stubbed out: it looks
 /// connected, and sent prompts are recorded in `sent` instead of going to a
@@ -98,4 +100,331 @@ fn a_reference_to_the_region_is_added_from_a_file_buffer() {
         h.eval(r#"(buffer-string "*claude prompt*")"#),
         r#""@code.rs#L2-3 ""#
     );
+}
+
+// The conversation
+
+/// A harness where a prompt has been sent to an agent that is not there, so
+/// that what it would answer can be fed in with [`feed`].
+fn talking() -> Harness {
+    let mut h = Harness::new(80, 40);
+    h.eval(
+        r#"(set! %acp-connected? (lambda () #t))
+           (set! %acp-session "stub")
+           (set! %acp-request (lambda (method params callback) #f))"#,
+    );
+    h.keys("C-c c c");
+    h.type_text("Change the notes").keys("C-c C-c");
+    h
+}
+
+/// Hands the editor an update of the session, as a line from the agent.
+fn feed(h: &mut Harness, update: &Value) {
+    let line = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {"sessionId": "stub", "update": update},
+    });
+    h.eval(&format!("(%acp-filter #f {:?})", format!("{line}\n")));
+}
+
+fn say(h: &mut Harness, kind: &str, text: &str) {
+    feed(
+        h,
+        &json!({"sessionUpdate": kind, "content": {"type": "text", "text": text}}),
+    );
+}
+
+/// Waits until the screen shows a text.
+fn see(h: &mut Harness, text: &str) {
+    h.wait_until(|h| h.screen.text().contains(text));
+}
+
+/// The first row of the screen that holds a text.
+fn row_of(h: &Harness, text: &str) -> usize {
+    (0..h.screen.size().1)
+        .find(|&row| h.screen.row(row).contains(text))
+        .unwrap_or_else(|| panic!("no row with {text:?} in:\n{}", h.screen.text()))
+}
+
+fn rows_with(h: &Harness, text: &str) -> usize {
+    (0..h.screen.size().1)
+        .filter(|&row| h.screen.row(row).contains(text))
+        .count()
+}
+
+/// Selects the window of the conversation and puts point on the row that
+/// holds a text.
+fn go_to(h: &mut Harness, text: &str) {
+    if h.eval("(buffer-name)") != "\"*claude*\"" {
+        h.keys("C-x o");
+    }
+    let row = row_of(h, text);
+    h.eval(&format!(
+        "(goto-line (+ (line-number-at-pos (window-start)) {row}))"
+    ));
+}
+
+fn a_change() -> Value {
+    json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "edit",
+        "title": "Edit notes.txt",
+        "status": "completed",
+        "locations": [{"path": "notes.txt", "line": 2}],
+        "content": [{
+            "type": "diff",
+            "path": "notes.txt",
+            "oldText": "one\ntwo\nthree\n",
+            "newText": "one\n2\nthree\n",
+        }],
+    })
+}
+
+#[test]
+fn the_pieces_of_an_answer_join_under_their_prompt() {
+    let mut h = talking();
+    say(&mut h, "agent_message_chunk", "Hello ");
+    say(&mut h, "agent_message_chunk", "there.\nA second **line**.");
+    see(&mut h, "Hello there.");
+    assert_eq!(h.screen.row(0), "▾ Change the notes");
+    assert_eq!(h.screen.row(1), "Hello there.");
+    assert_eq!(h.screen.row(2), "A second **line**.");
+    // The prompt has its face, and the answer is coloured as Markdown.
+    assert_eq!(h.screen.face_at(0, 2).fg, h.face("agent-prompt").fg);
+    assert!(h.screen.face_at(2, 12).bold);
+}
+
+#[test]
+fn a_thought_is_folded_until_it_is_opened() {
+    let mut h = talking();
+    say(&mut h, "agent_thought_chunk", "Let me look\nat the ");
+    say(&mut h, "agent_thought_chunk", "notes.");
+    see(&mut h, "▸ Thinking: Let me look");
+    assert!(!h.screen.text().contains("at the notes."));
+    go_to(&mut h, "Thinking");
+    h.keys("TAB");
+    assert!(h.screen.text().contains("▾ Thinking: Let me look"));
+    assert!(h.screen.text().contains("  at the notes."));
+    h.keys("TAB");
+    assert!(!h.screen.text().contains("at the notes."));
+}
+
+#[test]
+fn a_tool_call_changes_its_state_where_it_stands() {
+    let mut h = talking();
+    feed(
+        &mut h,
+        &json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "read",
+            "title": "Read notes.txt",
+            "status": "pending",
+            "locations": [{"path": "notes.txt", "line": 7}],
+        }),
+    );
+    see(&mut h, "Read notes.txt  pending");
+    say(&mut h, "agent_message_chunk", "Reading.");
+    feed(
+        &mut h,
+        &json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "read",
+            "status": "completed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "one\ntwo"}}],
+        }),
+    );
+    see(&mut h, "Read notes.txt  completed");
+    assert!(!h.screen.text().contains("pending"));
+    assert_eq!(rows_with(&h, "Read notes.txt"), 1);
+    // It stands above what came after it, and its title was not lost.
+    assert!(row_of(&h, "Read notes.txt") < row_of(&h, "Reading."));
+    let row = row_of(&h, "completed");
+    let col = h.screen.row(row).chars().position(|c| c == 'c').unwrap();
+    assert_eq!(h.screen.face_at(row, col).fg, h.face("agent-done").fg);
+    // What it read is under it, folded, with where it read.
+    assert!(!h.screen.text().contains("  two"));
+    go_to(&mut h, "Read notes.txt");
+    h.keys("TAB");
+    assert!(h.screen.text().contains("  two"));
+    assert!(h.screen.text().contains("  notes.txt:7"));
+}
+
+#[test]
+fn a_change_is_shown_as_a_diff_and_ret_goes_to_its_line() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("notes.txt"), "one\n2\nthree\n").unwrap();
+    let mut h = talking();
+    h.eval(&format!(
+        "(set! %acp-root {:?})",
+        dir.path().display().to_string()
+    ));
+    feed(&mut h, &a_change());
+    see(&mut h, "+2");
+    assert!(h.screen.text().contains("▾ Edit notes.txt  completed"));
+    assert!(h.screen.text().contains("  @@ -1,3 +1,3 @@"));
+    let removed = row_of(&h, "-two");
+    assert_eq!(h.screen.face_at(removed, 2).bg, h.face("git-removed").bg);
+    assert_eq!(h.screen.face_at(removed + 1, 2).bg, h.face("git-added").bg);
+    // Three lines down in the file, to see that the line is gone to.
+    go_to(&mut h, " three");
+    h.keys("RET");
+    assert!(h.eval("(buffer-file-name)").ends_with("notes.txt\""));
+    assert_eq!(h.eval("(line-number-at-pos)"), "3");
+}
+
+#[test]
+fn the_plan_is_a_list_that_a_later_plan_replaces() {
+    let mut h = talking();
+    feed(
+        &mut h,
+        &json!({"sessionUpdate": "plan", "entries": [
+            {"content": "Read the notes", "status": "completed"},
+            {"content": "Change them", "status": "in_progress"},
+            {"content": "Tell about it", "status": "pending"},
+        ]}),
+    );
+    see(&mut h, "Plan (1/3)");
+    assert!(h.screen.text().contains("  [x] Read the notes"));
+    assert!(h.screen.text().contains("  [~] Change them"));
+    assert!(h.screen.text().contains("  [ ] Tell about it"));
+    feed(
+        &mut h,
+        &json!({"sessionUpdate": "plan", "entries": [
+            {"content": "Read the notes", "status": "completed"},
+            {"content": "Change them", "status": "completed"},
+            {"content": "Tell about it", "status": "in_progress"},
+        ]}),
+    );
+    see(&mut h, "Plan (2/3)");
+    assert_eq!(rows_with(&h, "Plan ("), 1);
+    assert!(h.screen.text().contains("  [x] Change them"));
+}
+
+#[test]
+fn what_was_folded_stays_folded_as_more_comes() {
+    let mut h = talking();
+    feed(&mut h, &a_change());
+    see(&mut h, "+2");
+    go_to(&mut h, "Edit notes.txt");
+    h.keys("TAB");
+    assert!(!h.screen.text().contains("+2"));
+    say(&mut h, "agent_message_chunk", "That is done.");
+    see(&mut h, "That is done.");
+    assert!(h.screen.text().contains("▸ Edit notes.txt"));
+    assert!(!h.screen.text().contains("+2"));
+    // And point is still on the section it was on.
+    assert_eq!(
+        h.eval("(line-number-at-pos)"),
+        (row_of(&h, "Edit notes.txt") + 1).to_string()
+    );
+}
+
+#[test]
+fn the_end_is_followed_unless_the_reader_is_further_up() {
+    let mut h = talking();
+    let lines: Vec<String> = (0..60).map(|n| format!("line {n}")).collect();
+    say(&mut h, "agent_message_chunk", &lines.join("\n"));
+    // Point was at the end, so the end is shown.
+    see(&mut h, "line 59");
+    // Someone who goes up to read is left there.
+    h.keys("C-x o M-<");
+    assert_eq!(h.screen.row(0), "▾ Change the notes");
+    say(&mut h, "agent_message_chunk", "\nthe last line");
+    h.wait_until(|h| {
+        h.eval(r#"(buffer-string "*claude*")"#)
+            .contains("the last line")
+    });
+    assert_eq!(h.screen.row(0), "▾ Change the notes");
+    assert!(!h.screen.text().contains("the last line"));
+}
+
+#[test]
+fn m_n_and_m_p_move_by_turn() {
+    let mut h = talking();
+    say(&mut h, "agent_message_chunk", "First answer.");
+    // The turn is over, as the answer to the prompt would say.
+    h.eval("(set! %acp-busy #f)");
+    h.keys("C-c c c");
+    h.type_text("And again").keys("C-c C-c");
+    say(&mut h, "agent_message_chunk", "Second answer.");
+    see(&mut h, "Second answer.");
+    h.keys("C-x o M-<");
+    h.keys("M-n");
+    assert_eq!(
+        h.eval("(line-number-at-pos)"),
+        (row_of(&h, "And again") + 1).to_string()
+    );
+    h.keys("M-p");
+    assert_eq!(h.eval("(line-number-at-pos)"), "1");
+}
+
+#[test]
+fn a_diff_is_made_from_the_text_before_and_after() {
+    let mut h = Harness::new(80, 24);
+    assert_eq!(h.eval(r#"(%acp-line-diff "a\nb\n" "a\nb\n")"#), "()");
+    // A new file is all added.
+    assert_eq!(
+        h.eval(r#"(map car (%acp-line-diff #f "x\ny\n"))"#),
+        r#"("@@ -0,0 +1,2 @@" "+x" "+y")"#
+    );
+    // Three lines around a change, and each hunk on its own.
+    let old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\no\np\n";
+    let new = "a\nB\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\nO\np\n";
+    assert_eq!(
+        h.eval(&format!("(map car (%acp-line-diff {old:?} {new:?}))")),
+        r#"("@@ -1,5 +1,5 @@" " a" "-b" "+B" " c" " d" " e" "@@ -12,5 +12,5 @@" " l" " m" " n" "-o" "+O" " p")"#
+    );
+    // Each line knows which line of the new text it is at.
+    assert_eq!(
+        h.eval(r#"(map cdr (%acp-line-diff "one\ntwo\nthree\n" "one\n2\nthree\n"))"#),
+        "(1 1 2 2 3)"
+    );
+    // Texts too long to compare are shown as old lines, then new.
+    assert_eq!(
+        h.eval(
+            r#"(set! %acp-diff-bound 0)
+               (map car (%acp-line-diff "a\nb\nc\n" "a\nc\nd\n"))"#
+        ),
+        r#"("@@ -1,3 +1,3 @@" " a" "-b" "-c" "+c" "+d")"#
+    );
+}
+
+#[test]
+fn a_whole_turn_with_an_agent_that_speaks_the_protocol() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = Harness::new(80, 40);
+    h.session.editor_mut().set_default_directory(dir.path());
+    let agent = amacs_testkit::example_path("fake-acp");
+    h.eval(&format!(
+        "(set-option! 'acp-command (list {:?}))",
+        agent.display().to_string()
+    ));
+    h.keys("C-c c c");
+    see(&mut h, "Ready.");
+    h.type_text("hello").keys("C-c C-c");
+    see(&mut h, "— end_turn —");
+    let screen = h.screen.text();
+    assert!(screen.contains("▾ hello"), "{screen}");
+    assert!(
+        screen.contains("▸ Thinking: Let me look at the notes."),
+        "{screen}"
+    );
+    assert!(screen.contains("You said: hello"), "{screen}");
+    assert!(screen.contains("▾ Edit notes.txt  completed"), "{screen}");
+    assert!(screen.contains("  +2"), "{screen}");
+    assert!(screen.contains("Plan (1/2)"), "{screen}");
+    assert!(screen.contains("Done."), "{screen}");
+    // The model, the mode and how full the context is are on the mode
+    // line, and the work is over.
+    assert!(
+        screen.contains("(Agent) [fake-model, default, 28k/1M]"),
+        "{screen}"
+    );
+    // The agent was started where the command was given.
+    assert_eq!(
+        h.eval("%acp-root"),
+        format!("{:?}", dir.path().display().to_string())
+    );
+    h.eval("(claude-quit)");
 }

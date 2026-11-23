@@ -74,6 +74,10 @@ pub struct Buffer {
     /// buffer, when that is not the directory of its file: for buffers
     /// that show a directory or what a program wrote about one.
     pub directory: Option<PathBuf>,
+    /// Text that the mode line shows after the modes, for code that has
+    /// something to say about the buffer: the state of an agent, the title
+    /// of a terminal.
+    pub mode_line: Option<String>,
     /// A face whose colours are the buffer's default, in place of the
     /// theme's: the background of a terminal, say. `None` is the theme.
     default_face: Option<String>,
@@ -142,6 +146,7 @@ impl Buffer {
             auto_saved_tick: None,
             read_only: false,
             directory: None,
+            mode_line: None,
             default_face: None,
             text_faces: Vec::new(),
             spans: Vec::new(),

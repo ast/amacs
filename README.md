@@ -448,12 +448,23 @@ is not tied to one.
 
 `C-c c c` starts Claude for the project and shows two windows: the
 conversation above and a compose buffer below. Write a prompt in the compose
-buffer, as long as you like, and `C-c C-c` sends it; the reply streams into
-the conversation. `M-p` and `M-n` walk earlier prompts, `C-c C-k` clears the
-buffer. From a file you are reading, select some code and `C-c c r` adds a
+buffer, as long as you like, and `C-c C-c` sends it. `M-p` and `M-n` walk
+earlier prompts, `C-c C-k` clears the buffer. From a file you are reading, select some code and `C-c c r` adds a
 reference to it (`@path#L3-9`) to the prompt. When the agent wants to change
 a file or run something, it asks in the minibuffer; it reads and writes
 files through the editor, so it sees your unsaved edits.
+
+The conversation is a buffer of sections, as the git buffers are. Each
+prompt heads a turn, and under it comes the answer as it streams, coloured
+as Markdown; what the agent thought, folded away; each tool call with its
+state, which changes where it stands, and under it what the tool wrote or
+the change it made to a file, as a diff; and the plan as a list that is
+ticked off. `TAB` folds and opens what is at point, and `RET` on a tool call
+or on a line of a change goes to the file at that line. The window follows
+the end of the answer until you move point up to read, and follows again
+when point is back at the end. The mode line names the model and the mode,
+says how much of the model's context is used, and says when the agent is at
+work.
 
 | Key | Does |
 |---|---|
@@ -465,11 +476,15 @@ files through the editor, so it sees your unsaved edits.
 | `C-c c r` | Add a reference to the region of the current file to the prompt |
 | `C-c c l` | Ask a one-line question in the minibuffer |
 | `C-c c k` | Cancel the current turn |
+| `TAB` | In the conversation, fold or open the section at point |
+| `RET` | In the conversation, go to the file and line at point |
+| `M-n`, `M-p` | In the conversation, the next and the previous turn |
+| `g` | In the conversation, draw it again |
 
 The adapter comes from `claude-agent-acp`; set `acp-command` if it is
 elsewhere. It is written in `runtime/lib/acp.scm`, on the process and JSON
-primitives. The conversation is shown as plain streamed text for now; a
-richer view with tool calls and diffs, permission and model controls, and
+primitives and on `runtime/lib/section.scm`. Choosing the mode and the
+model, slash commands, a menu of keys for permissions, several sessions and
 other agents are next.
 
 ## Smaller things

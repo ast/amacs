@@ -442,6 +442,10 @@ impl Editor {
         let col = column_of(buffer.text(), point, buffer.tab_width);
         let modes = self.mode_line_modes(window.buffer);
         let mut text = format!(" {flags}  {}   L{line} C{col}  ({modes})", buffer.name);
+        if let Some(more) = buffer.mode_line.as_deref().filter(|more| !more.is_empty()) {
+            text.push(' ');
+            text.push_str(more);
+        }
         let servers = self.lsp_mode_line(window.buffer);
         if !servers.is_empty() {
             text.push(' ');

@@ -15,13 +15,25 @@ use amacs_proto::{InputEvent, Key, parse_keys};
 /// # Panics
 /// If it has not been built.
 pub fn fake_lsp_path() -> std::path::PathBuf {
+    example_path("fake-lsp")
+}
+
+/// A program for tests that is an example of a crate of the workspace, as
+/// `fake-lsp` is of this one: it is found beside the test program that is
+/// running. `cargo test` builds the examples of the crate under test.
+///
+/// # Panics
+/// If it has not been built.
+#[must_use]
+pub fn example_path(name: &str) -> std::path::PathBuf {
     let test_program = std::env::current_exe().expect("the test program has a path");
     // target/debug/deps/test-xyz -> target/debug/examples/fake-lsp
     let path = test_program
         .parent()
         .and_then(std::path::Path::parent)
         .expect("test programs are two levels down")
-        .join("examples/fake-lsp");
+        .join("examples")
+        .join(name);
     assert!(path.exists(), "{} is not built", path.display());
     path
 }

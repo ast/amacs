@@ -81,7 +81,9 @@ Buffers are named by strings and windows by numbers: `(window-list)`,
 is about the current frame, but a window's number is good in any:
 `(window-live? w)` says whether it is still there, and
 `with-selected-window` reaches a window of another frame, which code that
-runs for a program rather than for a key may need.
+runs for a program rather than for a key may need. Such code does not know
+which frame is current when it runs: `(buffer-windows name)` gives the
+windows that show a buffer in every frame.
 
 ## Waiting without blocking
 
@@ -225,7 +227,9 @@ attributes of `set-face!` and `inverse`; a span takes the place of the
 spans under it, and `clear-spans!` takes them away. A major mode gives the buffer its keys:
 `(define-major-mode report-mode #f "Report" "...")` and then
 `(define-key 'report-mode "g" 'report-refresh)`. What the feature knows about
-each of its buffers it keeps itself, in a hash table by buffer name.
+each of its buffers it keeps itself, in a hash table by buffer name. What it
+has to say about a buffer in few words goes on the mode line after the
+modes: `(set-mode-line-text! "[working]")`, and `#f` to take it away.
 
 ## Files
 

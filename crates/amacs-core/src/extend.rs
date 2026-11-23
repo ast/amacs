@@ -81,6 +81,21 @@ impl Editor {
         self.selected()
     }
 
+    /// The windows that show a buffer, in every frame, those of the
+    /// current frame first. What happens to a buffer on its own, as when a
+    /// program writes to it, happens in whatever frame is current, which
+    /// need not be one that shows the buffer.
+    pub fn buffer_windows(&self, buffer: BufferId) -> Vec<WindowId> {
+        let current = self.current_frame();
+        let mut frames: Vec<FrameId> = self.frames.keys().collect();
+        frames.sort_by_key(|frame| *frame != current);
+        frames
+            .into_iter()
+            .flat_map(|frame| self.frames[frame].layout.leaves())
+            .filter(|window| self.windows[*window].buffer == buffer)
+            .collect()
+    }
+
     /// Whether a window is still there, in any frame.
     pub fn window_live(&self, id: WindowId) -> bool {
         self.windows.contains_key(id)
