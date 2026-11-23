@@ -299,6 +299,7 @@ impl Terminal {
             bold: flags.contains(Flags::BOLD),
             italic: flags.contains(Flags::ITALIC),
             underline: flags.intersects(Flags::ALL_UNDERLINES),
+            undercurl: flags.contains(Flags::UNDERCURL),
             inverse: flags.contains(Flags::INVERSE) && fg.is_none() && bg.is_none(),
             underline_color: cell.underline_color().and_then(|color| self.color(color)),
             box_color: None,

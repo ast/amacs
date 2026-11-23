@@ -31,6 +31,9 @@ pub struct FaceAttrs {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    /// The underline is a wave, not a straight line. Frontends that cannot
+    /// draw one draw the line straight.
+    pub undercurl: bool,
     pub inverse: bool,
     /// Colour of the underline, if it differs from the foreground.
     pub underline_color: Option<Color>,

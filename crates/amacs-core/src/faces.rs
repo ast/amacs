@@ -46,7 +46,13 @@ pub const TODO: FaceId = FaceId(21);
 /// The keys to press to jump somewhere, and the text they are shown over.
 pub const JUMP_LABEL: FaceId = FaceId(22);
 pub const JUMP_BACKGROUND: FaceId = FaceId(23);
-const FIRST_SYNTAX: u32 = 24;
+/// A word that no dictionary knows.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the spelling that marks words comes next")
+)]
+pub const MISSPELLED: FaceId = FaceId(24);
+const FIRST_SYNTAX: u32 = 25;
 
 /// How serious a diagnostic is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -90,6 +96,8 @@ pub struct FaceSpec {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    /// The underline is a wave.
+    pub undercurl: bool,
     /// Colour of the underline, if not that of the text.
     pub underline_color: Option<String>,
     /// Colour of a thin line along the top and bottom of the row.
@@ -129,6 +137,11 @@ impl FaceSpec {
     fn underlined_in(mut self, color: &str) -> Self {
         self.underline = true;
         self.underline_color = Some(color.to_owned());
+        self
+    }
+
+    fn wavy(mut self) -> Self {
+        self.undercurl = true;
         self
     }
 }
@@ -186,6 +199,10 @@ fn built_in_faces() -> Vec<(String, FaceSpec)> {
             face("fg-search-current", "bg-search-current").bold(),
         ),
         ("jump-background", face("fg-dim", "")),
+        (
+            "misspelled",
+            face("", "").underlined_in("underline-warning").wavy(),
+        ),
     ];
     for highlight in Highlight::ALL {
         let spec = match highlight {
@@ -395,7 +412,8 @@ impl Faces {
             bg: resolve(&spec.bg),
             bold: spec.bold,
             italic: spec.italic,
-            underline: spec.underline,
+            underline: spec.underline || spec.undercurl,
+            undercurl: spec.undercurl,
             inverse: false,
             underline_color: resolve(&spec.underline_color),
             box_color: resolve(&spec.box_color),
@@ -456,6 +474,7 @@ impl Faces {
                     bold: attrs.bold || top.bold,
                     italic: attrs.italic || top.italic,
                     underline: attrs.underline || top.underline,
+                    undercurl: attrs.undercurl || top.undercurl,
                     inverse: false,
                     underline_color: top.underline_color.or(attrs.underline_color),
                     box_color: top.box_color.or(attrs.box_color),
@@ -505,6 +524,7 @@ impl Faces {
                 bold: under.bold || over.bold,
                 italic: under.italic || over.italic,
                 underline: under.underline || over.underline,
+                undercurl: under.undercurl || over.undercurl,
                 inverse: under.inverse != over.inverse,
                 underline_color: over.underline_color.or(under.underline_color),
                 box_color: over.box_color.or(under.box_color),
@@ -618,6 +638,12 @@ mod tests {
             table[error.0 as usize].underline_color,
             faces.color("underline-err")
         );
+
+        // A wave under a word stays a wave over whatever the word is in.
+        let wrong = faces.overlay(keyword, &[MISSPELLED]);
+        let wrong = faces.table()[wrong.0 as usize];
+        assert!(wrong.underline && wrong.undercurl && !marked.undercurl);
+        assert_eq!(faces.face_id("misspelled"), Some(MISSPELLED));
 
         // Several faces over one another, the later winning where both say.
         let both = faces.overlay(keyword, &[HL_LINE, SYMBOL_HIGHLIGHT]);

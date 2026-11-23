@@ -212,7 +212,10 @@ fn apply_face_attributes(spec: &mut FaceSpec, attributes: &[Value]) -> CmdResult
             Some("bg") => spec.bg = color()?,
             Some("bold") => spec.bold = on,
             Some("italic") => spec.italic = on,
-            Some("underline") => spec.underline = on,
+            Some("underline") => {
+                spec.underline = on;
+                spec.undercurl = pair[1].as_name() == Some("wavy");
+            }
             Some("underline-color") => spec.underline_color = color()?,
             Some("box") => spec.box_color = color()?,
             _ => {
@@ -254,7 +257,10 @@ fn span_attributes(ed: &Editor, attributes: &[Value]) -> CmdResult<FaceAttrs> {
             Some("bg") => attrs.bg = color()?,
             Some("bold") => attrs.bold = on,
             Some("italic") => attrs.italic = on,
-            Some("underline") => attrs.underline = on,
+            Some("underline") => {
+                attrs.underline = on;
+                attrs.undercurl = pair[1].as_name() == Some("wavy");
+            }
             Some("inverse") => attrs.inverse = on,
             Some("underline-color") => attrs.underline_color = color()?,
             _ => {
@@ -696,7 +702,7 @@ pub const API: &[ApiFn] = api! {
             ed.faces_mut().set_overrides(entries);
             Ok(Value::Void)
         };
-    "set-face!" (1, None) "Change a face, or define a new one: its name, then attributes and values. The attributes are 'fg and 'bg (a palette name, \"#rrggbb\" or #f) and 'bold, 'italic and 'underline (booleans)." =>
+    "set-face!" (1, None) "Change a face, or define a new one: its name, then attributes and values. The attributes are 'fg and 'bg (a palette name, \"#rrggbb\" or #f) 'bold and 'italic (booleans), 'underline (#t, #f, or 'wavy for a wave), 'underline-color for a line in another colour than the text, and 'box (the colour of thin lines above and below)." =>
         |ed, args| {
             let face = name(args, 0)?.to_owned();
             let mut spec = ed.faces().spec(&face).cloned().unwrap_or_default();
@@ -811,7 +817,7 @@ pub const API: &[ApiFn] = api! {
             ed.set_buffer_default_face(buffer, face);
             Ok(Value::Void)
         };
-    "add-span!" (2, None) "Lay colours and attributes over the text between two positions of the current buffer, without a face of a name: after the positions come attributes and values in pairs, as set-face! takes them, among fg, bg, bold, italic, underline and inverse. Colours are palette names or \"#rrggbb\", looked up now. The span stays on its text as the text around it changes, and takes the place of spans under it." =>
+    "add-span!" (2, None) "Lay colours and attributes over the text between two positions of the current buffer, without a face of a name: after the positions come attributes and values in pairs, as set-face! takes them, among fg, bg, bold, italic, underline, underline-color and inverse. Colours are palette names or \"#rrggbb\", looked up now. The span stays on its text as the text around it changes, and takes the place of spans under it." =>
         |ed, args| {
             let (a, b) = (pos(ed, args, 0)?, pos(ed, args, 1)?);
             let attrs = span_attributes(ed, &args[2..])?;

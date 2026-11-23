@@ -74,7 +74,7 @@ fn renderer() -> Renderer<Recording> {
 }
 
 /// Face 0 is plain, 1 is underlined in red on blue, 2 has a box and is
-/// drawn inverted.
+/// drawn inverted, 3 has a wave under it.
 fn faces() -> DrawOp {
     let plain = FaceAttrs {
         fg: Some(INK),
@@ -92,6 +92,12 @@ fn faces() -> DrawOp {
         FaceAttrs {
             inverse: true,
             box_color: Some(RED),
+            ..plain
+        },
+        FaceAttrs {
+            underline: true,
+            undercurl: true,
+            underline_color: Some(RED),
             ..plain
         },
     ])
@@ -314,4 +320,38 @@ fn a_backend_is_told_what_changed_and_where_the_cursor_is() {
         frame.rows[0].glyphs[0].key, first[0].glyphs[0].key,
         "a glyph at another size is another picture"
     );
+}
+
+#[test]
+fn a_wavy_underline_is_a_line_that_steps_down_and_up() {
+    let mut r = renderer();
+    let (cell_w, cell_h) = r.cell_size();
+    r.resize(10 * cell_w, 4 * cell_h);
+    let mut text = DisplayLine::default();
+    text.push("ab", FaceId(0));
+    text.push("cd", FaceId(3));
+    text.push("ef", FaceId(3));
+    r.apply(&[faces(), layout(), lines(1, 0, vec![text]), DrawOp::Flush]);
+    r.paint();
+
+    let row = &last(&r).rows[0];
+    let wave = &row.overlays;
+    assert!(wave.len() > 4, "more than one piece");
+    assert!(wave.iter().all(|quad| quad.color == RED));
+    // The pieces follow one another without a gap, under the four letters
+    // of both runs, and stay in the lower half of the row.
+    assert_eq!(wave[0].rect.x, 2 * cell_w);
+    for pair in wave.windows(2) {
+        assert_eq!(pair[0].rect.x + pair[0].rect.w, pair[1].rect.x);
+    }
+    let end = wave.last().expect("pieces").rect;
+    assert_eq!(end.x + end.w, 6 * cell_w);
+    assert!(wave.iter().all(|quad| quad.rect.y > cell_h / 2));
+    assert!(wave.iter().all(|quad| quad.rect.y + quad.rect.h <= cell_h));
+    // Not all at one height, and never more than a step apart.
+    let heights: std::collections::BTreeSet<u32> = wave.iter().map(|quad| quad.rect.y).collect();
+    assert!(heights.len() >= 2);
+    for pair in wave.windows(2) {
+        assert!(pair[0].rect.y.abs_diff(pair[1].rect.y) <= pair[0].rect.h);
+    }
 }

@@ -96,7 +96,8 @@ pub fn build_row(
         });
         let face = scene.face(index);
         if face.underline {
-            underlines.push((span, face.underline_color.unwrap_or(fg)));
+            let color = face.underline_color.unwrap_or(fg);
+            underlines.push((span, color, face.undercurl));
         }
         if let Some(color) = face.box_color {
             boxes.push((span, color));
@@ -145,17 +146,40 @@ pub fn build_row(
             color,
         });
     }
-    for (span, color) in underlines {
+    for (span, color, wavy) in underlines {
         let thickness = (cell_h / 14).max(1);
         let y = (baseline as u32 + thickness).min(area.y + area.h - thickness);
-        overlays.push(Quad {
-            rect: Rect {
-                y,
-                h: thickness,
-                ..span
-            },
-            color,
-        });
+        if !wavy {
+            overlays.push(Quad {
+                rect: Rect {
+                    y,
+                    h: thickness,
+                    ..span
+                },
+                color,
+            });
+            continue;
+        }
+        // A wave is a row of squares that step down and up again. Where a
+        // square is depends on where it is on the screen, not in its run,
+        // so that the waves of neighbouring runs join.
+        let lowest = area.y + area.h - thickness;
+        let mut x = span.x;
+        while x < span.x + span.w {
+            let step = x / thickness;
+            let w = ((step + 1) * thickness).min(span.x + span.w) - x;
+            let drop = [0, 1, 2, 1][(step % 4) as usize] * thickness;
+            overlays.push(Quad {
+                rect: Rect {
+                    x,
+                    y: (y + drop).min(lowest),
+                    w,
+                    h: thickness,
+                },
+                color,
+            });
+            x += w;
+        }
     }
     Row {
         area,

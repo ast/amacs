@@ -235,7 +235,8 @@ impl Tty {
         for (enabled, attribute) in [
             (attrs.bold, Attribute::Bold),
             (attrs.italic, Attribute::Italic),
-            (attrs.underline, Attribute::Underlined),
+            (attrs.underline && !attrs.undercurl, Attribute::Underlined),
+            (attrs.undercurl, Attribute::Undercurled),
             (attrs.inverse, Attribute::Reverse),
         ] {
             if enabled {
