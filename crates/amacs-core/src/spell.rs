@@ -340,9 +340,13 @@ impl Worker {
                     }
                 },
                 None => {
-                    self.answer(Answer::Note(format!(
-                        "Spelling: no dictionary {language}.aff and {language}.dic was found"
-                    )));
+                    // Where there are no dictionaries at all, spelling is
+                    // not set up, and nothing is said about it.
+                    if !dictionaries_in(path).is_empty() {
+                        self.answer(Answer::Note(format!(
+                            "Spelling: no dictionary {language}.aff and {language}.dic was found"
+                        )));
+                    }
                     None
                 }
             };
