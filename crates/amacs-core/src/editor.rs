@@ -164,6 +164,7 @@ pub struct Editor {
     /// it replaces.
     natives: HashMap<String, fn(&mut Editor) -> CmdResult>,
     pub(crate) extend: ExtendState,
+    pub(crate) spell: crate::spell::SpellState,
     pub(crate) processes: ProcessState,
     pub(crate) terminals: crate::terminal::Terminals,
     /// Keymaps by name: [`GLOBAL_MAP`], [`MINIBUFFER_MAP`], and one per mode,
@@ -247,6 +248,7 @@ impl Editor {
             keymaps: HashMap::new(),
             natives: HashMap::new(),
             extend: ExtendState::default(),
+            spell: crate::spell::SpellState::default(),
             processes: ProcessState::default(),
             terminals: crate::terminal::Terminals::default(),
             script: ScriptState::new(),
@@ -826,6 +828,7 @@ impl Editor {
         self.environment_poll();
         self.lsp_poll(now);
         self.extend_poll(now);
+        self.spell_poll();
         self.process_poll();
         self.completion_poll(now);
         if self.auto_revert_due.is_none_or(|due| due <= now) {
@@ -1265,6 +1268,7 @@ impl Editor {
         }
         self.lsp_detach(id);
         self.terminal_detach(id);
+        self.spell_buffer_killed(id);
         self.buffer_order.retain(|other| *other != id);
         let replacement = match self.buffer_order.first() {
             Some(first) => *first,

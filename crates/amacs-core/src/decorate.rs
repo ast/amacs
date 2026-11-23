@@ -13,6 +13,7 @@ use crate::buffer::Buffer;
 use crate::display::column_of;
 use crate::editor::Editor;
 use crate::faces::{self, Faces};
+use crate::spell;
 use crate::window::WindowId;
 
 pub const HL_LINE_MODE: &str = "hl-line-mode";
@@ -173,6 +174,29 @@ impl Editor {
                     word.clear();
                 }
                 byte += c.len_utf8();
+            }
+        }
+
+        // Words that no dictionary knows, as far as is known by now.
+        if self.mode_on(buffer, spell::SPELL_MODE) && !buffer.read_only {
+            let languages = self.spell_languages(window.buffer);
+            let places = self.spell_places(window.buffer);
+            let byte = text.char_to_byte(shown.start);
+            let chars = text.chars_from(shown.start);
+            let words = if languages.is_empty() {
+                Vec::new()
+            } else {
+                spell::words(chars, shown.start, byte, shown.len())
+            };
+            for word in words {
+                // A word that is being typed is not wrong yet.
+                let typing = selected && word.range.end == point;
+                if !typing
+                    && places.has(highlights, word.byte)
+                    && self.spell.wrong(&languages, window.buffer, &word.text)
+                {
+                    ranges.push((word.range, faces::MISSPELLED));
+                }
             }
         }
 

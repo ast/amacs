@@ -1001,6 +1001,44 @@ pub const API: &[ApiFn] = api! {
                 .map_err(|error| CmdError::msg(format!("cannot rename {}: {error}", from.display())))
         };
 
+    // Spelling
+
+    "spell-dictionaries" (0, Some(0)) "The names of the dictionaries there are, each a language such as \"en_US\": those with an .aff and a .dic file in the directories of the option spell-dictionary-path." =>
+        |ed, _| Ok(Value::List(ed.spell_dictionaries().into_iter().map(Value::Str).collect()));
+    "%spell-suggest" (2, Some(2)) "A promise of what a word may have been meant to be, in a list of languages: a list of words, the likeliest first." =>
+        |ed, args| {
+            let languages = strings(args, 1)?;
+            Ok(Value::Int(ed.spell_suggest(string(args, 0)?, languages) as i64))
+        };
+    "%spell-misspellings" (2, Some(2)) "A promise of the misspelled words between two positions of the current buffer: a list of (start end) lists." =>
+        |ed, args| {
+            let (a, b) = (pos(ed, args, 0)?, pos(ed, args, 1)?);
+            Ok(Value::Int(ed.spell_scan(a.min(b)..a.max(b)) as i64))
+        };
+    "spell-accept!" (1, Some(2)) "Take a word to be spelled right from now on, whatever the dictionaries say. With a second argument that is not #f, in the current buffer only. A word accepted in small letters is accepted with a capital too. Nothing is saved: spell-save-word does that." =>
+        |ed, args| {
+            let local = args.get(1).is_some_and(|value| !matches!(value, Value::Bool(false)));
+            ed.spell_accept(string(args, 0)?, local);
+            Ok(Value::Void)
+        };
+    "spell-forget!" (1, Some(1)) "No longer take a word to be spelled right because of spell-accept!, here or everywhere." =>
+        |ed, args| {
+            ed.spell_forget(string(args, 0)?);
+            Ok(Value::Void)
+        };
+    "spell-accepted?" (1, Some(1)) "Whether a word was accepted with spell-accept!, everywhere or in the current buffer." =>
+        |ed, args| Ok(Value::Bool(ed.spell_accepted(string(args, 0)?)));
+    "spell-reload!" (0, Some(0)) "Forget what is known of words and read the dictionaries again when next needed, as after one was installed or spell-dictionary-path was changed." =>
+        |ed, _| {
+            ed.spell_reload();
+            Ok(Value::Void)
+        };
+    "syntax-at" (0, Some(1)) "The kind of syntax of the char at a position (default point), as the name of the face it is drawn in, such as \"comment\" or \"string\"; #f for text of no kind and in buffers without a grammar." =>
+        |ed, args| {
+            let at = pos_or_point(ed, args, 0)?;
+            Ok(ed.syntax_at(at).map(Value::str).into())
+        };
+
     // Windows
 
     "window-list" (0, Some(0)) "The windows of the frame, as numbers, the selected one first." =>

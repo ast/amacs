@@ -285,6 +285,30 @@ impl ScriptState {
                 "Whether a buffer without changes is read again when its file changes on disk.",
             ),
             (
+                crate::spell::LANGUAGES,
+                Value::List(vec![Value::str("en_US")]),
+                "The languages that spelling is checked in: a list of names of Hunspell dictionaries, such as \"en_US\" and \"sv_SE\". A word is right if one of them knows it. (spell-dictionaries) lists those there are.",
+            ),
+            (
+                crate::spell::DICTIONARY_PATH,
+                Value::List(Vec::new()),
+                "The directories that dictionaries are looked for in, each an .aff and a .dic file named by its language. When empty, they are those of DICPATH and then hunspell and myspell/dicts in the system's data directories.",
+            ),
+            (
+                crate::spell::ONLY_IN,
+                Value::Bool(false),
+                "The kinds of syntax that spelling is checked in, a list of names of faces such as (\"comment\" \"doc\" \"string\"), or #f for all of the text. Code modes set it for their buffers.",
+            ),
+            (
+                crate::spell::NOT_IN,
+                Value::List(vec![
+                    Value::str("code"),
+                    Value::str("link"),
+                    Value::str("escape"),
+                ]),
+                "The kinds of syntax that spelling is not checked in when spell-only-in is #f: a list of names of faces.",
+            ),
+            (
                 "whitespace-line-column",
                 Value::Int(80),
                 "The column that whitespace-mode marks text beyond.",

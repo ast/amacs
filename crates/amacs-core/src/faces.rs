@@ -47,10 +47,6 @@ pub const TODO: FaceId = FaceId(21);
 pub const JUMP_LABEL: FaceId = FaceId(22);
 pub const JUMP_BACKGROUND: FaceId = FaceId(23);
 /// A word that no dictionary knows.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the spelling that marks words comes next")
-)]
 pub const MISSPELLED: FaceId = FaceId(24);
 const FIRST_SYNTAX: u32 = 25;
 

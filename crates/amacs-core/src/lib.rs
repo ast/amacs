@@ -31,6 +31,7 @@ mod redisplay;
 mod script;
 mod sexp;
 mod snippet;
+mod spell;
 mod terminal;
 mod undo_view;
 mod window;

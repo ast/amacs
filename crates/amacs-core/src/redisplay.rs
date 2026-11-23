@@ -251,6 +251,7 @@ impl Editor {
             state.cursor = cursor;
             ops.push(DrawOp::Flush);
         }
+        self.spell_flush();
         ops
     }
 

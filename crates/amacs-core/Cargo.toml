@@ -18,6 +18,7 @@ portable-pty.workspace = true
 rustix.workspace = true
 serde_json.workspace = true
 slotmap.workspace = true
+spellbook.workspace = true
 thiserror.workspace = true
 unicode-width.workspace = true
 
