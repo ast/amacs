@@ -65,6 +65,10 @@
 ;; Mark, beside the line numbers, the lines that differ from what git has.
 (enable-mode! 'git-gutter-mode)
 
+;; Spelling is checked in these languages at once: a word is right if the
+;; dictionary of one of them knows it. They are Hunspell's, by name.
+(set-option! 'spell-languages '("en_US" "sv_SE" "da_DK" "pt_BR"))
+
 ;; A project starts at the nearest of these, so that a crate or a Go module
 ;; inside a larger repository is a project of its own, with its own
 ;; language server.
