@@ -444,12 +444,12 @@ start a shell; with a prefix argument they always start another. Full
 programs run in it: `vim`, `htop`, `less`, and a language model's terminal
 interface.
 
-Because the screen is a buffer, every buffer command works on it: `C-s` to
-search, `M-w` to copy, the kill ring, the mark. The lines that scroll off
-the top stay as text (`term-scrollback-lines`, 10000). Keys go to the
-program, `C-c` among them, except those of the `term-emacs-keys` option
-(`C-x`, `M-x`, `M-:`, `M-o` and a few more), so the editor's own commands
-still work; this is eat's semi-char mode. One key is the terminal's own,
+The screen is a buffer, and the lines that scroll off the top stay in it
+as text (`term-scrollback-lines`, 10000). Keys go to the program, `C-c`,
+`C-s` and `M-w` among them, except those of the `term-emacs-keys` option
+(`C-x`, `M-x`, `M-:`, `M-o`, `C-u`, `C-v`, `M-v`, `M-<`, `M->` and the
+shifted arrows), so the editor's own commands still work; this is eat's
+semi-char mode. One key is the terminal's own,
 as the prefix key of tmux: `C-q`, the `term-escape-key` option. It leads to
 the terminal's commands, and sends a reserved key to the program: `C-q C-x`
 sends `C-x`, `C-q C-q` sends `C-q` itself. `C-q C-y` sends the last kill,
@@ -460,8 +460,22 @@ with its own `C-x`, a full-screen editor or tmux, `C-q C-k` enters char
 mode, where every key but `C-q` goes to the program; the mode line shows
 `Char`, and `C-q C-k` returns to semi-char mode.
 
-Point follows the program's cursor until you move it away, to select or
-copy; `C-q C-l` brings it back, and so does the next key sent to the
+To search the screen and what scrolled off it, and to copy from it, `C-q
+C-t` (or `C-q [`, as in tmux) enters copy mode, as vterm's: no key goes to
+the program, so every key means what it does in any buffer, `C-s` to
+search, `C-SPC` and `M-w` to select and copy, and point stays where you
+put it while the program writes. The mode line shows `Copy`. `q` or `C-q
+C-t` returns to the program, in the mode the terminal was in, and so does
+anything sent to the program: `C-q C-y`, a paste, `C-q C-l`.
+
+| Mode | Keys | The editor's keys |
+|---|---|---|
+| semi-char, at the start | | `term-emacs-keys` and `C-q` |
+| char | `C-q C-k` | `C-q` |
+| copy | `C-q C-t`, `C-q [`; `q` leaves | all |
+
+Outside copy mode too, point follows the program's cursor only until you
+move it away, with `M-<` or `M-v`; `C-q C-l` brings it back, and so does the next key sent to the
 program. The terminal takes the size of the window that shows it. The
 program runs with `TERM=xterm-256color`, `COLORTERM=truecolor`, `AMACS=1`
 and the editor's socket in its environment. The sixteen ANSI colours come

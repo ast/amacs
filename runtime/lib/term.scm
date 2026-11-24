@@ -16,6 +16,13 @@
 ;;; sends `C-x`, `C-q C-q` sends `C-q`. Point follows the program's cursor
 ;;; until it is moved away, and follows again with the next key sent or
 ;;; `C-q C-l`.
+;;;
+;;; There are three ways to treat keys, each a minor mode with a keymap, on
+;;; top of term-mode, whose own keymap holds only what comes after the
+;;; escape key: `term-semi-char-mode`, which every terminal starts in;
+;;; `term-char-mode` on top of it, which sends the reserved keys too; and
+;;; `term-copy-mode`, with both of those off, where every key is the
+;;; editor's, to search, select and copy.
 
 (define-option 'term-shell #f
   "The program that `term` runs: a list of the program and its arguments,
@@ -23,8 +30,8 @@ or #f for the SHELL of the environment, or sh.")
 
 (define-option 'term-escape-key "C-q"
   "The key that leads to the terminal's own commands in a terminal buffer,
-as the prefix key of tmux: C-q C-k toggles char mode, C-q C-l brings point
-back to the cursor. After it, a key that the editor keeps for itself goes
+as the prefix key of tmux: C-q C-k toggles char mode, C-q C-t copy mode,
+C-q C-l brings point back to the cursor. After it, a key that the editor keeps for itself goes
 to the program instead: C-q C-x sends C-x, and C-q C-q sends the escape
 key itself. Set it in init.scm; terminals started afterwards use it.")
 
@@ -52,10 +59,19 @@ palette entries.")
 `C-c` among them, except those of the `term-emacs-keys` option and the
 `term-escape-key` (C-q), which leads to the terminal's commands and sends
 a reserved key: `C-q C-x` sends `C-x`. `C-q C-l` brings point back to the
-cursor, `C-q C-k` toggles char mode, `C-q C-y` sends the last kill."
+cursor, `C-q C-k` toggles char mode, `C-q C-y` sends the last kill.
+`C-q C-t` toggles copy mode, where no key goes to the program and the
+buffer is searched and copied from as any other."
   (%term-bind-keys!)
   (set-buffer-read-only! #t)
-  (set-buffer-default-face! 'term))
+  (set-buffer-default-face! 'term)
+  (enable-mode! 'term-semi-char-mode))
+
+(define-minor-mode term-semi-char-mode ""
+  "Semi-char mode, which a terminal buffer starts in: keys go to the
+program, except those of the `term-emacs-keys` option and the
+`term-escape-key`. It is off in copy mode; `term-copy-mode` is the command
+to switch with.")
 
 (define-minor-mode term-char-mode "Char"
   "Char mode: every key goes to the program, including C-x, M-x and the
@@ -63,6 +79,17 @@ other keys that semi-char mode keeps for the editor; only the
 `term-escape-key` (C-q) is the editor's, and C-q C-k returns to semi-char
 mode. For a program that needs the editor's keys, such as a shell with its
 own C-x, a full-screen editor, or tmux.")
+
+(define-minor-mode term-copy-mode "Copy"
+  "Copy mode: no key goes to the program, so every key has its meaning in
+the editor, C-s to search, C-SPC and M-w to select and copy, and point
+stays where it is put while the program writes. C-q C-t or q returns to
+the program, in char mode if the terminal was in it, and so does anything
+sent to the program: C-q C-y, a paste, C-q C-l.")
+
+(define-option 'term-copy-mode-from-char #f
+  "Whether a terminal buffer in copy mode was in char mode before, and
+returns to it. The terminal sets it.")
 
 ;;; Which keys go to the program
 
@@ -128,11 +155,11 @@ binding would not catch them."
 (define (%term-bind-semi-char-keys!)
   ;; Every key the editor binds goes to the program, except the reserved
   ;; ones, which keep their meaning.
-  (define-key 'term-mode #t 'term-send-key)
+  (define-key 'term-semi-char-mode #t 'term-send-key)
   (for-each (lambda (key)
               (if (member key %term-bound-keys)
-                  (undefine-key 'term-mode key)
-                  (define-key 'term-mode key 'term-send-key)))
+                  (undefine-key 'term-semi-char-mode key)
+                  (define-key 'term-semi-char-mode key 'term-send-key)))
             (%term-all-keys)))
 
 (define (%term-bind-escape-keys!)
@@ -155,7 +182,7 @@ binding would not catch them."
             (cdr %term-bound-keys)))
 
 (define (%term-bind-keys!)
-  "Binds the keys of term-mode and term-char-mode as the options
+  "Binds the keys of term-mode and of its minor modes as the options
 `term-escape-key` and `term-emacs-keys` say now. Each terminal started
 does this, so a change of the options needs no more; nothing is done when
 they have not changed."
@@ -169,7 +196,7 @@ they have not changed."
 
 (define (term-define-key key command)
   "Binds a command to a key pressed after the `term-escape-key` in terminal
-buffers, in semi-char mode and char mode alike: (term-define-key \"C-d\"
+buffers, in semi-char mode, char mode and copy mode alike: (term-define-key \"C-d\"
 'term-dired) makes C-q C-d show the listing. The binding follows the
 escape key when the option is changed."
   (set! %term-escape-commands
@@ -277,6 +304,39 @@ if there is none. With a prefix argument, start another."
   (select-other-window)
   (term))
 
+;;; Copy mode
+
+(define (%term-copy-mode-changed)
+  ;; Copy mode is the terminal without the modes that send keys: they are
+  ;; turned off on the way in and on again on the way out.
+  (cond [(minor-mode-enabled? 'term-copy-mode)
+         (set-local! 'term-copy-mode-from-char
+                     (minor-mode-enabled? 'term-char-mode))
+         (disable-mode! 'term-char-mode)
+         (disable-mode! 'term-semi-char-mode)
+         (when (terminal-buffer?) (set-terminal-follow! #f))]
+        [else
+         (enable-mode! 'term-semi-char-mode)
+         (when (option 'term-copy-mode-from-char)
+           (enable-mode! 'term-char-mode))
+         (set-local! 'term-copy-mode-from-char #f)
+         (when (terminal-buffer?) (set-terminal-follow! #t))]))
+
+(add-hook! 'term-copy-mode-hook %term-copy-mode-changed)
+
+(define (%term-leave-copy-mode)
+  ;; What is sent to the program is seen where the program's cursor is.
+  (disable-mode! 'term-copy-mode))
+
+(define (%term-char-mode-changed)
+  ;; Char mode asked for from copy mode leaves copy mode for it.
+  (when (and (minor-mode-enabled? 'term-char-mode)
+             (minor-mode-enabled? 'term-copy-mode))
+    (set-local! 'term-copy-mode-from-char #f)
+    (disable-mode! 'term-copy-mode)))
+
+(add-hook! 'term-char-mode-hook %term-char-mode-changed)
+
 ;;; Keys to the program
 
 (define-command (term-send-key)
@@ -285,26 +345,31 @@ if there is none. With a prefix argument, start another."
     (cond [(not (terminal-buffer?))
            (error "The program of this terminal has ended")]
           [(not key) #f]
-          [else (terminal-send-key key)])))
+          [else (%term-leave-copy-mode)
+                (terminal-send-key key)])))
 
 (define-command (term-paste)
   "Send the pasted text to the program in the terminal."
-  (if (terminal-buffer?)
-      (terminal-paste (or (last-paste) ""))
-      (error "The program of this terminal has ended")))
+  (cond [(terminal-buffer?)
+         (%term-leave-copy-mode)
+         (terminal-paste (or (last-paste) ""))]
+        [else (error "The program of this terminal has ended")]))
 
 (define-command (term-yank)
   "Send the last kill to the program in the terminal, as a paste."
-  (if (terminal-buffer?)
-      (terminal-paste (or (current-kill) ""))
-      (error "The program of this terminal has ended")))
+  (cond [(terminal-buffer?)
+         (%term-leave-copy-mode)
+         (terminal-paste (or (current-kill) ""))]
+        [else (error "The program of this terminal has ended")]))
 
 (define (term-send-string text)
   "Sends text to the program in the current terminal buffer, as if typed."
   (terminal-paste text))
 
 (define-command (term-recenter)
-  "Bring point back to the program's cursor and keep it there."
+  "Bring point back to the program's cursor and keep it there, leaving
+copy mode."
+  (%term-leave-copy-mode)
   (set-terminal-follow! #t))
 
 (define (%term-note-point-moved)
@@ -338,6 +403,9 @@ if there is none. With a prefix argument, start another."
 (term-define-key "C-l" 'term-recenter)
 (term-define-key "C-y" 'term-yank)
 (term-define-key "C-k" 'term-char-mode)
+(term-define-key "C-t" 'term-copy-mode)
+(term-define-key "[" 'term-copy-mode)
+(define-key 'term-copy-mode "q" 'term-copy-mode)
 (define-key 'term-mode "<paste>" 'term-paste)
 (define-key 'term-char-mode "<paste>" 'term-paste)
 (%term-bind-keys!)

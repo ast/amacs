@@ -202,6 +202,42 @@ fn char_mode_sends_the_reserved_keys_to_the_program() {
 }
 
 #[test]
+fn copy_mode_gives_the_keys_to_the_editor() {
+    let mut h = shell(50, 10);
+    h.type_text("echo needle").keys("RET");
+    h.wait_until(|h| h.screen.row(1) == "needle" && h.screen.row(2).starts_with("$"));
+    // Outside copy mode C-s and M-w are the program's.
+    assert_eq!(h.eval("(key-binding \"C-s\")"), "term-send-key");
+    assert_eq!(h.eval("(key-binding \"M-w\")"), "term-send-key");
+    h.keys("C-q C-t");
+    assert!(h.mode_line().contains("Copy"), "{}", h.mode_line());
+    assert_eq!(h.eval("(key-binding \"C-s\")"), "search-lines");
+    assert_eq!(h.eval("(terminal-follows?)"), "#f");
+    // Search, select a word and copy it; nothing reaches the shell.
+    h.keys("C-s").type_text("needle").keys("RET");
+    assert_eq!(h.eval("(< (point) (terminal-cursor))"), "#t");
+    h.keys("M-< C-n C-SPC M-f M-w");
+    assert_eq!(h.eval("(current-kill)"), "\"needle\"");
+    assert_eq!(h.screen.row(2).trim_end(), "$");
+    // q returns to the program and to its cursor.
+    h.keys("q");
+    assert!(!h.mode_line().contains("Copy"), "{}", h.mode_line());
+    assert_eq!(h.eval("(terminal-follows?)"), "#t");
+    assert_eq!(h.eval("(= (point) (terminal-cursor))"), "#t");
+    assert_eq!(h.eval("(key-binding \"C-s\")"), "term-send-key");
+    // From char mode, copy mode returns to char mode; a key sent to the
+    // program through the escape key leaves copy mode too.
+    h.keys("C-q C-k C-q [");
+    assert!(h.mode_line().contains("Copy"), "{}", h.mode_line());
+    assert!(!h.mode_line().contains("Char"), "{}", h.mode_line());
+    assert_eq!(h.eval("(key-binding \"C-x C-f\")"), "find-file");
+    h.keys("C-q C-x");
+    assert!(!h.mode_line().contains("Copy"), "{}", h.mode_line());
+    assert!(h.mode_line().contains("Char"), "{}", h.mode_line());
+    assert_eq!(h.eval("(key-binding \"C-x\")"), "term-send-key");
+}
+
+#[test]
 fn the_escape_key_sends_a_reserved_key_and_can_be_changed() {
     let mut h = shell(50, 10);
     // C-x is the editor's; after the escape key it goes to the program,
