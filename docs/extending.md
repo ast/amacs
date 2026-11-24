@@ -38,6 +38,21 @@ them binds it outright. A mode that binds `"<paste>"` gets pasted text
 through `(last-paste)` instead of having it inserted. `(window-width)` and
 `(window-height)` are the size of the text area of a window.
 
+A command gets its prefix argument from `(prefix-arg)`, also when it is
+run with `M-x`. Keys are typed from code with `(execute-kbd-macro "C-a -
+SPC C-n")`, once the running code has returned and each key when the
+commands of the one before are done; `(last-kbd-macro)` is the macro last
+defined, as such a string. `runtime/lib/simple.scm` holds the small
+commands of Emacs and is a place to look for how one is written.
+
+Regular expressions are those of Rust's `regex` crate, with `^` and `$`
+at the starts and ends of lines. `(regexp-search regexp string [start])`
+is a list of `(start end)` for the match and each of its groups, or `#f`;
+`(regexp-replace regexp string replacement)` is a list of the new string
+and the number of matches, with `\&` and `\1` in the replacement for what
+matched and what a group matched; in a string of Scheme a backslash is
+written twice, `"\\1"`.
+
 ## Hooks
 
 `(add-hook! 'name procedure)` and `(remove-hook! 'name procedure)`. The

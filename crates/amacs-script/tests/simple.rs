@@ -91,12 +91,13 @@ fn the_lines_of_the_region_are_sorted_and_sifted() {
     h.eval("(sort-lines)");
     assert_eq!(text(&mut h), "kiwi\npear\nfig\napple");
     h.keys("M-x");
+    // By a regular expression: the lines that end in i or g go.
     h.type_text("flush-lines").keys("RET");
-    h.type_text("i").keys("RET");
+    h.type_text("[ig]$").keys("RET");
     assert_eq!(text(&mut h), "pear\napple");
     h.keys("M-x");
     h.type_text("keep-lines").keys("RET");
-    h.type_text("pp").keys("RET");
+    h.type_text("^a.*e$").keys("RET");
     assert_eq!(text(&mut h), "apple");
 }
 
@@ -218,4 +219,137 @@ fn the_other_window_is_scrolled_from_this_one() {
     assert_eq!(h.eval("(point)"), "0");
     h.keys("C-x 1 C-M-v");
     assert!(h.echo().contains("no other window"), "{}", h.echo());
+}
+
+// Regular expressions
+
+#[test]
+fn matches_of_a_regular_expression_are_replaced_one_by_one() {
+    let mut h = with_text("a1 b22 c333");
+    h.keys("C-M-%");
+    assert!(
+        h.prompt().contains("Query replace regexp"),
+        "{}",
+        h.prompt()
+    );
+    h.type_text(r"(\w)(\d+)").keys("RET");
+    h.type_text(r"\2\1").keys("RET");
+    // The question shows what this match becomes.
+    assert!(h.echo().contains("Replace with 1a?"), "{}", h.echo());
+    h.keys("y");
+    assert!(h.echo().contains("Replace with 22b?"), "{}", h.echo());
+    h.keys("n y");
+    assert_eq!(text(&mut h), "1a b22 333c");
+    assert!(h.echo().contains("Replaced 2 occurrences"), "{}", h.echo());
+    // An expression that matches no text is replaced at each place once.
+    let mut h = with_text("one\ntwo\nthree");
+    h.keys("C-M-%");
+    h.type_text("^").keys("RET");
+    h.type_text("> ").keys("RET !");
+    assert_eq!(text(&mut h), "> one\n> two\n> three");
+    // One that is wrong is said to be so, and nothing is asked.
+    h.keys("C-M-%");
+    h.type_text("a(b").keys("RET");
+    assert!(h.echo().contains("Bad regular expression"), "{}", h.echo());
+}
+
+#[test]
+fn regular_expressions_replace_count_and_search() {
+    let mut h = with_text("x=1, y=22\nz=333");
+    h.keys("M-x");
+    h.type_text("count-matches").keys("RET");
+    h.type_text(r"\d+").keys("RET");
+    assert_eq!(h.echo(), "3 matches");
+    h.keys("M-x");
+    h.type_text("replace-regexp").keys("RET");
+    h.type_text(r"(\w)=(\d+)").keys("RET");
+    h.type_text(r"\2 is \1 (\&)").keys("RET");
+    assert_eq!(
+        text(&mut h),
+        "1 is x (x=1), 22 is y (y=22)\n333 is z (z=333)"
+    );
+    assert!(h.echo().contains("Replaced 3 occurrences"), "{}", h.echo());
+    // For code: where the match and its groups are, counted in chars.
+    assert_eq!(
+        h.eval(r#"(regexp-search "(é+)(x)?" "aåéé!" 1)"#),
+        "((2 4) (2 4) #f)"
+    );
+    assert_eq!(h.eval(r#"(regexp-search "z" "abc")"#), "#f");
+    assert_eq!(
+        h.eval(r#"(regexp-replace "(a)(b)" "abab" "\\2\\1")"#),
+        "(\"baba\" 2)"
+    );
+}
+
+// Keyboard macros
+
+#[test]
+fn the_keys_of_a_macro_are_typed_again() {
+    let mut h = with_text("one\ntwo\nthree\nfour\nfive");
+    h.keys("<f3>");
+    assert!(h.mode_line().contains("Def"), "{}", h.mode_line());
+    h.keys("C-a").type_text("- ").keys("C-n <f4>");
+    assert!(!h.mode_line().contains("Def"), "{}", h.mode_line());
+    assert_eq!(text(&mut h), "- one\ntwo\nthree\nfour\nfive");
+    // F4 types them again; with a prefix argument, that many times.
+    h.keys("<f4>");
+    assert_eq!(text(&mut h), "- one\n- two\nthree\nfour\nfive");
+    h.keys("C-u 2 <f4>");
+    assert_eq!(text(&mut h), "- one\n- two\n- three\n- four\nfive");
+    assert_eq!(h.eval("(last-kbd-macro)"), "\"C-a - SPC C-n\"");
+    // C-x ( and C-x ) define one as well, and C-x e runs it.
+    h.keys("M-< C-x (").type_text("!").keys("C-x ) C-x e");
+    assert!(text(&mut h).starts_with("!!- one"), "{}", text(&mut h));
+}
+
+#[test]
+fn a_macro_runs_until_a_command_fails() {
+    let mut h = with_text("a\nb\nc\nd");
+    // On the last line C-n has nowhere to go, and that ends it.
+    h.keys("<f3> C-e").type_text(";").keys("C-n <f4>");
+    h.keys("C-u 0 <f4>");
+    assert_eq!(text(&mut h), "a;\nb;\nc;\nd;");
+    // Nothing is left to run after the failure.
+    h.type_text("x");
+    assert_eq!(text(&mut h), "a;\nb;\nc;\nd;x");
+}
+
+#[test]
+fn commands_in_scheme_and_the_minibuffer_take_their_turn_in_a_macro() {
+    // C-t is written in Scheme and the letter is inserted by the core:
+    // they are done in the order they were typed.
+    let mut h = with_text("abcd");
+    h.keys("C-f <f3> C-t").type_text("x").keys("<f4>");
+    assert_eq!(text(&mut h), "baxcd");
+    h.keys("<f4>");
+    assert_eq!(text(&mut h), "bacxxd");
+    // What is typed in the minibuffer is part of the macro.
+    let mut h = with_text("cat cat cat");
+    h.keys("<f3> M-x");
+    h.type_text("replace-string").keys("RET");
+    h.type_text("cat").keys("RET");
+    h.type_text("dog").keys("RET <f4>");
+    assert_eq!(text(&mut h), "dog dog dog");
+    h.eval("(erase-buffer) (insert \"a cat\") (goto-char 0)");
+    h.keys("<f4>");
+    assert_eq!(text(&mut h), "a dog");
+}
+
+#[test]
+fn a_macro_is_kept_under_a_name() {
+    let mut h = with_text("");
+    h.keys("<f3>").type_text("ab").keys("<f4> M-x");
+    h.type_text("name-last-kbd-macro").keys("RET");
+    h.type_text("insert-ab").keys("RET");
+    // Another macro takes its place as the last, and the name still has it.
+    h.keys("<f3>").type_text("z").keys("<f4>");
+    h.keys("C-u 2 M-x");
+    h.type_text("insert-ab").keys("RET");
+    assert_eq!(text(&mut h), "abzabab");
+    // From code, a macro is its keys.
+    h.eval(r#"(execute-kbd-macro "C-a ! RET")"#);
+    assert_eq!(text(&mut h), "!\nabzabab");
+    h.keys("<f4>");
+    h.keys("C-x )");
+    assert!(h.echo().contains("Not defining"), "{}", h.echo());
 }

@@ -746,12 +746,32 @@ are written in Scheme, in `runtime/lib/simple.scm`:
 
 By name: `sort-lines`, `reverse-region`, `delete-duplicate-lines`,
 `flush-lines` and `keep-lines` work on the lines of the region or of the
-buffer, the last two by a text that the lines contain; `replace-string`
-replaces every occurrence from point on, or in the region; `what-line`,
-`pwd` and `cd`.
+buffer, the last two by a regular expression; `replace-string` replaces
+every occurrence from point on, or in the region; `what-line`, `pwd` and
+`cd`.
 
-Not there yet: keyboard macros, narrowing, regular expressions in search
-and replace, `repeat`, and renaming a buffer.
+`C-M-%` is `query-replace-regexp`: as `M-%`, for the matches of a regular
+expression, and the question shows what each match becomes. `M-x
+replace-regexp` replaces them all without asking, `M-x count-matches`
+counts them. The expressions are those of Rust's `regex` crate, not of
+Emacs: groups are `(…)` and alternatives `a|b` without backslashes, `\d`
+and `\w` are there, and `^` and `$` are the starts and ends of lines. Case
+matters; start with `(?i)` for it not to. In a replacement `\&` is what
+matched and `\1` to `\9` what a group matched. For code there are
+`(regexp-search regexp string)` and `(regexp-replace regexp string
+replacement)`.
+
+Keyboard macros keep what you type to type it again. `F3` (or `C-x (`)
+starts one, and the mode line says `Def`; `F4` (or `C-x )`) ends it. `F4`
+(or `C-x e`) then types its keys again: with `C-u 5`, five times, and with
+`C-u 0` until a command fails, as moving past the last line does, which is
+how a macro is run over the rest of a buffer. What is typed in the
+minibuffer is part of the macro. `M-x name-last-kbd-macro` makes a command
+of the last macro, and `(execute-kbd-macro "C-a - SPC C-n")` types keys
+from code.
+
+Not there yet: narrowing, `repeat`, renaming a buffer, and regular
+expressions in `C-s`. `TODO.md` has the list.
 
 ## Themes
 

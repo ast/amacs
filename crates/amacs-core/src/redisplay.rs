@@ -454,6 +454,9 @@ impl Editor {
             text.push(' ');
             text.push_str(&servers);
         }
+        if self.defining_macro() && id == self.selected() {
+            text.push_str(" Def");
+        }
         let face = if id == self.selected() {
             faces::MODE_LINE
         } else {

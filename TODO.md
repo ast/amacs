@@ -33,6 +33,56 @@ What I would take first, across the sections below:
       question no longer getting what was typed ahead.
 - [ ] No command renames a buffer or parts it from its file.
 
+## Editing commands (`runtime/lib/simple.scm`)
+
+The small commands of Emacs were gone through on 2026-11-24; these are
+the ones that are still not there, the ones that need the core first.
+
+- [ ] Narrowing (`C-x n n`, `C-x n w`, `narrow-to-defun`): the core has to
+      keep a buffer to a part of its text, for point, search and display.
+- [ ] `repeat` (`C-x z`), which needs the last command with its argument
+      and its keys, and `negative-argument` (`M--`).
+- [ ] Help in the editor for more than commands and keys:
+      `describe-function`, `describe-variable`, `describe-bindings`,
+      `describe-mode`, `where-is`, `apropos`. The MCP server has all of it
+      (`describe`, `apropos`); the commands only have to show it.
+- [ ] Regular expressions in `C-s` (`search-lines`) and `C-c /`
+      (`search-files`), and a way not to mind case in `M-%` and `C-M-%`
+      without writing `(?i)`. The syntax is Rust's, not Emacs's, and no
+      translation is offered.
+- [ ] Keyboard macros: `apply-macro-to-region-lines` (`C-x C-k r`),
+      counters, `insert-kbd-macro` to write one into `init.scm`, editing
+      one. Pastes and the mouse are not recorded. `C-g` does not reach a
+      macro that runs: one that never fails stops after 10 000 runs.
+- [ ] Buffers in the order they were last shown, for `next-buffer`,
+      `previous-buffer` (now by name) and `bury-buffer`;
+      `kill-current-buffer`, `kill-buffer-and-window` (`C-x 4 0`).
+- [ ] Sentences (`M-a`, `M-e`, `M-k`); definitions by the syntax tree
+      (`C-M-a`, `C-M-e`, `C-M-h`, `eval-defun`); the ring of marks
+      (`C-u C-SPC`, `C-x C-SPC`).
+- [ ] `dabbrev-expand` (`M-/`), `overwrite-mode`, `capitalize-region`,
+      `tabify` and `untabify`, `align-regexp`, `sort-fields`, the size of
+      the text (`C-x C-+`).
+- [ ] `visual-line-mode`: the rows after the first of a list item or an
+      indented line start at the left edge; they could hang under the
+      text.
+
+## Coding agents (`runtime/lib/acp.scm`)
+
+- [ ] Only the first page of the conversations that were is listed
+      (`C-c c R`), and their times are shown in UTC.
+- [ ] An image is read with the `base64` program; a primitive that reads
+      a file as base64 would not need it. Pasting an image from the
+      clipboard into a prompt.
+- [ ] Sessions are never closed or deleted at the agent (`session/close`,
+      `session/delete`), and each has an agent process of its own where
+      one process could hold them all.
+- [ ] Other agents than Claude by name: the commands are `claude-…` and
+      there is one `acp-command`.
+- [ ] Not tried against the real adapter, only the fake one: a prompt
+      that waits its turn, one sent into a turn (`C-c C-s`), an image, and
+      the servers and directories of the options.
+
 ## Scheme language (`crates/amacs-scheme`)
 
 - [ ] Keyword arguments and a module system.

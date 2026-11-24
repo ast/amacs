@@ -531,7 +531,16 @@ fn the_example_init_file_loads_and_its_commands_work() {
         "",
         "C-w kills words backward when there is no region"
     );
+    // A prefix argument given before M-x is the command's.
     h.keys("C-u M-x").type_text("copyright-sm6wjm").keys("RET");
+    assert!(
+        h.text().starts_with("# Copyright (c) Albin Stigo 20"),
+        "{}",
+        h.text()
+    );
+    h.keys("C-a C-k M-x")
+        .type_text("copyright-sm6wjm")
+        .keys("RET");
     assert!(
         h.text().starts_with("# Copyright (c) SM6WJM 20"),
         "{}",

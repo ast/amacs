@@ -151,6 +151,12 @@ pub fn install(ed: &mut Editor) {
         "capitalize-word" => misc::capitalize_word, "Capitalise the rest of the word.";
         "read-only-mode" => misc::read_only_mode, "Make the buffer read-only, or editable again.";
         "query-replace" => misc::query_replace, "Replace some occurrences of a text after point, asking at each.";
+        "query-replace-regexp" => misc::query_replace_regexp, "Replace some matches of a regular expression after point, asking at each. In the replacement, \\& is what matched and \\1 to \\9 what a group matched.";
+        "kmacro-start-macro" => crate::kmacro::start_macro, "Start defining a keyboard macro: the keys typed from now on are kept, until F4 or C-x ).";
+        "kmacro-end-macro" => crate::kmacro::end_macro, "End the definition of a keyboard macro.";
+        "kmacro-end-or-call-macro" => crate::kmacro::end_or_call_macro, "End the definition of a keyboard macro, or type the keys of the last one again: as many times as the prefix argument says, and with 0 until a command fails.";
+        "kmacro-end-and-call-macro" => crate::kmacro::end_or_call_macro, "End the definition of a keyboard macro, or type the keys of the last one again: as many times as the prefix argument says, and with 0 until a command fails.";
+        "call-last-kbd-macro" => crate::kmacro::call_macro, "Type the keys of the last keyboard macro again: as many times as the prefix argument says, and with 0 until a command fails.";
         "symbol-next" => misc::symbol_next, "Go to the next occurrence of the symbol at point.";
         "symbol-previous" => misc::symbol_previous, "Go to the previous occurrence of the symbol at point.";
         "symbol-rename" => misc::symbol_rename, "Rename the symbol at point everywhere in the buffer.";
@@ -298,6 +304,12 @@ pub fn install(ed: &mut Editor) {
         ("M-SPC", "just-one-space"),
         ("M-^", "delete-indentation"),
         ("C-x C-u", "upcase-region"),
+        ("C-M-%", "query-replace-regexp"),
+        ("<f3>", "kmacro-start-macro"),
+        ("<f4>", "kmacro-end-or-call-macro"),
+        ("C-x (", "kmacro-start-macro"),
+        ("C-x )", "kmacro-end-macro"),
+        ("C-x e", "kmacro-end-and-call-macro"),
         ("C-x C-l", "downcase-region"),
         ("M-u", "upcase-word"),
         ("M-l", "downcase-word"),

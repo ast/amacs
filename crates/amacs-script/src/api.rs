@@ -1317,6 +1317,53 @@ pub const API: &[ApiFn] = api! {
 
     // The editor itself
 
+    "regexp-search" (2, Some(3)) "Where a regular expression first matches in a string, at or after a position (default 0): a list of (start end) lists, the whole match and then each group, with #f for a group that took no part; or #f if there is no match. The syntax is that of the regex crate of Rust, with ^ and $ at the starts and ends of lines." =>
+        |_, args| {
+            let regex = amacs_core::regexp::compile(string(args, 0)?)?;
+            let from = if args.len() > 2 {
+                usize::try_from(int(args, 2)?).unwrap_or(0)
+            } else {
+                0
+            };
+            let Some(found) = amacs_core::regexp::search(&regex, string(args, 1)?, from) else {
+                return Ok(Value::Bool(false));
+            };
+            Ok(Value::List(
+                (0..found.groups())
+                    .map(|group| match found.range(group) {
+                        Some(range) => Value::List(vec![
+                            Value::Int(range.start as i64),
+                            Value::Int(range.end as i64),
+                        ]),
+                        None => Value::Bool(false),
+                    })
+                    .collect(),
+            ))
+        };
+    "regexp-replace" (3, Some(3)) "A string with every match of a regular expression replaced: the expression, the string, the replacement, in which \\& is what matched, \\1 to \\9 what a group matched and \\\\ a backslash. Returns a list of the new string and how many matches there were." =>
+        |_, args| {
+            let regex = amacs_core::regexp::compile(string(args, 0)?)?;
+            let (text, count) =
+                amacs_core::regexp::replace_all(&regex, string(args, 1)?, string(args, 2)?);
+            Ok(Value::List(vec![Value::Str(text), Value::Int(count as i64)]))
+        };
+    "last-kbd-macro" (0, Some(0)) "The keys of the keyboard macro last defined, as a string such as \"C-a M-d RET\", or #f if none is." =>
+        |ed, _| {
+            let keys: Vec<String> = ed.last_macro().iter().map(ToString::to_string).collect();
+            Ok(if keys.is_empty() { Value::Bool(false) } else { Value::Str(keys.join(" ")) })
+        };
+    "execute-kbd-macro" (1, Some(2)) "Type the keys of a string such as \"C-a M-d RET\" as a keyboard macro, once the running code has returned: each key when the commands of the one before are done. The optional argument is how many times; 0 is until a command fails." =>
+        |ed, args| {
+            let times = if args.len() > 1 {
+                usize::try_from(int(args, 1)?).unwrap_or(1)
+            } else {
+                1
+            };
+            ed.macro_run(keys(args, 0)?, times)?;
+            Ok(Value::Void)
+        };
+    "defining-kbd-macro?" (0, Some(0)) "Whether a keyboard macro is being defined." =>
+        |ed, _| Ok(Value::Bool(ed.defining_macro()));
     "press-keys" (1, Some(1)) "Feed a key sequence to the editor as if typed. Built-in commands run at once; commands defined in Scheme run after the caller returns." =>
         |ed, args| {
             for key in keys(args, 0)? {

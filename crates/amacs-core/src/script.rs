@@ -178,6 +178,10 @@ pub(crate) struct ScriptState {
     held_input: std::collections::VecDeque<(crate::frame::FrameId, amacs_proto::InputEvent)>,
     /// When to say that what is typed is waiting.
     held_notice_due: Option<std::time::Instant>,
+    /// The prefix argument of a command in Scheme that is queued, with the
+    /// command's name: the command that ran it, as M-x does, is finished
+    /// before it runs, and takes the prefix argument in force with it.
+    pub(crate) queued_prefix: Option<(String, crate::editor::Prefix)>,
     /// Hooks that have functions, so that others cost nothing to run.
     active_hooks: std::collections::HashSet<String>,
     options: HashMap<String, OptionDef>,
@@ -415,6 +419,14 @@ impl Editor {
     /// after.
     pub fn take_script_call(&mut self) -> Option<ScriptCall> {
         let call = self.script.queue.pop_front()?;
+        if let Some(command) = &call.command
+            && let Some((_, prefix)) = self
+                .script
+                .queued_prefix
+                .take_if(|(name, _)| name == command)
+        {
+            self.set_current_prefix(prefix);
+        }
         // Code that goes on after waiting is part of the command that
         // waited.
         let settled = match (&call.target, call.args.first()) {
@@ -457,6 +469,7 @@ impl Editor {
             ScriptOutcome::Returned(printed) if call.echo_result => self.message(printed),
             ScriptOutcome::Returned(_) => {}
             ScriptOutcome::Failed { summary, report } => {
+                self.macro_stop();
                 self.log(&report);
                 self.message(summary);
             }
@@ -538,6 +551,11 @@ impl Editor {
     pub fn take_held_input(&mut self) -> Option<(crate::frame::FrameId, amacs_proto::InputEvent)> {
         if self.holds_input() || !self.script.queue.is_empty() {
             return None;
+        }
+        // The keys of a keyboard macro that runs come the same way, before
+        // what was typed meanwhile.
+        if let Some(key) = self.macro_take_key() {
+            return Some((self.current_frame(), amacs_proto::InputEvent::Key(key)));
         }
         let held = self.script.held_input.pop_front();
         if self.script.held_input.is_empty() {

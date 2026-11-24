@@ -198,6 +198,8 @@ pub struct Editor {
     /// Prefix argument of the command that is running.
     current_prefix: Option<Prefix>,
     pub(crate) last_key: Option<Key>,
+    /// The keyboard macro being defined, the last one and the one that runs.
+    pub(crate) macros: crate::kmacro::Macros,
     /// The text last pasted into a buffer that binds `<paste>`.
     last_paste: Option<String>,
     /// What each window showed and how much of it, at the last layout, to
@@ -270,6 +272,7 @@ impl Editor {
             prefix_arg: None,
             current_prefix: None,
             last_key: None,
+            macros: crate::kmacro::Macros::default(),
             last_paste: None,
             window_sizes: HashMap::new(),
             this_command: None,
@@ -341,6 +344,10 @@ impl Editor {
         self.current_prefix
     }
 
+    pub(crate) fn set_current_prefix(&mut self, prefix: Prefix) {
+        self.current_prefix = Some(prefix);
+    }
+
     /// Name of the command that ran before the current one.
     pub fn last_command(&self) -> Option<&str> {
         self.last_command.as_deref()
@@ -373,6 +380,8 @@ impl Editor {
         let run = match body {
             CommandBody::Native(run) => run,
             CommandBody::Script(func) => {
+                self.script.queued_prefix =
+                    self.current_prefix.map(|prefix| (name.to_owned(), prefix));
                 // The host runs the body and then finishes the command.
                 let queued = self.queue_script(ScriptCall {
                     target: ScriptTarget::Func(func),
@@ -503,6 +512,8 @@ impl Editor {
 
     pub(crate) fn report(&mut self, result: CmdResult) {
         if let Err(error) = result {
+            // A keyboard macro ends where one of its commands fails.
+            self.macro_stop();
             self.message(error.to_string());
         }
     }
@@ -535,6 +546,9 @@ impl Editor {
     }
 
     pub fn handle_key(&mut self, key: Key) {
+        let starts_sequence =
+            self.pending_keys.is_empty() && !self.esc_pending && self.key_prompt.is_none();
+        self.macro_note_key(key, starts_sequence);
         self.frame_mut().echo = None;
         self.frame_mut().hint.clear();
         self.key_hint_due = None;

@@ -288,15 +288,16 @@ one before it."
     (message "Deleted " (number->string (- (car counts) (cdr counts))) " lines")))
 
 (define-command (flush-lines)
-  "Delete the lines of the region, or of the buffer, that contain a text."
-  (%simple-filter-lines "Flush lines containing: "
-                        (lambda (line text) (not (string-search line text)))))
+  "Delete the lines of the region, or of the buffer, that a regular
+expression matches some of."
+  (%simple-filter-lines "Flush lines matching regexp: "
+                        (lambda (line regexp) (not (regexp-search regexp line)))))
 
 (define-command (keep-lines)
-  "Delete the lines of the region, or of the buffer, that do not contain a
-text."
-  (%simple-filter-lines "Keep lines containing: "
-                        (lambda (line text) (string-search line text))))
+  "Delete the lines of the region, or of the buffer, that a regular
+expression matches nothing of."
+  (%simple-filter-lines "Keep lines matching regexp: "
+                        (lambda (line regexp) (regexp-search regexp line))))
 
 ;;; Replacing
 
@@ -313,20 +314,45 @@ text."
                        (reverse (cons (substring text at (string-length text)) parts)))
                 count)))))
 
-(define-command (replace-string)
-  "Replace every occurrence of a text with another, in the region or from
-point to the end of the buffer, without asking for each as M-% does."
-  (let* ((from (read-string "Replace string: "))
-         (to (read-string (string-append "Replace string " from " with: ")))
+(define (%simple-replace-in-reach what replace)
+  ;; Asks what to replace and with what, and gives the text of the region,
+  ;; or from point to the end of the buffer, to a procedure with them. It
+  ;; returns a pair of the new text and how much was replaced.
+  (let* ((from (read-string (string-append "Replace " what ": ")))
+         (to (read-string (string-append "Replace " what " " from " with: ")))
          (start (if (region-active?) (min (mark) (point)) (point)))
          (end (if (region-active?) (max (mark) (point)) (point-max))))
     (when (equal? from "") (error "Nothing to replace"))
-    (let ((result (%simple-replace-all (buffer-substring start end) from to)))
+    (let ((result (replace (buffer-substring start end) from to)))
       (when (> (cdr result) 0)
         (%simple-replace! start end (car result)))
       (deactivate-mark!)
       (message "Replaced " (number->string (cdr result))
                (if (= (cdr result) 1) " occurrence" " occurrences")))))
+
+(define-command (replace-string)
+  "Replace every occurrence of a text with another, in the region or from
+point to the end of the buffer, without asking for each as M-% does."
+  (%simple-replace-in-reach "string" %simple-replace-all))
+
+(define-command (replace-regexp)
+  "Replace every match of a regular expression, in the region or from
+point to the end of the buffer, without asking for each as C-M-% does. In
+the replacement, \\& is what matched and \\1 to \\9 what a group matched."
+  (%simple-replace-in-reach
+   "regexp"
+   (lambda (text regexp to)
+     (let ((result (regexp-replace regexp text to)))
+       (cons (car result) (cadr result))))))
+
+(define-command (count-matches)
+  "Say how many matches of a regular expression there are in the region,
+or from point to the end of the buffer."
+  (let* ((regexp (read-string "Count matches of regexp: "))
+         (start (if (region-active?) (min (mark) (point)) (point)))
+         (end (if (region-active?) (max (mark) (point)) (point-max)))
+         (count (cadr (regexp-replace regexp (buffer-substring start end) ""))))
+    (message (number->string count) (if (= count 1) " match" " matches"))))
 
 ;;; Marking
 
@@ -463,6 +489,28 @@ expression."
   (let ((text (buffer-substring (min (mark) (point)) (max (mark) (point)))))
     (deactivate-mark!)
     (%simple-eval-and-show text)))
+
+;;; Keyboard macros
+;;;
+;;; F3 starts the definition of one and F4 ends it, and types its keys
+;;; again; that is in the core, which sees every key. A macro is its keys,
+;;; so one that is to be kept is a command that types them.
+
+(define-command (name-last-kbd-macro)
+  "Make a command of the keyboard macro last defined, by a name that is
+asked for: M-x and the name types its keys again, as many times as the
+prefix argument says, when another macro has taken its place. It lasts
+until the editor is left; (execute-kbd-macro \"keys\") in init.scm does
+the same for good."
+  (let ((keys (last-kbd-macro)))
+    (unless keys (error "No keyboard macro is defined"))
+    (let ((name (string-trim (read-string "Name for the last keyboard macro: "))))
+      (when (equal? name "") (error "A command needs a name"))
+      (when (command? name) (error (string-append "There is a command " name " already")))
+      (%install-command! (string->symbol name)
+                         (string-append "Type the keys of a keyboard macro: " keys)
+                         (lambda () (execute-kbd-macro keys (prefix-arg))))
+      (message "M-x " name " types " keys))))
 
 ;;; Registers
 ;;;

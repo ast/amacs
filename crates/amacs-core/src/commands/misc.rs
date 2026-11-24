@@ -348,6 +348,34 @@ fn find(text: &Text, needle: &str, from: usize) -> Option<usize> {
     Some(from + haystack[..byte].chars().count())
 }
 
+/// What is looked for when replacing: a text as it is, or a regular
+/// expression.
+#[derive(Clone)]
+enum Pattern {
+    Text(String),
+    Regexp(std::rc::Rc<regex::Regex>),
+}
+
+/// Where the next match at or after `from` is, and what replaces it.
+fn next_match(
+    text: &Text,
+    pattern: &Pattern,
+    to: &str,
+    from: usize,
+) -> Option<(std::ops::Range<usize>, String)> {
+    match pattern {
+        Pattern::Text(needle) => {
+            let start = find(text, needle, from)?;
+            Some((start..start + needle.chars().count(), to.to_owned()))
+        }
+        Pattern::Regexp(regex) => {
+            let whole = text.to_string();
+            let found = crate::regexp::search(regex, &whole, from)?;
+            Some((found.range(0)?, found.expand(to)))
+        }
+    }
+}
+
 /// Asks, for each place the text occurs after point, whether to replace it.
 pub fn query_replace(ed: &mut Editor) -> CmdResult {
     ed.forbid_in_minibuffer()?;
@@ -357,53 +385,85 @@ pub fn query_replace(ed: &mut Editor) -> CmdResult {
         }
         let prompt = format!("Query replace {from} with: ");
         ed.read_string(prompt, "", Completion::None, move |ed, to| {
-            replace_step(ed, from, to, 0);
+            let point = ed.point();
+            replace_step(ed, Pattern::Text(from), to, 0, point);
             Ok(())
         })
     })
 }
 
-/// Shows the next match and asks what to do with it.
-fn replace_step(ed: &mut Editor, from: String, to: String, done: usize) {
-    let len = from.chars().count();
-    let Some(start) = find(ed.text(), &from, ed.point()) else {
+/// Asks, for each match of a regular expression after point, whether to
+/// replace it.
+pub fn query_replace_regexp(ed: &mut Editor) -> CmdResult {
+    ed.forbid_in_minibuffer()?;
+    ed.read_string(
+        "Query replace regexp: ",
+        "",
+        Completion::None,
+        |ed, from| {
+            if from.is_empty() {
+                return Ok(());
+            }
+            let regex = crate::regexp::compile(&from)?;
+            let prompt = format!("Query replace regexp {from} with: ");
+            ed.read_string(prompt, "", Completion::None, move |ed, to| {
+                let point = ed.point();
+                replace_step(ed, Pattern::Regexp(regex), to, 0, point);
+                Ok(())
+            })
+        },
+    )
+}
+
+/// Shows the next match at or after `from` and asks what to do with it.
+fn replace_step(ed: &mut Editor, pattern: Pattern, to: String, done: usize, from: usize) {
+    let Some((found, replacement)) = next_match(ed.text(), &pattern, &to, from) else {
         ed.buffer_mut().mark_active = false;
         ed.message(format!("Replaced {done} occurrences"));
         return;
     };
     // The match is shown as the region.
-    ed.set_point(start + len);
+    ed.set_point(found.end);
     let buffer = ed.buffer_mut();
-    buffer.set_mark(start);
+    buffer.set_mark(found.start);
     buffer.mark_active = true;
-    let question = format!("Replace with {to}? (y, n, ! for all, q to stop) ");
+    let question = format!("Replace with {replacement}? (y, n, ! for all, q to stop) ");
     ed.ask_key(question, move |ed, key| {
-        let replace = |ed: &mut Editor, start: usize| -> CmdResult {
-            ed.delete(start..start + len)?;
-            ed.buffer_mut().insert(start, &to)?;
-            ed.set_point(start + to.chars().count());
-            Ok(())
-        };
+        // Puts the replacement in place of a match, and says where to look
+        // for the next: after it, and a char further on if nothing was
+        // matched, so that the same place is not found again.
+        let replace =
+            |ed: &mut Editor, found: std::ops::Range<usize>, with: &str| -> CmdResult<usize> {
+                let empty = found.is_empty();
+                ed.delete(found.clone())?;
+                ed.buffer_mut().insert(found.start, with)?;
+                let after = found.start + with.chars().count();
+                ed.set_point(after);
+                Ok(after + usize::from(empty))
+            };
         match key.self_insert_char() {
             Some('y' | ' ') => {
-                replace(ed, start)?;
-                replace_step(ed, from, to, done + 1);
+                let next = replace(ed, found, &replacement)?;
+                replace_step(ed, pattern, to, done + 1, next);
             }
-            Some('n') => replace_step(ed, from, to, done),
+            Some('n') => {
+                let next = found.end + usize::from(found.is_empty());
+                replace_step(ed, pattern, to, done, next);
+            }
             Some('!') => {
                 let mut count = done;
-                let mut next = Some(start);
-                while let Some(at) = next {
-                    replace(ed, at)?;
+                let mut next = Some((found, replacement));
+                while let Some((found, replacement)) = next {
+                    let from = replace(ed, found, &replacement)?;
                     count += 1;
-                    next = find(ed.text(), &from, ed.point());
+                    next = next_match(ed.text(), &pattern, &to, from);
                 }
                 ed.buffer_mut().mark_active = false;
                 ed.message(format!("Replaced {count} occurrences"));
             }
             _ => {
                 ed.buffer_mut().mark_active = false;
-                ed.set_point(start);
+                ed.set_point(found.start);
                 ed.message(format!("Replaced {done} occurrences"));
                 if key == Key::ctrl('g') {
                     return Err(CmdError::Quit);

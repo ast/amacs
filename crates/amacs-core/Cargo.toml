@@ -15,6 +15,7 @@ amacs-treesit.workspace = true
 anyhow.workspace = true
 nucleo.workspace = true
 portable-pty.workspace = true
+regex.workspace = true
 rustix.workspace = true
 serde_json.workspace = true
 slotmap.workspace = true

@@ -70,6 +70,7 @@ dependencies = [
  "nucleo",
  "portable-pty",
  "proptest",
+ "regex",
  "rustix",
  "serde_json",
  "slotmap",
