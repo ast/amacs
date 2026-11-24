@@ -92,6 +92,51 @@ them:
 | Hunspell dictionaries | Spelling |
 | `xdg-open` | Opening what is not text from the file manager |
 
+### Installing with Nix
+
+The flake has the package, `packages.<system>.amacs`, and an overlay,
+`overlays.default`, that adds it to a nixpkgs as `pkgs.amacs`. Without
+installing anything, `nix run github:ast/amacs -- FILE` runs the editor.
+
+In the flake of a NixOS configuration, take it as an input that follows
+your nixpkgs, so that it is built with the Rust and the libraries of your
+system and no second nixpkgs comes into the lock. It needs Rust 1.95 or
+later, which nixos-26.05 has:
+
+```nix
+inputs.amacs = {
+  url = "github:ast/amacs";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+Then put the overlay among those of the system, in a module that gets
+`inputs`, and the package where your programs are listed. With
+home-manager's `useGlobalPkgs`, the overlay reaches the home modules too:
+
+```nix
+{ inputs, ... }:
+{
+  nixpkgs.overlays = [ inputs.amacs.overlays.default ];
+}
+```
+
+```nix
+home.packages = [ pkgs.amacs ];          # or environment.systemPackages
+```
+
+The lock of your flake says which commit is built; `nix flake update amacs`
+moves it. The package is not wrapped: the editor finds `rg`, `git` and the
+rest of the table above on the `PATH` it is started with.
+
+To have the server started by systemd when a client first connects, give
+systemd the units of the package and enable the socket:
+
+```nix
+systemd.packages = [ pkgs.amacs ];
+systemd.user.sockets.amacs.wantedBy = [ "sockets.target" ];
+```
+
 ## A first session
 
 Try the editor with the example configuration, without installing

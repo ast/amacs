@@ -1,6 +1,10 @@
 {
   description = "amacs: an Emacs-like editor with a Rust core and Scheme extensions";
 
+  # What this repository is built and checked with. A flake that takes
+  # this one as an input sets `inputs.nixpkgs.follows`, and then this is not
+  # in its lock; the package needs Rust 1.95 or later of the nixpkgs it is
+  # built with.
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs =
@@ -11,53 +15,25 @@
         "aarch64-linux"
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
-      # What the build and the tests read. The documentation and the files
-      # of the development shell are left out, so that a change to them
-      # does not rebuild everything.
-      src = nixpkgs.lib.fileset.toSource {
-        root = ./.;
-        fileset = nixpkgs.lib.fileset.unions [
-          ./Cargo.toml
-          ./Cargo.lock
-          ./crates
-          ./runtime
-          ./examples
-          ./contrib
-        ];
-      };
     in
     {
-      packages = forAllSystems (pkgs: rec {
-        amacs = pkgs.rustPlatform.buildRustPackage {
-          pname = "amacs";
-          version = "0.1.0";
-          inherit src;
-          cargoLock.lockFile = ./Cargo.lock;
-          # The Wayland client reads keymaps with libxkbcommon, and talks to
-          # the compositor through libwayland, as the drivers of GPUs do.
-          nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = [
-            pkgs.libxkbcommon
-            pkgs.wayland
-          ];
-          # The tests are a check of their own, `checks.tests`, built in the
-          # dev profile beside this release build rather than after it.
-          doCheck = false;
-          # Drawing with the GPU loads Vulkan when it is asked for, by name.
-          postFixup = ''
-            patchelf --add-rpath ${pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ]} $out/bin/amacs-gui
-          '';
-          # User units for running the server under systemd, with or without
-          # socket activation.
-          postInstall = ''
-            install -Dm644 -t $out/lib/systemd/user contrib/systemd/amacs.socket
-            substitute contrib/systemd/amacs.service $out/lib/systemd/user/amacs.service \
-              --replace-fail @bindir@ $out/bin
-          '';
-          meta.mainProgram = "amacs";
-        };
-        default = amacs;
-      });
+      packages = forAllSystems (
+        pkgs:
+        let
+          amacs = pkgs.callPackage ./nix/package.nix { };
+        in
+        {
+          inherit amacs;
+          default = amacs;
+        }
+      );
+
+      # For a NixOS or home-manager configuration: with this among
+      # `nixpkgs.overlays`, `pkgs.amacs` is the editor built with the
+      # nixpkgs of that configuration, whatever this flake is locked to.
+      overlays.default = final: _prev: {
+        amacs = final.callPackage ./nix/package.nix { };
+      };
 
       # `nix flake check` is the CI entry point: build, tests, lints, formatting.
       checks = forAllSystems (
