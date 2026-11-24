@@ -89,6 +89,10 @@ proptest! {
         for mode in ["hl-line-mode", "symbol-highlight-mode", "hl-todo-mode", "whitespace-mode"] {
             h.editor.set_minor_mode(mode, true, true).unwrap();
         }
+        // In half of the frames, rows break between words.
+        if cols % 2 == 0 {
+            h.editor.set_minor_mode("visual-line-mode", false, true).unwrap();
+        }
         h.editor
             .set_option("line-numbers", amacs_core::Value::sym("relative"))
             .unwrap();

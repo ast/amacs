@@ -178,6 +178,18 @@ impl Buffer {
         }
     }
 
+    /// How the text flows into rows in a window: by the width of its tabs,
+    /// and between words while `visual-line-mode` is on in the buffer.
+    pub fn flow(&self) -> crate::display::Flow {
+        crate::display::Flow {
+            tab_width: self.tab_width,
+            words: self
+                .minor_modes
+                .iter()
+                .any(|mode| mode == crate::display::VISUAL_LINE_MODE),
+        }
+    }
+
     pub fn text(&self) -> &Text {
         &self.text
     }

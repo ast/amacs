@@ -24,7 +24,7 @@ use crate::files::{abbreviate_path, expand_path};
 /// if it would otherwise leave the window.
 pub(crate) fn scroll_rows(ed: &mut Editor, rows: i64) -> CmdResult {
     let width = ed.text_width(ed.selected());
-    let tab = ed.buffer().tab_width;
+    let tab = ed.buffer().flow();
     let start = ed.buffer().marker(ed.window().start);
     let count = rows.unsigned_abs() as usize;
     let new_start = if rows >= 0 {

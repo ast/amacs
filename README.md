@@ -700,6 +700,16 @@ Four minor modes lay marks over the text. Turn them on in a mode hook with
 | `hl-todo-mode` | TODO, FIXME, NOTE and their kin, in comments |
 | `whitespace-mode` | Trailing whitespace and text past `whitespace-line-column` |
 
+A fifth changes how long lines are shown: in `visual-line-mode` a line too
+long for the window is broken between words, where it is otherwise broken
+at the window's edge with a `\\`. The text itself is not changed. The
+conversation with an agent and its compose buffer are shown so; for prose
+of your own, turn it on in a hook:
+
+```scheme
+(add-hook! 'markdown-mode-hook (lambda () (enable-mode! 'visual-line-mode)))
+```
+
 `symbol-next` and `symbol-previous` step through the occurrences of the
 symbol at point, and `symbol-rename` renames it throughout the buffer.
 

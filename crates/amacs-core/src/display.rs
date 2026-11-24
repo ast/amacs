@@ -37,6 +37,28 @@ pub fn str_cells(s: &str) -> usize {
     s.chars().map(|c| char_cells(c, 0, 1)).sum()
 }
 
+/// The minor mode in which long lines are broken between words.
+pub const VISUAL_LINE_MODE: &str = "visual-line-mode";
+
+/// How the text of a buffer flows into rows: how wide its tabs are, and
+/// whether a line too long for the pane is broken between words, as
+/// `visual-line-mode` has it, or wherever the pane ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Flow {
+    pub tab_width: usize,
+    pub words: bool,
+}
+
+impl Flow {
+    /// Rows that break wherever the pane ends.
+    pub fn chars(tab_width: usize) -> Self {
+        Self {
+            tab_width,
+            words: false,
+        }
+    }
+}
+
 /// One screen row of a wrapped line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Row {
@@ -67,14 +89,24 @@ impl Row {
 ///
 /// A char wider than the whole row is still visited, alone on its row, so
 /// that layout always makes progress. The caller must not draw it.
+///
+/// When the flow breaks between words, a line that does not fit ends its
+/// row after the last whitespace that does, which stays on that row; a
+/// word longer than the row is broken where the pane ends.
 pub fn walk_row(
     text: &Text,
     start: usize,
     width: usize,
-    tab_width: usize,
+    flow: Flow,
     mut visit: impl FnMut(usize, char, usize, usize),
 ) -> Row {
     let budget = width.saturating_sub(1).max(1);
+    let tab_width = flow.tab_width;
+    let word_break = if flow.words {
+        word_break(text, start, budget, tab_width)
+    } else {
+        None
+    };
     let mut col = 0;
     let mut pos = start;
     for c in text.chars_from(start) {
@@ -91,7 +123,7 @@ pub fn walk_row(
             '\t' => char_cells(c, col, tab_width).min(budget),
             _ => char_cells(c, col, tab_width),
         };
-        if col + cells > budget && col > 0 {
+        if word_break == Some(pos) || (col + cells > budget && col > 0) {
             return Row {
                 start,
                 end: pos,
@@ -111,17 +143,44 @@ pub fn walk_row(
     }
 }
 
-fn row_at(text: &Text, start: usize, width: usize, tab_width: usize) -> Row {
-    walk_row(text, start, width, tab_width, |_, _, _, _| {})
+/// Where the row that starts at `start` is broken between words: just
+/// after the last whitespace that fits in `budget` cells, if the line does
+/// not fit and has whitespace to break at.
+fn word_break(text: &Text, start: usize, budget: usize, tab_width: usize) -> Option<usize> {
+    let mut col = 0;
+    let mut pos = start;
+    let mut last = None;
+    for c in text.chars_from(start) {
+        if c == '\n' {
+            return None;
+        }
+        let cells = match c {
+            '\t' => char_cells(c, col, tab_width).min(budget),
+            _ => char_cells(c, col, tab_width),
+        };
+        if col + cells > budget && col > 0 {
+            return last;
+        }
+        col += cells;
+        pos += 1;
+        if c.is_whitespace() {
+            last = Some(pos);
+        }
+    }
+    None
+}
+
+fn row_at(text: &Text, start: usize, width: usize, flow: Flow) -> Row {
+    walk_row(text, start, width, flow, |_, _, _, _| {})
 }
 
 /// Start of the screen row on which `pos` is drawn, and that row's index
 /// within its line.
-pub fn row_containing(text: &Text, pos: usize, width: usize, tab_width: usize) -> (usize, usize) {
+pub fn row_containing(text: &Text, pos: usize, width: usize, flow: Flow) -> (usize, usize) {
     let mut start = text.line_start(text.line_of(pos));
     let mut index = 0;
     loop {
-        let row = row_at(text, start, width, tab_width);
+        let row = row_at(text, start, width, flow);
         match row.next {
             Some(next) if row.continued && !row.contains(pos) => {
                 start = next;
@@ -133,16 +192,10 @@ pub fn row_containing(text: &Text, pos: usize, width: usize, tab_width: usize) -
 }
 
 /// Start of the row `n` rows after `row_start`, stopping at the last row.
-pub fn rows_forward(
-    text: &Text,
-    row_start: usize,
-    n: usize,
-    width: usize,
-    tab_width: usize,
-) -> usize {
+pub fn rows_forward(text: &Text, row_start: usize, n: usize, width: usize, flow: Flow) -> usize {
     let mut start = row_start;
     for _ in 0..n {
-        match row_at(text, start, width, tab_width).next {
+        match row_at(text, start, width, flow).next {
             Some(next) => start = next,
             None => break,
         }
@@ -151,20 +204,20 @@ pub fn rows_forward(
 }
 
 /// Start of the row `n` rows before `row_start`, stopping at the first row.
-pub fn rows_back(text: &Text, row_start: usize, n: usize, width: usize, tab_width: usize) -> usize {
+pub fn rows_back(text: &Text, row_start: usize, n: usize, width: usize, flow: Flow) -> usize {
     let mut line = text.line_of(row_start);
-    let (_, index) = row_containing(text, row_start, width, tab_width);
+    let (_, index) = row_containing(text, row_start, width, flow);
     if index >= n {
-        return rows_forward(text, text.line_start(line), index - n, width, tab_width);
+        return rows_forward(text, text.line_start(line), index - n, width, flow);
     }
     let mut remaining = n - index;
     while line > 0 {
         line -= 1;
         let line_start = text.line_start(line);
-        let (_, last_index) = row_containing(text, text.line_end(line), width, tab_width);
+        let (_, last_index) = row_containing(text, text.line_end(line), width, flow);
         let rows = last_index + 1;
         if rows >= remaining {
-            return rows_forward(text, line_start, rows - remaining, width, tab_width);
+            return rows_forward(text, line_start, rows - remaining, width, flow);
         }
         remaining -= rows;
     }
@@ -271,23 +324,23 @@ mod tests {
     #[test]
     fn rows_wrap_one_cell_short_of_the_width() {
         let text = Text::from("abcdefgh\nxy");
-        let first = row_at(&text, 0, 5, 8);
+        let first = row_at(&text, 0, 5, Flow::chars(8));
         assert_eq!((first.end, first.next, first.continued), (4, Some(4), true));
-        let second = row_at(&text, 4, 5, 8);
+        let second = row_at(&text, 4, 5, Flow::chars(8));
         assert_eq!(
             (second.end, second.next, second.continued),
             (8, Some(9), false)
         );
-        let last = row_at(&text, 9, 5, 8);
+        let last = row_at(&text, 9, 5, Flow::chars(8));
         assert_eq!((last.end, last.next), (11, None));
     }
 
     #[test]
     fn wrap_boundary_belongs_to_the_next_row() {
         let text = Text::from("abcdefgh");
-        assert_eq!(row_containing(&text, 3, 5, 8), (0, 0));
-        assert_eq!(row_containing(&text, 4, 5, 8), (4, 1));
-        assert_eq!(row_containing(&text, 8, 5, 8), (4, 1));
+        assert_eq!(row_containing(&text, 3, 5, Flow::chars(8)), (0, 0));
+        assert_eq!(row_containing(&text, 4, 5, Flow::chars(8)), (4, 1));
+        assert_eq!(row_containing(&text, 8, 5, Flow::chars(8)), (4, 1));
     }
 
     #[test]
@@ -295,13 +348,47 @@ mod tests {
         // Rows at width 5: "abcd" "efgh" | "xy" | "" (after the last newline).
         let text = Text::from("abcdefgh\nxy\n");
         let last = text.len();
-        assert_eq!(rows_back(&text, last, 1, 5, 8), 9);
-        assert_eq!(rows_back(&text, last, 2, 5, 8), 4);
-        assert_eq!(rows_back(&text, last, 3, 5, 8), 0);
-        assert_eq!(rows_back(&text, last, 99, 5, 8), 0);
-        assert_eq!(rows_back(&text, 4, 1, 5, 8), 0);
-        assert_eq!(rows_forward(&text, 0, 2, 5, 8), 9);
-        assert_eq!(rows_forward(&text, 0, 99, 5, 8), last);
+        assert_eq!(rows_back(&text, last, 1, 5, Flow::chars(8)), 9);
+        assert_eq!(rows_back(&text, last, 2, 5, Flow::chars(8)), 4);
+        assert_eq!(rows_back(&text, last, 3, 5, Flow::chars(8)), 0);
+        assert_eq!(rows_back(&text, last, 99, 5, Flow::chars(8)), 0);
+        assert_eq!(rows_back(&text, 4, 1, 5, Flow::chars(8)), 0);
+        assert_eq!(rows_forward(&text, 0, 2, 5, Flow::chars(8)), 9);
+        assert_eq!(rows_forward(&text, 0, 99, 5, Flow::chars(8)), last);
+    }
+
+    #[test]
+    fn rows_break_between_words_when_the_flow_says_so() {
+        let words = Flow {
+            tab_width: 8,
+            words: true,
+        };
+        // Nine cells of text to a row: "the quick " "brown fox".
+        let text = Text::from("the quick brown fox\nend");
+        let first = row_at(&text, 0, 10, words);
+        assert_eq!((first.end, first.next, first.continued), (4, Some(4), true));
+        let text = Text::from("the quick brown fox\nend");
+        let first = row_at(&text, 0, 12, words);
+        assert_eq!(
+            (first.end, first.next, first.continued),
+            (10, Some(10), true)
+        );
+        let second = row_at(&text, 10, 12, words);
+        assert_eq!(
+            (second.end, second.next, second.continued),
+            (19, Some(20), false)
+        );
+        // A line that fits is left alone, and so is the last of the text.
+        assert_eq!(row_at(&text, 20, 12, words).next, None);
+        // A word longer than the row is broken where the pane ends.
+        let text = Text::from("abcdefghijkl mn");
+        let first = row_at(&text, 0, 6, words);
+        assert_eq!((first.end, first.continued), (5, true));
+        // Rows are counted and walked by the same breaks.
+        let text = Text::from("the quick brown fox");
+        assert_eq!(row_containing(&text, 12, 12, words), (10, 1));
+        assert_eq!(rows_forward(&text, 0, 1, 12, words), 10);
+        assert_eq!(rows_back(&text, 10, 1, 12, words), 0);
     }
 
     #[test]

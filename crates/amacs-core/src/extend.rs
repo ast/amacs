@@ -148,7 +148,7 @@ impl Editor {
         let start = buffer.marker(window.start);
         let mut pos = start;
         for _ in 0..window.text_rows() {
-            let row = walk_row(buffer.text(), pos, width, buffer.tab_width, |_, _, _, _| {});
+            let row = walk_row(buffer.text(), pos, width, buffer.flow(), |_, _, _, _| {});
             match row.next {
                 Some(next) => pos = next,
                 None => return start..buffer.len(),

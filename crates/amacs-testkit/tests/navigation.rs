@@ -49,6 +49,31 @@ fn the_current_line_is_marked() {
 }
 
 #[test]
+fn long_lines_break_between_words_in_visual_line_mode() {
+    let mut h = Harness::new(20, 8);
+    h.paste("the quick brown fox jumps over the lazy dog\nend");
+    // As it is, a line breaks where the window ends, with a mark.
+    assert_eq!(h.screen.row(0), "the quick brown fox\\");
+    assert_eq!(h.screen.row(1), " jumps over the laz\\");
+    enable(&mut h, "visual-line-mode");
+    // Now it breaks between words, with no mark, and the text is the same.
+    assert_eq!(h.screen.row(0), "the quick brown");
+    assert_eq!(h.screen.row(1), "fox jumps over the");
+    assert_eq!(h.screen.row(2), "lazy dog");
+    assert_eq!(h.screen.row(3), "end");
+    assert_eq!(
+        h.buffer_text(),
+        "the quick brown fox jumps over the lazy dog\nend"
+    );
+    // The cursor is drawn by the same rows: the start of "lazy".
+    h.keys("M-<");
+    for _ in 0..35 {
+        h.keys("C-f");
+    }
+    assert_eq!(h.screen.cursor(), Some((2, 0)));
+}
+
+#[test]
 fn other_occurrences_of_the_symbol_at_point_are_marked() {
     let mut h = harness();
     h.paste("count + counter + count\ncount_x count");

@@ -1,6 +1,8 @@
 use amacs_text::Text;
 
-use crate::display::{column_of, pos_at_column, row_containing, rows_back, rows_forward, walk_row};
+use crate::display::{
+    Flow, column_of, pos_at_column, row_containing, rows_back, rows_forward, walk_row,
+};
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
 
@@ -206,9 +208,9 @@ fn page_rows(ed: &Editor) -> usize {
     ed.window().text_rows().saturating_sub(2).max(1)
 }
 
-fn window_geometry(ed: &Editor) -> (usize, usize, usize) {
+fn window_geometry(ed: &Editor) -> (usize, usize, Flow) {
     let width = ed.text_width(ed.selected());
-    (ed.window().text_rows(), width, ed.buffer().tab_width)
+    (ed.window().text_rows(), width, ed.buffer().flow())
 }
 
 fn window_start(ed: &Editor) -> usize {

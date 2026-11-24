@@ -264,7 +264,7 @@ impl Editor {
         if rows == 0 || width == 0 {
             return;
         }
-        let (text, tab) = (buffer.text(), buffer.tab_width);
+        let (text, tab) = (buffer.text(), buffer.flow());
         let point = buffer.marker(window.point);
         // Edits can leave the start marker in the middle of a row.
         let (mut start, _) = row_containing(text, buffer.marker(window.start), width, tab);
@@ -300,7 +300,7 @@ impl Editor {
         let buffer = &self.buffers[window.buffer];
         let rows = window.text_rows();
         let (gutter, width) = text_area(window, buffer);
-        let (text, tab) = (buffer.text(), buffer.tab_width);
+        let (text, tab) = (buffer.text(), buffer.flow());
         let point = buffer.marker(window.point);
         let point_line = text.line_of(point);
         let window_start = buffer.marker(window.start);
@@ -348,7 +348,7 @@ impl Editor {
                 .count();
             let context = RowContext {
                 line: line_index,
-                base_column: column_of(text, start, tab),
+                base_column: column_of(text, start, tab.tab_width),
                 trailing_from: line_end - trailing,
                 line_end,
             };
@@ -383,7 +383,9 @@ impl Editor {
                 cursor = Some((row_index as u16, (gutter + col) as u16));
             }
             let fill = decorations.fill(line_index);
-            if row.continued && width >= 2 {
+            // Rows that break between words have no mark of it: the
+            // break says so.
+            if row.continued && width >= 2 && !tab.words {
                 let padding = (width - 1).saturating_sub(end_col.min(width));
                 line.push(&" ".repeat(padding), fill);
                 line.push("\\", fill);

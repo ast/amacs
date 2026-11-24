@@ -152,3 +152,9 @@ extension such as \".rs\" or a whole name such as \"/Makefile\"."
 
 (define-minor-mode whitespace-mode ""
   "Mark trailing whitespace and text beyond `whitespace-line-column`.")
+
+(define-minor-mode visual-line-mode ""
+  "Break lines that are too long for the window between words, where they
+are otherwise broken at the edge of the window with a mark. Only how the
+text is shown changes, not the text. For prose: turn it on in a hook, as
+in (add-hook! 'markdown-mode-hook (lambda () (enable-mode! 'visual-line-mode))).")

@@ -647,7 +647,7 @@ impl Editor {
                 buffer.text(),
                 start,
                 width,
-                buffer.tab_width,
+                buffer.flow(),
                 |_, _, _, _| {},
             );
             match walked.next {
@@ -661,7 +661,7 @@ impl Editor {
             buffer.text(),
             start,
             width,
-            buffer.tab_width,
+            buffer.flow(),
             |pos, _, column, cells| {
                 if found.is_none() && col < column + cells {
                     found = Some(pos);

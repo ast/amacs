@@ -479,6 +479,7 @@ pub fn install(ed: &mut Editor) {
         decorate::SYMBOL_HIGHLIGHT_MODE,
         decorate::HL_TODO_MODE,
         decorate::WHITESPACE_MODE,
+        crate::display::VISUAL_LINE_MODE,
     ] {
         ed.define_mode(mode, None, "");
     }

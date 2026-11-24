@@ -1117,6 +1117,9 @@ Start with C-c c c.")
       ;; faces of the sections lie over that.
       (set-buffer-language! "markdown")
       (set-buffer-read-only! #t)
+      ;; An answer is prose in long lines, which read best broken
+      ;; between words.
+      (enable-mode! 'visual-line-mode)
       (%acp-redraw!))
     (unless shown? (goto-char (point-max))))
   %acp-buffer)
@@ -1496,6 +1499,7 @@ window, C-c C-a one to an image, and M-p and M-n walk earlier prompts.")
   (switch-to-buffer %acp-prompt-buffer)
   (unless (eq? (major-mode) 'markdown-mode) (markdown-mode))
   (enable-mode! 'claude-compose-mode)
+  (enable-mode! 'visual-line-mode)
   (set! %acp-history-index #f)
   (goto-char (point-max)))
 
@@ -1622,7 +1626,8 @@ turn to end. When no turn is going on it is sent as any prompt."
     (save-excursion
       (switch-to-buffer %acp-prompt-buffer)
       (markdown-mode)
-      (enable-mode! 'claude-compose-mode))))
+      (enable-mode! 'claude-compose-mode)
+      (enable-mode! 'visual-line-mode))))
 
 (define-command (claude-add-reference)
   "From a file buffer, add a reference to the region, or the line at point,
