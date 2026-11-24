@@ -37,6 +37,7 @@ const FILES: &[(&str, &str)] = &[
     file!("lib/term.scm"),
     file!("lib/term-dired.scm"),
     file!("lib/acp.scm"),
+    file!("lib/simple.scm"),
     file!("core/test.scm"),
     file!("core/debug.scm"),
 ];

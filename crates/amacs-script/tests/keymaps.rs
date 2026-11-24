@@ -31,11 +31,11 @@ fn a_default_binding_gets_every_key_that_nothing_binds() {
     let mut h = setup();
     // Keys that the global map binds, such as C-d and <up>, run their
     // commands as anywhere; the default gets the rest.
-    h.type_text("ab").keys("<f7> C-M-7 M-q s-q");
+    h.type_text("ab").keys("<f7> C-M-7 M-] s-q");
     assert_eq!(h.text(), "");
-    assert_eq!(h.eval("got"), r#"("a" "b" "<f7>" "C-M-7" "M-q" "s-q")"#);
+    assert_eq!(h.eval("got"), r#"("a" "b" "<f7>" "C-M-7" "M-]" "s-q")"#);
     h.keys("C-d");
-    assert_eq!(h.eval("got"), r#"("a" "b" "<f7>" "C-M-7" "M-q" "s-q")"#);
+    assert_eq!(h.eval("got"), r#"("a" "b" "<f7>" "C-M-7" "M-]" "s-q")"#);
 }
 
 #[test]

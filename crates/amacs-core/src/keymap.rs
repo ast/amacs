@@ -125,17 +125,20 @@ impl Keymap {
     }
 }
 
-/// Looks `keys` up in several keymaps, earlier ones taking precedence. The
-/// sequence is a prefix if it is one in any map that does not bind it
-/// outright. A single key that no map binds goes to the first default
+/// Looks `keys` up in several keymaps, earlier ones taking precedence: the
+/// sequence is what the first map that knows it says, a command or a
+/// prefix, so that a mode can make a prefix of a key that is a command
+/// elsewhere. A single key that no map binds goes to the first default
 /// binding, if a map has one.
 pub fn lookup_in<'a>(maps: &[&'a Keymap], keys: &[Key]) -> Lookup<'a> {
     let mut result = Lookup::Unbound;
     for map in maps {
         match map.lookup(keys) {
-            Lookup::Command(name) => return Lookup::Command(name),
+            Lookup::Command(name) if result == Lookup::Unbound => {
+                return Lookup::Command(name);
+            }
+            Lookup::Command(_) | Lookup::Unbound => {}
             Lookup::Prefix => result = Lookup::Prefix,
-            Lookup::Unbound => {}
         }
     }
     if result == Lookup::Unbound
@@ -217,6 +220,24 @@ mod tests {
         );
         mode.set_default(None);
         assert_eq!(lookup_in(&[&mode, &global], &keys("a")), Lookup::Unbound);
+    }
+
+    #[test]
+    fn a_prefix_in_an_earlier_map_wins_over_a_command_in_a_later_one() {
+        let mut mode = Keymap::new();
+        mode.bind_str("C-q C-k", "term-char-mode");
+        let mut global = Keymap::new();
+        global.bind_str("C-q", "quoted-insert");
+        let maps = [&mode, &global];
+        assert_eq!(lookup_in(&maps, &keys("C-q")), Lookup::Prefix);
+        assert_eq!(
+            lookup_in(&maps, &keys("C-q C-k")),
+            Lookup::Command("term-char-mode")
+        );
+        assert_eq!(
+            lookup_in(&[&global], &keys("C-q")),
+            Lookup::Command("quoted-insert")
+        );
     }
 
     #[test]
