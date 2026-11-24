@@ -46,18 +46,28 @@
   (when (member buffer (buffer-list))
     (%call-in-buffer buffer (lambda () (run-hooks name)))))
 
-;; The editor's entry point for saving while before-save-hook has functions.
-;; A function that fails is reported and the buffer is saved all the same.
+;; The editor's entry point for saving while before-save-hook has functions,
+;; and for saving to another host. A function that fails is reported and
+;; the buffer is saved all the same. A file on another host is written in
+;; the background, and the buffer is the current one only until that starts.
 (define (%save-buffer buffer path kill?)
-  (%call-in-buffer
-   buffer
-   (lambda ()
-     (let ((problem (guard (e (#t (if (error-object? e)
-                                      (error-object->string e)
-                                      (write->string e))))
-                      (run-hooks 'before-save-hook)
-                      #f)))
-       (%write-buffer path)
-       (when problem
-         (message "Saved, but before-save-hook failed: " problem))
-       (when kill? (kill-buffer))))))
+  (let* ((problem #f)
+         (sent (%call-in-buffer
+                buffer
+                (lambda ()
+                  (set! problem
+                        (guard (e (#t (if (error-object? e)
+                                          (error-object->string e)
+                                          (write->string e))))
+                          (run-hooks 'before-save-hook)
+                          #f))
+                  (if (file-remote? path)
+                      (begin (message "Writing " path "...")
+                             (%send-buffer path))
+                      (begin (%write-buffer path) #f))))))
+    (when sent
+      (let ((failed (await sent)))
+        (when (string? failed) (error failed))))
+    (when problem
+      (message "Saved, but before-save-hook failed: " problem))
+    (when kill? (kill-buffer buffer))))

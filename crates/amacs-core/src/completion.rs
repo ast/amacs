@@ -266,14 +266,45 @@ impl Session {
                 only_directories,
             } => {
                 let (dir, name) = split_path(input);
-                if listed.as_deref() != Some(dir) {
-                    *listed = Some(dir.to_owned());
+                let directory = crate::files::expand_typed_path(dir, base);
+                // At the root, what starts as the name of a host is
+                // completed to the hosts that `ssh` knows by name.
+                let hosts = directory == Path::new("/") && name.starts_with("ssh:");
+                let key = if hosts {
+                    format!("{dir}ssh:")
+                } else {
+                    dir.to_owned()
+                };
+                if listed.as_deref() != Some(key.as_str()) {
+                    *listed = Some(key);
                     self.matcher.restart(true);
                     let injector = self.matcher.injector();
-                    for candidate in list_directory(&crate::files::expand_path(dir, base)) {
-                        if !*only_directories || candidate.text.ends_with('/') {
-                            inject(&injector, candidate);
+                    if hosts {
+                        for host in amacs_remote::ssh_hosts() {
+                            inject(&injector, Candidate::new(format!("ssh:{host}:")));
                         }
+                    }
+                    let only_directories = *only_directories;
+                    let remote = file_system::is_remote(&directory);
+                    let list = move || {
+                        for candidate in list_directory(&directory) {
+                            if !only_directories || candidate.text.ends_with('/') {
+                                inject(&injector, candidate);
+                            }
+                        }
+                    };
+                    if remote {
+                        // A directory on another host is listed when the
+                        // host has answered, which the prompt does not
+                        // wait for. Names that come after another
+                        // directory was asked for go nowhere.
+                        let waker = self.waker.clone();
+                        std::thread::spawn(move || {
+                            file_system::patiently(list);
+                            waker();
+                        });
+                    } else {
+                        list();
                     }
                     // The matcher still holds the pattern for the old directory.
                     self.pattern = None;

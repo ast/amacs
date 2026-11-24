@@ -7,13 +7,21 @@
 //! editor keeps for itself on this machine does not come here: auto-save
 //! data, histories, dictionaries, the Scheme that it loads.
 //!
-//! For now every path is a local one.
+//! A name in tramp's syntax, `/ssh:host:/path`, is a file on another
+//! host, and the functions here take and give such names. They are for
+//! the thread that owns the editor, so they wait for a host a few seconds
+//! at most and then fail as timed out. Work that may take the time it
+//! takes, on a thread of its own, is wrapped in [`patiently`]; reading
+//! and writing the contents of a remote file belongs there.
 
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
-use amacs_remote::Sftp;
+use std::cell::Cell;
+use std::time::Duration;
+
+use amacs_remote::{Connections, Location, Remote, Sftp};
 pub use amacs_remote::{DirEntry, FileType, Metadata};
 
 /// Files somewhere, by their paths there.
@@ -222,14 +230,88 @@ impl FileSystem for Sftp {
     }
 }
 
+/// How long the thread that owns the editor waits for a host.
+const HURRY: Duration = Duration::from_secs(3);
+
+thread_local! {
+    static PATIENT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `action` with what it asks of other hosts waiting as long as a
+/// slow line needs, not the few seconds that the editor's own thread can
+/// spare. For threads that do work in the background.
+pub fn patiently<T>(action: impl FnOnce() -> T) -> T {
+    let before = PATIENT.replace(true);
+    let result = action();
+    PATIENT.set(before);
+    result
+}
+
+/// The host and path that a name stands for, if it is the name of a file
+/// on another host; `None` for a local name. A name that starts as a
+/// remote one and is not whole is an error.
+pub fn remote(path: &Path) -> io::Result<Option<Remote>> {
+    // What is not UTF-8 is not tramp's syntax.
+    let Some(name) = path.to_str() else {
+        return Ok(None);
+    };
+    match Location::parse(name) {
+        Ok(Location::Remote(remote)) => Ok(Some(remote)),
+        Ok(Location::Local(_)) => Ok(None),
+        Err(error) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            error.to_string(),
+        )),
+    }
+}
+
+/// Whether a name is that of a file on another host, or starts as one.
+pub fn is_remote(path: &Path) -> bool {
+    !matches!(remote(path), Ok(None))
+}
+
+/// Whether a name is that of a file on a host that there is a working
+/// connection to, as far as is known without asking the host.
+pub fn is_connected(path: &Path) -> bool {
+    matches!(remote(path), Ok(Some(remote)) if Connections::global().is_connected(&remote))
+}
+
+/// The hosts that files have been asked of, each as the start of the
+/// names of its files, with how its connection is.
+pub fn hosts() -> Vec<(String, String)> {
+    Connections::global().hosts()
+}
+
+/// Ends the connection to a host, named as [`hosts`] names it. Returns
+/// whether the host was known.
+pub fn disconnect(host: &str) -> bool {
+    Connections::global().disconnect(host)
+}
+
+/// Runs `action` with the files of a host, connecting to it if need be.
+fn on_host<T>(remote: &Remote, action: impl FnOnce(&Sftp) -> io::Result<T>) -> io::Result<T> {
+    let run = || action(&*Connections::global().sftp(remote)?);
+    if PATIENT.get() {
+        run()
+    } else {
+        amacs_remote::with_patience(HURRY, run)
+    }
+}
+
 /// Runs `action` with the file system that holds `path`, and the path
-/// there. This is where a name of a file on another host will find its
-/// connection.
+/// there.
 fn on<T>(
     path: &Path,
     action: impl FnOnce(&dyn FileSystem, &Path) -> io::Result<T>,
 ) -> io::Result<T> {
-    action(&Local, path)
+    match remote(path)? {
+        Some(remote) => on_host(&remote, |sftp| action(sftp, remote.host_path())),
+        // `/:` in front of a local name is not part of it.
+        None => match path.to_str().and_then(|name| name.strip_prefix("/:")) {
+            Some(quoted) => action(&Local, Path::new(quoted)),
+            None => action(&Local, path),
+        },
+    }
 }
 
 /// What a file is, following links.
@@ -261,7 +343,12 @@ pub fn read_link(path: &Path) -> io::Result<PathBuf> {
 /// The absolute path of a file, with links followed. See
 /// [`FileSystem::canonicalize`] for a file that is not there.
 pub fn canonicalize(path: &Path) -> io::Result<PathBuf> {
-    on(path, |files, path| files.canonicalize(path))
+    match remote(path)? {
+        Some(remote) => on_host(&remote, |sftp| {
+            Ok(remote.name_of(&sftp.canonicalize(remote.host_path())?))
+        }),
+        None => on(path, |files, path| files.canonicalize(path)),
+    }
 }
 
 /// Hands a file, open for reading from its start, to `reader`.
@@ -311,7 +398,17 @@ pub fn read_dir(path: &Path) -> io::Result<Vec<DirEntry>> {
 /// Gives a file or directory another name on the same file system, in
 /// place of whatever file has that name already.
 pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
-    on(from, |files, from| files.rename(from, to))
+    let to = match (remote(from)?, remote(to)?) {
+        (Some(from), Some(to)) if from.hops == to.hops => to.host_path().to_owned(),
+        (None, None) => to.to_owned(),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::CrossesDevices,
+                "a file is not renamed from one host to another",
+            ));
+        }
+    };
+    on(from, |files, from| files.rename(from, &to))
 }
 
 /// Deletes a file or a link; a directory with everything in it.
@@ -440,6 +537,51 @@ mod tests {
         let left: Vec<_> = files.read_dir(root).unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].name, "kept");
+    }
+
+    #[test]
+    fn names_of_remote_files_reach_their_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let there = |name: &str| PathBuf::from(format!("/sftp-test::{}/{name}", root.display()));
+
+        assert!(is_remote(&there("file")));
+        assert!(is_remote(Path::new("/ssh:half")));
+        assert!(!is_remote(&root));
+        assert!(!is_remote(Path::new("/:/ssh:odd:/name")));
+
+        write(&there("file"), b"over there").unwrap();
+        assert_eq!(fs::read(root.join("file")).unwrap(), b"over there");
+        assert!(is_connected(&there("file")));
+        assert!(exists(&there("file")) && !is_dir(&there("file")));
+        assert_eq!(read_to_string(&there("file")).unwrap(), "over there");
+        write_atomically(&there("file"), |out| out.write_all(b"again")).unwrap();
+        assert_eq!(metadata(&there("file")).unwrap().len, 5);
+
+        // Names that come back are names of files on that host.
+        symlink("file", root.join("link")).unwrap();
+        assert_eq!(canonicalize(&there("link")).unwrap(), there("file"));
+        assert_eq!(read_link(&there("link")).unwrap(), Path::new("file"));
+
+        mkdir(&there("sub/deeper")).unwrap();
+        rename(&there("file"), &there("sub/moved")).unwrap();
+        assert!(root.join("sub/moved").exists());
+        let across = rename(&there("sub/moved"), &root.join("back")).unwrap_err();
+        assert_eq!(across.kind(), io::ErrorKind::CrossesDevices);
+        let names: Vec<_> = read_dir(&there("")).unwrap();
+        assert_eq!(names.len(), 2);
+        delete(&there("sub")).unwrap();
+        assert!(!root.join("sub").exists());
+
+        // A local name that looks remote, marked as local.
+        let odd = PathBuf::from(format!("/:{}/ssh:odd", root.display()));
+        write(&odd, b"here").unwrap();
+        assert_eq!(fs::read(root.join("ssh:odd")).unwrap(), b"here");
+
+        let half = metadata(Path::new("/ssh:half")).unwrap_err();
+        assert_eq!(half.kind(), io::ErrorKind::InvalidInput);
+        let unreached = metadata(Path::new("/sudo::/etc")).unwrap_err();
+        assert_eq!(unreached.kind(), io::ErrorKind::Unsupported);
     }
 
     #[test]

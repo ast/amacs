@@ -73,6 +73,45 @@ key is an error."
           [(= (string-length key) 1) (string-ref key 0)]
           [else (error "That is not a character:" key)])))
 
+;; Files on other hosts
+;;
+;; Their names are tramp's, /ssh:user@host:/path. Reading and writing them
+;; takes the time that the way there takes, so both happen in the background
+;; and are waited for here, while the editor goes on working.
+
+;; The editor comes here to visit a file on another host. With `ask?`, a
+;; person asked for it at a prompt: what they type meanwhile waits for the
+;; file, and a file above large-file-threshold is asked about, which is
+;; else an error unless `anyway`.
+(define (%visit-remote path anyway ask?)
+  (message "Reading " path "...")
+  (let* ((found (await (%fetch-file path anyway ask?)))
+         (what (car found)))
+    (cond ((eq? what 'buffer)
+           (switch-to-buffer (cadr found))
+           (message (or (caddr found) "")))
+          ((eq? what 'directory)
+           (message "")
+           (%visit-directory (cadr found)))
+          ((and (eq? what 'large) ask?)
+           (if (y-or-n? (string-append (cadr found) "; open it anyway?"))
+               (%visit-remote path #t #t)
+               (message "")))
+          ((eq? what 'large)
+           (error (string-append (cadr found) ", above large-file-threshold")))
+          (else (error (cadr found))))))
+
+(define (find-file name . anyway)
+  "Visits a file in the selected window. A file that is not text is an
+error, and so is one above the size of the large-file-threshold option,
+unless the second argument is given and not #f. A file on another host,
+named as tramp names it, /ssh:user@host:/path, is read while the editor
+goes on working, and is there when this returns."
+  (let ((anyway (and (pair? anyway) (car anyway))))
+    (if (file-remote? name)
+        (%visit-remote (expand-file-name name) anyway #f)
+        (%find-file name anyway))))
+
 (define (sleep-for milliseconds)
   "Waits, while the editor goes on working."
   (await (%timer milliseconds)))

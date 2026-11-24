@@ -225,7 +225,7 @@ impl Editor {
     /// not done to it.
     pub fn start_process(&mut self, program: &str, args: &[String]) -> CmdResult {
         use std::os::unix::process::CommandExt;
-        let directory = self.working_directory().to_owned();
+        let directory = self.local_directory()?;
         let environment = match self.environment(&directory) {
             Some(EnvState::Ready(environment)) => environment,
             _ => Vec::new(),
@@ -263,7 +263,20 @@ impl Editor {
     pub fn process_promise(&mut self, program: &str, args: &[String], input: String) -> u64 {
         let id = self.new_promise();
         self.await_program(id);
-        let directory = self.working_directory().to_owned();
+        let directory = match self.local_directory() {
+            Ok(directory) => directory,
+            // A program that could not be run, to those who wait for it.
+            Err(error) => {
+                let _ = self.extend.sender.send(Finished {
+                    promise: id,
+                    status: None,
+                    stdout: String::new(),
+                    stderr: error.to_string(),
+                });
+                (self.waker)();
+                return id;
+            }
+        };
         let environment = match self.environment(&directory) {
             Some(EnvState::Ready(environment)) => environment,
             _ => Vec::new(),

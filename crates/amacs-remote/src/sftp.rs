@@ -3,20 +3,22 @@
 //!
 //! The client speaks through two pipes and does not care what is at their
 //! other end: `ssh -s host sftp`, `sudo sftp-server`, or `sftp-server`
-//! itself in the tests. One request is answered before the next is sent,
-//! except when reading and writing the contents of a file, where a few
-//! are under way at once so that a slow line costs one wait for several
-//! pieces.
+//! itself in the tests. Requests carry numbers and so do their answers,
+//! so that threads share a connection without waiting for each other, and
+//! the contents of a file are read and written a few pieces at a time: a
+//! slow line costs one wait for several pieces.
 //!
-//! Nothing here gives up on a host that has stopped answering; whoever
-//! owns the program at the other end ends it, and the call then fails.
+//! Nobody waits for a host that has stopped answering: a request gives up
+//! after the patience of its thread, see [`with_patience`].
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::metadata::{DirEntry, FileType, Metadata};
@@ -242,22 +244,49 @@ impl<'a> Reply<'a> {
     }
 }
 
+/// How long a request waits for its answer, unless [`with_patience`]
+/// says otherwise: long enough for a slow line, short enough to notice a
+/// dead one.
+const PATIENCE: Duration = Duration::from_secs(30);
+
+thread_local! {
+    static PATIENCE_HERE: std::cell::Cell<Duration> = const { std::cell::Cell::new(PATIENCE) };
+}
+
+/// Runs `action` with requests of this thread waiting at most `patience`
+/// for an answer, and for a connection to be made. A request that waits
+/// longer fails as timed out; the connection stays, and the answer is
+/// thrown away when it comes.
+pub fn with_patience<T>(patience: Duration, action: impl FnOnce() -> T) -> T {
+    let before = PATIENCE_HERE.replace(patience);
+    let result = action();
+    PATIENCE_HERE.set(before);
+    result
+}
+
+/// How long requests of this thread wait.
+pub(crate) fn patience() -> Duration {
+    PATIENCE_HERE.get()
+}
+
 /// The program at the other end, when this client started it.
 struct Program {
-    child: Child,
+    child: Mutex<Child>,
     /// The end of what it has written to its standard error: where `ssh`
     /// says why it could not connect.
-    complaints: Arc<Mutex<Vec<u8>>>,
+    complaints: Mutex<Vec<u8>>,
 }
 
 impl Program {
     /// What the program said last, once it has ended, or shortly after
     /// if it does not end.
-    fn last_words(&mut self) -> Option<String> {
+    fn last_words(&self) -> Option<String> {
         for _ in 0..20 {
-            if matches!(self.child.try_wait(), Ok(Some(_)) | Err(_)) {
+            let mut child = self.child.lock().unwrap_or_else(PoisonError::into_inner);
+            if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
                 break;
             }
+            drop(child);
             std::thread::sleep(Duration::from_millis(10));
         }
         // The thread that reads may be a moment behind the exit.
@@ -270,131 +299,64 @@ impl Program {
         let last = text.lines().rev().find(|line| !line.trim().is_empty())?;
         Some(last.trim().to_owned())
     }
+
+    fn end(&self) {
+        let mut child = self.child.lock().unwrap_or_else(PoisonError::into_inner);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
-struct Connection {
-    input: Box<dyn Read + Send>,
-    output: Box<dyn Write + Send>,
-    program: Option<Program>,
-    next_id: u32,
-    /// Set when the pipes failed or carried something that is not SFTP:
-    /// requests and answers no longer pair up, so nothing more is sent.
-    lost: bool,
-    posix_rename: bool,
-    fsync: bool,
+/// Says why the pipes failed, in the words of the program if it left any.
+fn explain(program: Option<&Program>, error: io::Error) -> io::Error {
+    match program.and_then(Program::last_words) {
+        Some(words) => io::Error::new(error.kind(), words),
+        None if error.kind() == io::ErrorKind::UnexpectedEof => io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            "the connection to the host closed",
+        ),
+        None => error,
+    }
 }
 
-impl Connection {
-    fn next_id(&mut self) -> u32 {
-        self.next_id = self.next_id.wrapping_add(1);
-        self.next_id
+/// Reads one answer: its kind and the rest of it.
+fn read_packet(input: &mut dyn Read) -> io::Result<(u8, Vec<u8>)> {
+    let mut length = [0; 4];
+    input.read_exact(&mut length)?;
+    let size = u32::from_be_bytes(length) as usize;
+    if size == 0 || size > LONGEST_PACKET {
+        // A shell that prints a greeting, most likely.
+        let start: String = length
+            .iter()
+            .filter(|byte| byte.is_ascii_graphic() || **byte == b' ')
+            .map(|byte| char::from(*byte))
+            .collect();
+        return Err(malformed(&format!("it starts with {start:?}")));
     }
+    let mut body = vec![0; size];
+    input.read_exact(&mut body)?;
+    let kind = body.remove(0);
+    Ok((kind, body))
+}
 
-    /// Notes that the connection is of no more use, and says why in the
-    /// words of the program if it left any.
-    fn lose(&mut self, error: io::Error) -> io::Error {
-        self.lost = true;
-        match self.program.as_mut().and_then(Program::last_words) {
-            Some(words) => io::Error::new(error.kind(), words),
-            None if error.kind() == io::ErrorKind::UnexpectedEof => io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "the connection to the host closed",
-            ),
-            None => error,
-        }
-    }
+/// An answer on its way to whoever asked: the number of the request, the
+/// kind, and the rest.
+type Answer = (u32, u8, Vec<u8>);
 
-    fn send(&mut self, packets: &[u8]) -> io::Result<()> {
-        if self.lost {
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "the connection to the host is lost",
-            ));
-        }
-        let sent = self
-            .output
-            .write_all(packets)
-            .and_then(|()| self.output.flush());
-        sent.map_err(|error| self.lose(error))
-    }
+/// What the thread that reads answers shares with those who ask.
+#[derive(Default)]
+struct Waiting {
+    /// Who waits for the answer to which request.
+    requests: HashMap<u32, mpsc::Sender<Answer>>,
+    /// Why the connection is of no more use, once it is not.
+    lost: Option<(io::ErrorKind, String)>,
+}
 
-    /// The next answer: its kind, and the rest of it with the number of
-    /// the request in front.
-    fn receive(&mut self) -> io::Result<(u8, Vec<u8>)> {
-        let mut read = || {
-            let mut length = [0; 4];
-            self.input.read_exact(&mut length)?;
-            let size = u32::from_be_bytes(length) as usize;
-            if size == 0 || size > LONGEST_PACKET {
-                // A shell that prints a greeting, most likely.
-                let start: String = length
-                    .iter()
-                    .filter(|byte| byte.is_ascii_graphic() || **byte == b' ')
-                    .map(|byte| char::from(*byte))
-                    .collect();
-                return Err(malformed(&format!("it starts with {start:?}")));
-            }
-            let mut body = vec![0; size];
-            self.input.read_exact(&mut body)?;
-            let kind = body.remove(0);
-            Ok((kind, body))
-        };
-        read().map_err(|error| self.lose(error))
-    }
-
-    /// Sends one request and returns its answer, without the number.
-    fn request(&mut self, build: impl FnOnce(u32) -> Packet) -> io::Result<(u8, Vec<u8>)> {
-        let id = self.next_id();
-        self.send(&build(id).finish())?;
-        let (kind, mut body) = self.receive()?;
-        let answered = Reply(&body).u32().map_err(|error| self.lose(error))?;
-        if answered != id {
-            return Err(self.lose(malformed("it answers a request that was not made")));
-        }
-        body.drain(..4);
-        Ok((kind, body))
-    }
-
-    /// A request that is answered with success or an error and no more.
-    fn command(&mut self, build: impl FnOnce(u32) -> Packet) -> io::Result<()> {
-        let (kind, body) = self.request(build)?;
-        match status(kind, &body)? {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
-    }
-
-    fn handle(&mut self, build: impl FnOnce(u32) -> Packet) -> io::Result<Vec<u8>> {
-        let (kind, body) = self.request(build)?;
-        match kind {
-            HANDLE => Ok(Reply(&body).bytes()?.to_owned()),
-            _ => Err(refusal(kind, &body)),
-        }
-    }
-
-    fn attrs(&mut self, kind: u8, path: &Path) -> io::Result<Attrs> {
-        let (kind, body) = self.request(|id| Packet::new(kind, id).path(path))?;
-        match kind {
-            ATTRS => Reply(&body).attrs(),
-            _ => Err(refusal(kind, &body)),
-        }
-    }
-
-    /// A request that is answered with one name.
-    fn name(&mut self, kind: u8, path: &Path) -> io::Result<PathBuf> {
-        let (kind, body) = self.request(|id| Packet::new(kind, id).path(path))?;
-        if kind != NAME {
-            return Err(refusal(kind, &body));
-        }
-        let mut reply = Reply(&body);
-        if reply.u32()? != 1 {
-            return Err(malformed("one name was asked for"));
-        }
-        Ok(PathBuf::from(OsString::from_vec(reply.bytes()?.to_owned())))
-    }
-
-    fn extended(&mut self, name: &str, build: impl FnOnce(Packet) -> Packet) -> io::Result<()> {
-        self.command(|id| build(Packet::new(EXTENDED, id).bytes(name.as_bytes())))
+/// The error for an answer that should have been something else.
+fn refusal(kind: u8, body: &[u8]) -> io::Error {
+    match status(kind, body) {
+        Ok(Some(error)) | Err(error) => error,
+        Ok(None) => malformed("it is success where something was asked for"),
     }
 }
 
@@ -407,21 +369,24 @@ fn status(kind: u8, body: &[u8]) -> io::Result<Option<io::Error>> {
     Reply(body).status()
 }
 
-/// The error for an answer that should have been something else.
-fn refusal(kind: u8, body: &[u8]) -> io::Error {
-    match status(kind, body) {
-        Ok(Some(error)) | Err(error) => error,
-        Ok(None) => malformed("it is success where something was asked for"),
-    }
-}
-
 /// A connection to the files of a host.
 ///
 /// Paths are those of the host. One that is not absolute is taken from
 /// the directory that the server started in, which is the home directory
 /// of the user there.
+///
+/// Threads share a connection, and their requests are under way at the
+/// same time. No call waits for the host longer than the patience of its
+/// thread, see [`with_patience`].
 pub struct Sftp {
-    connection: Mutex<Connection>,
+    waiting: Arc<Mutex<Waiting>>,
+    /// Bytes for the thread that writes them to the program, so that
+    /// nobody who asks waits for a pipe that is full.
+    outgoing: mpsc::Sender<Vec<u8>>,
+    next_id: AtomicU32,
+    program: Option<Arc<Program>>,
+    posix_rename: bool,
+    fsync: bool,
 }
 
 impl Sftp {
@@ -430,15 +395,7 @@ impl Sftp {
         input: impl Read + Send + 'static,
         output: impl Write + Send + 'static,
     ) -> io::Result<Self> {
-        Self::greet(Connection {
-            input: Box::new(input),
-            output: Box::new(output),
-            program: None,
-            next_id: 0,
-            lost: false,
-            posix_rename: false,
-            fsync: false,
-        })
+        Self::greet(Box::new(input), Box::new(output), None)
     }
 
     /// Starts a program that speaks SFTP on its standard input and
@@ -456,86 +413,244 @@ impl Sftp {
         else {
             return Err(io::Error::other("the program has no pipes"));
         };
-        let complaints = Arc::new(Mutex::new(Vec::new()));
-        let kept = Arc::clone(&complaints);
-        // Left to itself: it ends when the last holder of the pipe does.
+        let program = Arc::new(Program {
+            child: Mutex::new(child),
+            complaints: Mutex::new(Vec::new()),
+        });
+        let kept = Arc::downgrade(&program);
+        // Left to itself: it ends when the last holder of the pipe does,
+        // which may be a program that outlives this one.
         std::thread::Builder::new()
             .name("sftp-stderr".to_owned())
             .spawn(move || {
                 let mut piece = [0; 1024];
                 while let Ok(count @ 1..) = errors.read(&mut piece) {
-                    let mut kept = kept.lock().unwrap_or_else(PoisonError::into_inner);
+                    let Some(program) = kept.upgrade() else {
+                        break;
+                    };
+                    let mut kept = program
+                        .complaints
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
                     kept.extend(&piece[..count]);
                     let excess = kept.len().saturating_sub(4096);
                     kept.drain(..excess);
                 }
             })?;
-        Self::greet(Connection {
-            input: Box::new(input),
-            output: Box::new(output),
-            program: Some(Program { child, complaints }),
-            next_id: 0,
-            lost: false,
-            posix_rename: false,
-            fsync: false,
-        })
+        let greeted = Self::greet(Box::new(input), Box::new(output), Some(program.clone()));
+        if greeted.is_err() {
+            program.end();
+        }
+        greeted
     }
 
-    fn greet(mut connection: Connection) -> io::Result<Self> {
+    fn greet(
+        mut input: Box<dyn Read + Send>,
+        mut output: Box<dyn Write + Send>,
+        program: Option<Arc<Program>>,
+    ) -> io::Result<Self> {
+        let why = |error| explain(program.as_deref(), error);
         // The greeting has a version where requests have a number.
-        connection.send(&Packet::new(INIT, VERSION).finish())?;
-        let (kind, body) = connection.receive()?;
+        output
+            .write_all(&Packet::new(INIT, VERSION).finish())
+            .and_then(|()| output.flush())
+            .map_err(why)?;
+        let (kind, body) = read_packet(&mut input).map_err(why)?;
         if kind != VERSION_REPLY {
-            return Err(connection.lose(malformed("it is no greeting")));
+            return Err(malformed("it is no greeting"));
         }
         let mut reply = Reply(&body);
         let version = reply.u32()?;
         if version < VERSION {
-            return Err(connection.lose(io::Error::new(
+            return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 format!("the host speaks version {version} of SFTP, which is too old"),
-            )));
+            ));
         }
+        let (mut posix_rename, mut fsync) = (false, false);
         while let (Ok(name), Ok(_)) = (reply.bytes(), reply.bytes()) {
-            connection.posix_rename |= name == POSIX_RENAME.as_bytes();
-            connection.fsync |= name == FSYNC.as_bytes();
+            posix_rename |= name == POSIX_RENAME.as_bytes();
+            fsync |= name == FSYNC.as_bytes();
         }
+
+        let waiting = Arc::new(Mutex::new(Waiting::default()));
+        let (outgoing, to_write) = mpsc::channel::<Vec<u8>>();
+        // Ends when the client is dropped, and the program's input with
+        // it, which ends a server.
+        std::thread::Builder::new()
+            .name("sftp-write".to_owned())
+            .spawn(move || {
+                for bytes in to_write {
+                    if output
+                        .write_all(&bytes)
+                        .and_then(|()| output.flush())
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })?;
+        let (shared, ended) = (Arc::clone(&waiting), program.clone());
+        // Ends when the program closes its output.
+        std::thread::Builder::new()
+            .name("sftp-read".to_owned())
+            .spawn(move || {
+                let error = loop {
+                    match read_packet(&mut input) {
+                        Ok((kind, mut body)) if body.len() >= 4 => {
+                            let id = u32::from_be_bytes([body[0], body[1], body[2], body[3]]);
+                            body.drain(..4);
+                            let mut waiting = shared.lock().unwrap_or_else(PoisonError::into_inner);
+                            // An answer that nobody waits for any more
+                            // came too late.
+                            if let Some(asker) = waiting.requests.remove(&id) {
+                                let _ = asker.send((id, kind, body));
+                            }
+                        }
+                        Ok(_) => break malformed("it ends early"),
+                        Err(error) => break error,
+                    }
+                };
+                let error = explain(ended.as_deref(), error);
+                let mut waiting = shared.lock().unwrap_or_else(PoisonError::into_inner);
+                waiting.lost = Some((error.kind(), error.to_string()));
+                // Those who wait see that nobody will answer.
+                waiting.requests.clear();
+            })?;
         Ok(Self {
-            connection: Mutex::new(connection),
+            waiting,
+            outgoing,
+            next_id: AtomicU32::new(0),
+            program,
+            posix_rename,
+            fsync,
         })
     }
 
-    fn lock(&self) -> MutexGuard<'_, Connection> {
-        // A panic between a request and its answer leaves them out of
-        // step.
-        let mut connection = self
-            .connection
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if self.connection.is_poisoned() {
-            connection.lost = true;
+    /// Whether the connection is of no more use: the program ended, or
+    /// what it wrote was not SFTP.
+    pub fn is_lost(&self) -> bool {
+        let waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+        waiting.lost.is_some()
+    }
+
+    fn next_id(&self) -> u32 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Sends requests that are already put together, with these numbers,
+    /// and returns their answers in the order of the numbers.
+    fn exchange(&self, ids: &[u32], requests: Vec<u8>) -> io::Result<Vec<(u8, Vec<u8>)>> {
+        let (asker, answers) = mpsc::channel();
+        {
+            let mut waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+            if waiting.lost.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "the connection to the host is lost",
+                ));
+            }
+            for id in ids {
+                waiting.requests.insert(*id, asker.clone());
+            }
         }
-        connection
+        drop(asker);
+        // If the writer is gone, so is the reader soon, and the wait
+        // below ends.
+        let _ = self.outgoing.send(requests);
+        let patience = patience();
+        let mut ordered: Vec<Option<(u8, Vec<u8>)>> = vec![None; ids.len()];
+        for _ in ids {
+            match answers.recv_timeout(patience) {
+                Ok((id, kind, body)) => {
+                    let place = ids.iter().position(|asked| *asked == id);
+                    ordered[place.expect("only what was asked is answered")] = Some((kind, body));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let mut waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+                    for id in ids {
+                        waiting.requests.remove(id);
+                    }
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "the host is not answering",
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+                    return Err(match &waiting.lost {
+                        Some((kind, why)) => io::Error::new(*kind, why.clone()),
+                        None => io::Error::new(
+                            io::ErrorKind::ConnectionAborted,
+                            "the connection to the host closed",
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(ordered.into_iter().flatten().collect())
+    }
+
+    /// Sends one request and returns its answer.
+    fn request(&self, build: impl FnOnce(u32) -> Packet) -> io::Result<(u8, Vec<u8>)> {
+        let id = self.next_id();
+        let mut answers = self.exchange(&[id], build(id).finish())?;
+        answers.pop().ok_or_else(|| malformed("it is missing"))
+    }
+
+    /// A request that is answered with success or an error and no more.
+    fn command(&self, build: impl FnOnce(u32) -> Packet) -> io::Result<()> {
+        let (kind, body) = self.request(build)?;
+        match status(kind, &body)? {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn attrs(&self, kind: u8, path: &Path) -> io::Result<Attrs> {
+        let (kind, body) = self.request(|id| Packet::new(kind, id).path(path))?;
+        match kind {
+            ATTRS => Reply(&body).attrs(),
+            _ => Err(refusal(kind, &body)),
+        }
+    }
+
+    /// A request that is answered with one name.
+    fn name(&self, kind: u8, path: &Path) -> io::Result<PathBuf> {
+        let (kind, body) = self.request(|id| Packet::new(kind, id).path(path))?;
+        if kind != NAME {
+            return Err(refusal(kind, &body));
+        }
+        let mut reply = Reply(&body);
+        if reply.u32()? != 1 {
+            return Err(malformed("one name was asked for"));
+        }
+        Ok(PathBuf::from(OsString::from_vec(reply.bytes()?.to_owned())))
+    }
+
+    fn extended(&self, name: &str, build: impl FnOnce(Packet) -> Packet) -> io::Result<()> {
+        self.command(|id| build(Packet::new(EXTENDED, id).bytes(name.as_bytes())))
     }
 
     /// What a file is, following links.
     pub fn metadata(&self, path: &Path) -> io::Result<Metadata> {
-        Ok(self.lock().attrs(STAT, path)?.metadata())
+        Ok(self.attrs(STAT, path)?.metadata())
     }
 
     /// What a name is: of a link, the link itself.
     pub fn symlink_metadata(&self, path: &Path) -> io::Result<Metadata> {
-        Ok(self.lock().attrs(LSTAT, path)?.metadata())
+        Ok(self.attrs(LSTAT, path)?.metadata())
     }
 
     /// Where a link points.
     pub fn read_link(&self, path: &Path) -> io::Result<PathBuf> {
-        self.lock().name(READLINK, path)
+        self.name(READLINK, path)
     }
 
-    /// The absolute path of a file, with links followed.
+    /// The absolute path of a file, with links followed. OpenSSH gives a
+    /// path also when the last part of it is not there.
     pub fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        self.lock().name(REALPATH, path)
+        self.name(REALPATH, path)
     }
 
     /// What a directory holds, without `.` and `..`, in no order.
@@ -543,9 +658,7 @@ impl Sftp {
         let handle = self.open_with(|id| Packet::new(OPENDIR, id).path(path))?;
         let mut entries = Vec::new();
         loop {
-            let (kind, body) = self
-                .lock()
-                .request(|id| Packet::new(READDIR, id).bytes(&handle.id))?;
+            let (kind, body) = self.request(|id| Packet::new(READDIR, id).bytes(&handle.id))?;
             if kind != NAME {
                 match refusal(kind, &body) {
                     error if error.kind() == io::ErrorKind::UnexpectedEof => break,
@@ -633,8 +746,7 @@ impl Sftp {
                 self.open_with(|id| Packet::new(OPEN, id).path(&temp).u32(flags).attrs(mode))?;
             // The mode given on opening is cut down by the umask there.
             if mode.is_some() {
-                self.lock()
-                    .command(|id| Packet::new(FSETSTAT, id).bytes(&handle.id).attrs(mode))?;
+                self.command(|id| Packet::new(FSETSTAT, id).bytes(&handle.id).attrs(mode))?;
             }
             let mut writer = FileWriter::new(handle);
             content(&mut writer)?;
@@ -651,26 +763,16 @@ impl Sftp {
     /// Gives a file or directory another name, in place of whatever file
     /// has that name already.
     pub fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        let mut connection = self.lock();
-        if connection.posix_rename {
-            return connection.extended(POSIX_RENAME, |packet| packet.path(from).path(to));
+        if self.posix_rename {
+            return self.extended(POSIX_RENAME, |packet| packet.path(from).path(to));
         }
         // The rename of version 3 does not replace. Without the extension
         // there is a moment with no file of the new name.
-        let rename = |connection: &mut Connection| {
-            connection.command(|id| Packet::new(RENAME, id).path(from).path(to))
-        };
-        match rename(&mut connection) {
-            Err(error)
-                if !connection.lost
-                    && connection
-                        .attrs(LSTAT, to)
-                        .is_ok_and(|attrs| !attrs.metadata().is_dir()) =>
-            {
-                connection
-                    .command(|id| Packet::new(REMOVE, id).path(to))
-                    .map_err(|_| error)?;
-                rename(&mut connection)
+        let rename = || self.command(|id| Packet::new(RENAME, id).path(from).path(to));
+        match rename() {
+            Err(error) if self.symlink_metadata(to).is_ok_and(|meta| !meta.is_dir()) => {
+                self.remove_file(to).map_err(|_| error)?;
+                rename()
             }
             result => result,
         }
@@ -678,12 +780,12 @@ impl Sftp {
 
     /// Deletes a file or a link.
     pub fn remove_file(&self, path: &Path) -> io::Result<()> {
-        self.lock().command(|id| Packet::new(REMOVE, id).path(path))
+        self.command(|id| Packet::new(REMOVE, id).path(path))
     }
 
     /// Deletes a directory that holds nothing.
     pub fn remove_dir(&self, path: &Path) -> io::Result<()> {
-        self.lock().command(|id| Packet::new(RMDIR, id).path(path))
+        self.command(|id| Packet::new(RMDIR, id).path(path))
     }
 
     /// Deletes a directory and everything in it. Links in it are deleted,
@@ -714,9 +816,7 @@ impl Sftp {
         {
             self.create_dir_all(parent)?;
         }
-        let made = self
-            .lock()
-            .command(|id| Packet::new(MKDIR, id).path(path).attrs(None));
+        let made = self.command(|id| Packet::new(MKDIR, id).path(path).attrs(None));
         match made {
             // Someone else may have made it meanwhile.
             Err(_) if self.metadata(path).is_ok_and(|meta| meta.is_dir()) => Ok(()),
@@ -725,23 +825,24 @@ impl Sftp {
     }
 
     fn open_with(&self, build: impl FnOnce(u32) -> Packet) -> io::Result<Handle<'_>> {
-        let id = self.lock().handle(build)?;
-        Ok(Handle { sftp: self, id })
+        let (kind, body) = self.request(build)?;
+        match kind {
+            HANDLE => Ok(Handle {
+                sftp: self,
+                id: Reply(&body).bytes()?.to_owned(),
+            }),
+            _ => Err(refusal(kind, &body)),
+        }
     }
 }
 
 impl Drop for Sftp {
     fn drop(&mut self) {
-        let connection = self
-            .connection
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner);
-        // A server ends when its input does; a program that does not is
-        // ended.
-        connection.output = Box::new(io::sink());
-        if let Some(program) = &mut connection.program {
-            let _ = program.child.kill();
-            let _ = program.child.wait();
+        // A server ends when its input does, which it does when the
+        // thread that writes sees this client gone; a program that does
+        // not end by itself is ended.
+        if let Some(program) = &self.program {
+            program.end();
         }
     }
 }
@@ -757,7 +858,6 @@ impl Handle<'_> {
     fn close(mut self) -> io::Result<()> {
         let id = std::mem::take(&mut self.id);
         self.sftp
-            .lock()
             .command(|request| Packet::new(CLOSE, request).bytes(&id))
     }
 }
@@ -768,7 +868,6 @@ impl Drop for Handle<'_> {
             let id = std::mem::take(&mut self.id);
             let _ = self
                 .sftp
-                .lock()
                 .command(|request| Packet::new(CLOSE, request).bytes(&id));
         }
     }
@@ -794,11 +893,11 @@ impl FileReader<'_> {
     fn fill(&mut self) -> io::Result<()> {
         self.buffer.clear();
         self.taken = 0;
-        let mut connection = self.handle.sftp.lock();
+        let sftp = self.handle.sftp;
         let mut requests = Vec::new();
         let mut ids = Vec::new();
         for piece in 0..self.pieces {
-            let id = connection.next_id();
+            let id = sftp.next_id();
             ids.push(id);
             requests.extend(
                 Packet::new(READ, id)
@@ -808,32 +907,15 @@ impl FileReader<'_> {
                     .finish(),
             );
         }
-        connection.send(&requests)?;
-        // Answers may come in any order.
-        let mut answers: Vec<Option<(u8, Vec<u8>)>> = vec![None; ids.len()];
-        for _ in &ids {
-            let (kind, body) = connection.receive()?;
-            let id = Reply(&body).u32().map_err(|error| connection.lose(error))?;
-            match ids.iter().position(|asked| *asked == id) {
-                Some(piece) if answers[piece].is_none() => answers[piece] = Some((kind, body)),
-                _ => {
-                    return Err(
-                        connection.lose(malformed("it answers a request that was not made"))
-                    );
-                }
-            }
-        }
-        drop(connection);
-        for (kind, body) in answers.into_iter().flatten() {
-            let body = &body[4..];
+        for (kind, body) in sftp.exchange(&ids, requests)? {
             if kind != DATA {
-                match refusal(kind, body) {
+                match refusal(kind, &body) {
                     error if error.kind() == io::ErrorKind::UnexpectedEof => self.ended = true,
                     error => return Err(error),
                 }
                 break;
             }
-            let data = Reply(body).bytes()?;
+            let data = Reply(&body).bytes()?;
             self.buffer.extend(data);
             self.offset += data.len() as u64;
             // After a piece that came short, the pieces that follow are
@@ -885,11 +967,11 @@ impl<'a> FileWriter<'a> {
         if self.pending.is_empty() {
             return Ok(());
         }
-        let mut connection = self.handle.sftp.lock();
+        let sftp = self.handle.sftp;
         let mut requests = Vec::with_capacity(self.pending.len() + 64 * PIECES_AT_ONCE);
         let mut ids = Vec::new();
         for piece in self.pending.chunks(PIECE) {
-            let id = connection.next_id();
+            let id = sftp.next_id();
             ids.push(id);
             requests.extend(
                 Packet::new(WRITE, id)
@@ -901,31 +983,22 @@ impl<'a> FileWriter<'a> {
             self.offset += piece.len() as u64;
         }
         self.pending.clear();
-        connection.send(&requests)?;
-        // Every answer is read, so that the next request meets its own.
-        let mut failure = None;
-        for _ in 0..ids.len() {
-            let (kind, body) = connection.receive()?;
-            let id = Reply(&body).u32().map_err(|error| connection.lose(error))?;
-            if !ids.contains(&id) {
-                return Err(connection.lose(malformed("it answers a request that was not made")));
-            }
-            if let Some(error) = status(kind, &body[4..]).map_err(|error| connection.lose(error))? {
-                failure.get_or_insert(error);
+        for (kind, body) in sftp.exchange(&ids, requests)? {
+            if let Some(error) = status(kind, &body)? {
+                return Err(error);
             }
         }
-        failure.map_or(Ok(()), Err)
+        Ok(())
     }
 
     /// Sends the rest and closes the file. With `sync`, has the host put
     /// it on its disk first, if the host can be asked to.
     fn finish(mut self, sync: bool) -> io::Result<()> {
         self.send()?;
-        if sync {
-            let mut connection = self.handle.sftp.lock();
-            if connection.fsync {
-                connection.extended(FSYNC, |packet| packet.bytes(&self.handle.id))?;
-            }
+        if sync && self.handle.sftp.fsync {
+            self.handle
+                .sftp
+                .extended(FSYNC, |packet| packet.bytes(&self.handle.id))?;
         }
         self.handle.close()
     }

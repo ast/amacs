@@ -5,7 +5,7 @@ use crate::completion::Completion;
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
 use crate::file_system;
-use crate::files::{abbreviate_path, expand_path, modified_time};
+use crate::files::{abbreviate_path, expand_typed_path, modified_time};
 use crate::minibuffer::default_directory;
 
 pub fn find_file(ed: &mut Editor) -> CmdResult {
@@ -13,7 +13,7 @@ pub fn find_file(ed: &mut Editor) -> CmdResult {
     let dir = default_directory(ed);
     let base = ed.working_directory().to_owned();
     ed.read_string("Find file: ", &dir, Completion::File, move |ed, input| {
-        ed.find_file_asking(&expand_path(&input, &base))
+        ed.find_file_asking(&expand_typed_path(&input, &base))
     })
 }
 
@@ -80,17 +80,20 @@ pub fn save_some_buffers(ed: &mut Editor) -> CmdResult {
 pub fn revert_buffer(ed: &mut Editor) -> CmdResult {
     ed.forbid_in_minibuffer()?;
     let id = ed.window().buffer;
-    if !ed.buffer().is_modified() {
+    // A file on another host says so itself when it has been read.
+    let revert = move |ed: &mut Editor| {
+        let remote = (ed.buffer_by_id(id))
+            .and_then(|buffer| buffer.file.as_deref())
+            .is_some_and(file_system::is_remote);
         ed.revert_buffer(id)?;
-        ed.message("Reverted");
-        return Ok(());
+        ed.message(if remote { "Reverting..." } else { "Reverted" });
+        Ok(())
+    };
+    if !ed.buffer().is_modified() {
+        return revert(ed);
     }
     let name = ed.buffer().name.clone();
-    ed.ask_yes_no(format!("Discard the changes to {name}?"), move |ed| {
-        ed.revert_buffer(id)?;
-        ed.message("Reverted");
-        Ok(())
-    });
+    ed.ask_yes_no(format!("Discard the changes to {name}?"), revert);
     Ok(())
 }
 
@@ -99,7 +102,7 @@ pub fn write_file(ed: &mut Editor) -> CmdResult {
     let dir = default_directory(ed);
     let base = ed.working_directory().to_owned();
     ed.read_string("Write file: ", &dir, Completion::File, move |ed, input| {
-        let path = expand_path(&input, &base);
+        let path = expand_typed_path(&input, &base);
         if input.is_empty() || input.ends_with('/') || file_system::is_dir(&path) {
             return Err(CmdError::msg("Please give a file name"));
         }

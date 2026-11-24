@@ -321,6 +321,10 @@ impl Editor {
         let (Some(file), Some(language)) = (buffer.file.clone(), buffer.language()) else {
             return Ok(());
         };
+        // A server for a file on another host would have to run there.
+        if crate::file_system::is_remote(&file) {
+            return Ok(());
+        }
         let Some(config) = self.lsp_config_for(language.name).cloned() else {
             return Ok(());
         };

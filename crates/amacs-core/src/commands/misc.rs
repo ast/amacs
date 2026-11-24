@@ -16,7 +16,7 @@ use crate::editor::Editor;
 use crate::editor::KeyMeaning;
 use crate::env::EnvState;
 use crate::error::{CmdError, CmdResult};
-use crate::files::{abbreviate_path, expand_path};
+use crate::files::{abbreviate_path, expand_typed_path};
 
 // Scrolling
 
@@ -639,7 +639,7 @@ pub fn bookmark_delete(ed: &mut Editor) -> CmdResult {
 /// it wrote, to standard output and then standard error, and whether it
 /// succeeded.
 fn run_shell(ed: &mut Editor, command: &str, input: String) -> CmdResult<(String, bool)> {
-    let directory = ed.working_directory().to_owned();
+    let directory = ed.local_directory()?;
     let environment = match ed.environment(&directory) {
         Some(EnvState::Ready(environment)) => environment,
         _ => Vec::new(),
@@ -804,7 +804,7 @@ pub fn find_file_other_window(ed: &mut Editor) -> CmdResult {
         Completion::File,
         move |ed, input| {
             super::windows::select_other_window(ed)?;
-            ed.find_file_asking(&expand_path(&input, &base))
+            ed.find_file_asking(&expand_typed_path(&input, &base))
         },
     )
 }

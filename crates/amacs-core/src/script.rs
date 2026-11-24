@@ -521,6 +521,17 @@ impl Editor {
         }
     }
 
+    /// Keeps what is typed waiting until a promise is settled, as if the
+    /// named command had made it: for what a command of the core hands to
+    /// Scheme to wait for.
+    pub(crate) fn hold_input_for(&mut self, promise: u64, command: &str) {
+        self.script
+            .command_promises
+            .entry(promise)
+            .or_insert_with(|| command.to_owned());
+        self.script.awaited_programs.insert(promise);
+    }
+
     /// The running command no longer keeps what is typed waiting, whatever
     /// programs it goes on to run: for work that takes long and asks
     /// nothing after it.

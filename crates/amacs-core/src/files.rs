@@ -1,9 +1,11 @@
 //! Visiting and saving files.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::sync::mpsc;
+use std::time::{Duration, Instant, SystemTime};
 
 use amacs_text::Text;
 
@@ -23,6 +25,20 @@ pub fn expand_path(path: &str, base: &Path) -> PathBuf {
         _ => PathBuf::from(path),
     };
     base.join(expanded)
+}
+
+/// Expands a file name that a person typed, as [`expand_path`] does, after
+/// dropping what they typed over: as in Emacs, `//` and `/~` start the
+/// name anew, so that `~/src//ssh:host:/etc` is `/ssh:host:/etc` and
+/// nothing has to be deleted first.
+pub fn expand_typed_path(path: &str, base: &Path) -> PathBuf {
+    let root = path.rfind("//").map(|at| at + 1);
+    let home = path
+        .rmatch_indices("/~")
+        .map(|(at, _)| at + 1)
+        .find(|at| matches!(path[at + 1..].chars().next(), None | Some('/')));
+    let start = root.max(home).unwrap_or(0);
+    expand_path(&path[start..], base)
 }
 
 /// Shortens a path under the home directory to `~/...` for display.
@@ -83,6 +99,139 @@ fn read_text(path: &Path) -> io::Result<(Text, bool)> {
             Ok((Text::from(&*String::from_utf8_lossy(&bytes)), true))
         }
         Err(error) => Err(error),
+    }
+}
+
+/// What a file is, from what a look at it gave. Text up to `limit` bytes
+/// is read without a thought.
+fn kind_of(path: &Path, meta: Option<&file_system::Metadata>, limit: Option<u64>) -> FileKind {
+    let Some(meta) = meta.filter(|meta| meta.is_file()) else {
+        return FileKind::Text;
+    };
+    if is_binary(path).unwrap_or(false) {
+        return FileKind::Binary;
+    }
+    match limit {
+        Some(limit) if meta.len > limit => FileKind::Large(meta.len),
+        _ => FileKind::Text,
+    }
+}
+
+/// What there was to visit under a name.
+pub(crate) enum Fetched {
+    /// A directory, which the file manager shows.
+    Directory(PathBuf),
+    /// Text of so many bytes that reading it has to be asked for.
+    Large(PathBuf, u64),
+    /// A file and its text, or a name with no file yet.
+    File {
+        path: PathBuf,
+        text: Text,
+        /// The file is not valid UTF-8, and the text is not what it holds.
+        lossy: bool,
+        is_new: bool,
+        modified: Option<SystemTime>,
+    },
+}
+
+/// Looks at what a name leads to, and reads it if it is text that is not
+/// larger than `limit` bytes, or of any size with `anyway`. An error is
+/// what to tell the user. This touches no editor state: a file on another
+/// host is fetched on a thread of its own.
+pub(crate) fn fetch(path: &Path, anyway: bool, limit: Option<u64>) -> Result<Fetched, String> {
+    let path = file_system::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let cannot_open = |error: io::Error| format!("Cannot open {}: {error}", abbreviate_path(&path));
+    let meta = match file_system::metadata(&path) {
+        Ok(meta) => Some(meta),
+        // Of a local file, reading it says what is wrong. Of a remote
+        // one, what is wrong may be the way there.
+        Err(error) if error.kind() != io::ErrorKind::NotFound && file_system::is_remote(&path) => {
+            return Err(cannot_open(error));
+        }
+        Err(_) => None,
+    };
+    if meta.is_some_and(|meta| meta.is_dir()) {
+        return Ok(Fetched::Directory(path));
+    }
+    match kind_of(&path, meta.as_ref(), limit) {
+        FileKind::Binary => {
+            return Err(format!(
+                "{} is not text ({})",
+                abbreviate_path(&path),
+                format_size(meta.map_or(0, |meta| meta.len))
+            ));
+        }
+        FileKind::Large(size) if !anyway => return Ok(Fetched::Large(path, size)),
+        FileKind::Large(_) | FileKind::Text => {}
+    }
+    let (text, lossy, is_new) = match read_text(&path) {
+        Ok((text, lossy)) => (text, lossy, false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => (Text::new(), false, true),
+        Err(error) => return Err(cannot_open(error)),
+    };
+    let modified = if is_new {
+        None
+    } else {
+        meta.and_then(|meta| meta.modified)
+    };
+    Ok(Fetched::File {
+        path,
+        text,
+        lossy,
+        is_new,
+        modified,
+    })
+}
+
+/// Files on other hosts that buffers visit are looked at this often, to
+/// see whether another program has changed them. Local ones are looked at
+/// far more often; this costs an answer from the host each time.
+const REMOTE_REVERT_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Something that a thread in the background has finished.
+enum Done {
+    Fetched {
+        promise: u64,
+        outcome: Result<Fetched, String>,
+    },
+    Written {
+        promise: u64,
+        buffer: BufferId,
+        /// The state of the buffer that was written.
+        tick: u64,
+        unformatted: Option<String>,
+        /// The name of the file as the host has it, and its time there.
+        outcome: Result<(PathBuf, Option<SystemTime>), String>,
+    },
+    Reread {
+        buffer: BufferId,
+        file: PathBuf,
+        /// Nobody asked: the file was only looked at for changes.
+        unasked: bool,
+        /// `None` if the file is as it was.
+        outcome: Result<Option<(Text, bool, Option<SystemTime>)>, String>,
+    },
+}
+
+/// The work on files that goes on in the background: reading and writing
+/// those on other hosts.
+pub(crate) struct FileJobs {
+    sender: mpsc::Sender<Done>,
+    done: mpsc::Receiver<Done>,
+    /// Buffers whose files are being read again.
+    rereading: HashSet<BufferId>,
+    remote_revert_due: Option<Instant>,
+}
+
+impl Default for FileJobs {
+    fn default() -> Self {
+        let (sender, done) = mpsc::channel();
+        Self {
+            sender,
+            done,
+            rereading: HashSet::new(),
+            remote_revert_due: None,
+        }
     }
 }
 
@@ -194,12 +343,24 @@ impl Editor {
     /// The auto-save file for the current buffer, if it exists and is not
     /// older than the visited file.
     fn newer_auto_save(&self) -> Option<PathBuf> {
-        let file = self.buffer().file.as_deref()?;
+        self.newer_auto_save_of(self.window().buffer)
+    }
+
+    fn newer_auto_save_of(&self, id: BufferId) -> Option<PathBuf> {
+        let buffer = &self.buffers[id];
+        let file = buffer.file.as_deref()?;
         let path = self.auto_save_path(file)?;
         let saved = modified_time(&path)?;
+        // The time that the file had when it was read or written will do
+        // for one on another host, which is not asked again for this.
+        let on_disk = if file_system::is_remote(file) {
+            buffer.disk_mtime
+        } else {
+            modified_time(file)
+        };
         // Timestamps are coarse, so data written just after the file can
         // carry the same time. It is removed on save, so it is still wanted.
-        let current = modified_time(file).is_none_or(|on_disk| saved >= on_disk);
+        let current = on_disk.is_none_or(|on_disk| saved >= on_disk);
         current.then_some(path)
     }
 
@@ -219,15 +380,28 @@ impl Editor {
     }
 
     /// Reads a buffer's file again, replacing the text and forgetting its
-    /// undo history. Windows keep their place by line and column.
+    /// undo history. Windows keep their place by line and column. A file
+    /// on another host is read in the background, and the buffer changes
+    /// when that is done.
     pub fn revert_buffer(&mut self, id: BufferId) -> CmdResult {
         let file = self.buffers[id]
             .file
             .clone()
             .ok_or_else(|| CmdError::msg("This buffer does not visit a file"))?;
+        if file_system::is_remote(&file) {
+            self.reread(id, file, None);
+            return Ok(());
+        }
         let (text, lossy) = read_text(&file).map_err(|error| {
             CmdError::msg(format!("Cannot read {}: {error}", abbreviate_path(&file)))
         })?;
+        let modified = modified_time(&file);
+        self.reverted(id, text, lossy, modified);
+        Ok(())
+    }
+
+    /// Makes a buffer hold what was read from its file just now.
+    fn reverted(&mut self, id: BufferId, text: Text, lossy: bool, modified: Option<SystemTime>) {
         // Where each window showing the buffer is, as lines and a column.
         let places: Vec<(crate::window::WindowId, usize, usize, usize)> = self
             .windows
@@ -245,7 +419,7 @@ impl Editor {
         let buffer = &mut self.buffers[id];
         buffer.reset(text);
         buffer.read_only = lossy;
-        buffer.disk_mtime = modified_time(&file);
+        buffer.disk_mtime = modified;
         buffer.auto_saved_tick = None;
         let place = |text: &Text, line: usize, column: usize| {
             let line = line.min(text.len_lines() - 1);
@@ -260,7 +434,185 @@ impl Editor {
             let pos = place(buffer.text(), start_line, 0);
             buffer.set_marker(start, pos);
         }
-        Ok(())
+    }
+
+    /// Runs `work` on a thread of its own, where it may wait for a host
+    /// as long as a slow line takes, and takes in what it comes to on the
+    /// next [`Editor::poll`].
+    fn in_background(&self, work: impl FnOnce() -> Done + Send + 'static) {
+        let (sender, waker) = (self.file_jobs.sender.clone(), self.waker.clone());
+        std::thread::spawn(move || {
+            if sender.send(file_system::patiently(work)).is_ok() {
+                waker();
+            }
+        });
+    }
+
+    /// Reads a buffer's file again in the background. With the time that
+    /// the file is known to have, only if it has another now, and nothing
+    /// is said if that cannot be found out.
+    fn reread(&mut self, buffer: BufferId, file: PathBuf, known: Option<Option<SystemTime>>) {
+        if !self.file_jobs.rereading.insert(buffer) {
+            return;
+        }
+        let unasked = known.is_some();
+        self.in_background(move || {
+            let now = file_system::metadata(&file).map(|meta| meta.modified);
+            let changed = match (&now, known) {
+                (_, None) => true,
+                (Ok(now), Some(known)) => now.is_some() && *now != known,
+                (Err(_), Some(_)) => false,
+            };
+            let outcome = if changed {
+                read_text(&file)
+                    .map(|(text, lossy)| Some((text, lossy, now.ok().flatten())))
+                    .map_err(|error| format!("Cannot read {}: {error}", abbreviate_path(&file)))
+            } else {
+                Ok(None)
+            };
+            Done::Reread {
+                buffer,
+                file,
+                unasked,
+                outcome,
+            }
+        });
+    }
+
+    /// Starts visiting a file in the background, as files on other hosts
+    /// are visited: returns a promise that resolves, once the file has
+    /// been read into a buffer, to a list that starts with `buffer`,
+    /// `directory`, `large` or `error`. See `%visit-remote` in the Scheme
+    /// that is part of the editor, which shows what was found. What is
+    /// typed meanwhile waits for the file if a command asked for it, or
+    /// with `hold`, when a person did at a prompt.
+    pub fn fetch_file_promise(&mut self, path: PathBuf, anyway: bool, hold: bool) -> u64 {
+        let promise = self.new_promise();
+        if hold {
+            self.hold_input_for(promise, "find-file");
+        } else {
+            self.await_program(promise);
+        }
+        let limit = self.large_file_limit();
+        self.in_background(move || Done::Fetched {
+            promise,
+            outcome: fetch(&path, anyway, limit),
+        });
+        promise
+    }
+
+    /// Starts writing the current buffer to a file in the background, as
+    /// files on other hosts are written, and makes that its file when it
+    /// is done: returns a promise that resolves to `#t`, or to a string
+    /// that says what went wrong. The hook that runs before saving is not
+    /// run.
+    pub fn send_buffer_promise(&mut self, path: PathBuf) -> u64 {
+        let promise = self.new_promise();
+        self.await_program(promise);
+        let unformatted = self.format_before_save();
+        // What a formatter or a hook changed just now is part of what is
+        // written.
+        let point = self.point();
+        self.buffer_mut().commit_edits(point);
+        let (buffer, tick, text) = (
+            self.window().buffer,
+            self.buffer().tick(),
+            self.text().clone(),
+        );
+        self.in_background(move || {
+            let outcome = write_atomically(&path, &text)
+                .map(|()| {
+                    let path = file_system::canonicalize(&path).unwrap_or(path.clone());
+                    let modified = modified_time(&path);
+                    (path, modified)
+                })
+                .map_err(|error| format!("Cannot write {}: {error}", abbreviate_path(&path)));
+            Done::Written {
+                promise,
+                buffer,
+                tick,
+                unformatted,
+                outcome,
+            }
+        });
+        promise
+    }
+
+    /// Takes in what the threads in the background have finished.
+    pub(crate) fn file_jobs_poll(&mut self) {
+        while let Ok(done) = self.file_jobs.done.try_recv() {
+            match done {
+                Done::Fetched { promise, outcome } => {
+                    let found = match outcome {
+                        Ok(Fetched::Directory(path)) => {
+                            vec![Value::sym("directory"), path.display().to_string().into()]
+                        }
+                        Ok(Fetched::Large(path, size)) => vec![
+                            Value::sym("large"),
+                            format!("{} is {}", abbreviate_path(&path), format_size(size)).into(),
+                        ],
+                        Ok(file @ Fetched::File { .. }) => {
+                            let (id, note) = self.adopt(file);
+                            let recover = self.newer_auto_save_of(id).map(|_| {
+                                format!(
+                                    "{} has auto-save data; use M-x recover-this-file",
+                                    self.buffers[id].name
+                                )
+                            });
+                            vec![
+                                Value::sym("buffer"),
+                                self.buffers[id].name.as_str().into(),
+                                recover.or(note.map(str::to_owned)).into(),
+                            ]
+                        }
+                        Err(problem) => vec![Value::sym("error"), problem.into()],
+                    };
+                    self.resolve_promise(promise, Value::List(found));
+                }
+                Done::Written {
+                    promise,
+                    buffer,
+                    tick,
+                    unformatted,
+                    outcome,
+                } => {
+                    let result = match outcome {
+                        Ok((path, modified)) => {
+                            if self.buffers.contains_key(buffer) {
+                                self.written(buffer, path, modified, Some(tick), unformatted);
+                            }
+                            Value::Bool(true)
+                        }
+                        Err(problem) => problem.into(),
+                    };
+                    self.resolve_promise(promise, result);
+                }
+                Done::Reread {
+                    buffer,
+                    file,
+                    unasked,
+                    outcome,
+                } => {
+                    self.file_jobs.rereading.remove(&buffer);
+                    let still = self.buffers.get(buffer).is_some_and(|buffer| {
+                        buffer.file.as_deref() == Some(&file) && !(unasked && buffer.is_modified())
+                    });
+                    match outcome {
+                        Ok(Some((text, lossy, modified))) if still => {
+                            self.reverted(buffer, text, lossy, modified);
+                            let name = &self.buffers[buffer].name;
+                            self.message(if unasked {
+                                format!("Reverted {name}: its file changed on disk")
+                            } else {
+                                format!("Reverted {name}")
+                            });
+                        }
+                        Err(problem) if !unasked => self.message(problem),
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
     /// Reads again the files that another program has changed, for buffers
@@ -276,7 +628,11 @@ impl Editor {
             .buffers
             .iter()
             .filter(|(_, buffer)| {
-                let Some(file) = buffer.file.as_deref() else {
+                let Some(file) = buffer
+                    .file
+                    .as_deref()
+                    .filter(|file| !file_system::is_remote(file))
+                else {
                     return false;
                 };
                 let on_disk = modified_time(file);
@@ -291,6 +647,30 @@ impl Editor {
                 Err(error) => self.message(error.to_string()),
             }
         }
+        // Files on other hosts are asked about less often, in the
+        // background, and only over a connection that is there: a host
+        // that was left is not called again for this.
+        let now = Instant::now();
+        if self
+            .file_jobs
+            .remote_revert_due
+            .is_some_and(|due| due > now)
+        {
+            return;
+        }
+        self.file_jobs.remote_revert_due = Some(now + REMOTE_REVERT_INTERVAL);
+        let remote: Vec<(BufferId, PathBuf, Option<SystemTime>)> = self
+            .buffers
+            .iter()
+            .filter(|(_, buffer)| !buffer.is_modified())
+            .filter_map(|(id, buffer)| {
+                let file = buffer.file.as_ref()?;
+                file_system::is_connected(file).then(|| (id, file.clone(), buffer.disk_mtime))
+            })
+            .collect();
+        for (id, file, known) in remote {
+            self.reread(id, file, Some(known));
+        }
     }
 
     /// The directory that file names typed by the user are relative to: the
@@ -302,6 +682,19 @@ impl Editor {
             .as_deref()
             .or_else(|| buffer.file.as_deref().and_then(Path::parent))
             .unwrap_or(&self.default_directory)
+    }
+
+    /// The working directory, for running a program in: an error if it
+    /// is on another host, where programs are not run yet.
+    pub fn local_directory(&self) -> CmdResult<PathBuf> {
+        let directory = self.working_directory();
+        if file_system::is_remote(directory) {
+            return Err(CmdError::msg(format!(
+                "Programs are not run on other hosts yet, and this buffer is in {}",
+                directory.display()
+            )));
+        }
+        Ok(directory.to_owned())
     }
 
     /// Shows `path` in the selected window, reading it if no buffer visits it
@@ -319,6 +712,11 @@ impl Editor {
     /// Visits a file for a person who can be asked: about a large one, a
     /// question comes first.
     pub fn find_file_asking(&mut self, path: &Path) -> CmdResult {
+        // Of a file on another host, what it is comes with reading it,
+        // and the question after that.
+        if file_system::is_remote(path) {
+            return self.visit_remote(path, false, true);
+        }
         let resolved = file_system::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         if self.buffer_visiting(&resolved).is_none()
             && let FileKind::Large(size) = self.file_kind(&resolved)
@@ -336,24 +734,24 @@ impl Editor {
     /// What a file is, as far as reading it into a buffer goes. A file
     /// that cannot be looked at counts as text: reading it says why.
     pub fn file_kind(&self, path: &Path) -> FileKind {
-        let Ok(meta) = file_system::metadata(path) else {
-            return FileKind::Text;
-        };
-        if !meta.is_file() {
-            return FileKind::Text;
-        }
-        if is_binary(path).unwrap_or(false) {
-            return FileKind::Binary;
-        }
+        let meta = file_system::metadata(path).ok();
+        kind_of(path, meta.as_ref(), self.large_file_limit())
+    }
+
+    /// The size in bytes above which text is read only when asked to.
+    fn large_file_limit(&self) -> Option<u64> {
         match self.option(LARGE_FILE_THRESHOLD) {
-            Ok(Value::Int(megabytes)) if meta.len > (megabytes.max(0) as u64) << 20 => {
-                FileKind::Large(meta.len)
-            }
-            _ => FileKind::Text,
+            Ok(Value::Int(megabytes)) => Some((megabytes.max(0) as u64) << 20),
+            _ => None,
         }
     }
 
     fn find_file_with(&mut self, path: &Path, anyway: bool) -> CmdResult {
+        // A file on another host is read in the background, and shown by
+        // Scheme when it is there.
+        if file_system::is_remote(path) {
+            return self.visit_remote(path, anyway, false);
+        }
         // Directories are shown by the file manager, which is Scheme.
         if file_system::is_dir(path) && self.has_script_host() {
             let path = file_system::canonicalize(path).unwrap_or_else(|_| path.to_owned());
@@ -377,6 +775,28 @@ impl Editor {
         Ok(())
     }
 
+    /// Shows a file on another host: at once if a buffer visits it under
+    /// this name, and else when Scheme has had it read in the background.
+    /// With `ask`, a large file is asked about; without, it is an error
+    /// unless `anyway`.
+    fn visit_remote(&mut self, path: &Path, anyway: bool, ask: bool) -> CmdResult {
+        if let Some(id) = self.buffer_visiting(path) {
+            self.switch_to_buffer(id);
+            return Ok(());
+        }
+        if !self.has_script_host() {
+            return Err(CmdError::msg(
+                "Files on other hosts are not visited without Scheme",
+            ));
+        }
+        let name = path.display().to_string();
+        self.queue_named(
+            "%visit-remote",
+            vec![name.into(), anyway.into(), ask.into()],
+        );
+        Ok(())
+    }
+
     /// The buffer that visits `path`, reading the file if no buffer does
     /// yet, without showing it. Also returns something to tell the user
     /// about a file just read, if there is anything. The hooks that choose
@@ -390,51 +810,53 @@ impl Editor {
         path: &Path,
         anyway: bool,
     ) -> CmdResult<(BufferId, Option<&'static str>)> {
+        if file_system::is_remote(path) {
+            return Err(CmdError::msg(format!(
+                "{} is on another host, and is visited with find-file",
+                path.display()
+            )));
+        }
         let path = file_system::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         if let Some(id) = self.buffer_visiting(&path) {
             return Ok((id, None));
         }
-        if file_system::is_dir(&path) {
-            return Err(CmdError::msg(format!(
+        match fetch(&path, anyway, self.large_file_limit()).map_err(CmdError::msg)? {
+            Fetched::Directory(path) => Err(CmdError::msg(format!(
                 "{} is a directory",
                 abbreviate_path(&path)
-            )));
+            ))),
+            Fetched::Large(path, size) => Err(CmdError::msg(format!(
+                "{} is {}, above large-file-threshold",
+                abbreviate_path(&path),
+                format_size(size)
+            ))),
+            file @ Fetched::File { .. } => Ok(self.adopt(file)),
         }
-        match self.file_kind(&path) {
-            FileKind::Binary => {
-                let size = file_system::metadata(&path).map_or(0, |meta| meta.len);
-                return Err(CmdError::msg(format!(
-                    "{} is not text ({})",
-                    abbreviate_path(&path),
-                    format_size(size)
-                )));
-            }
-            FileKind::Large(size) if !anyway => {
-                return Err(CmdError::msg(format!(
-                    "{} is {}, above large-file-threshold",
-                    abbreviate_path(&path),
-                    format_size(size)
-                )));
-            }
-            FileKind::Large(_) | FileKind::Text => {}
+    }
+
+    /// Makes a buffer of a file that was read, unless one visits it
+    /// already, without showing it. Also returns something to tell the
+    /// user about the file, if there is anything.
+    fn adopt(&mut self, file: Fetched) -> (BufferId, Option<&'static str>) {
+        let Fetched::File {
+            path,
+            text,
+            lossy,
+            is_new,
+            modified,
+        } = file
+        else {
+            unreachable!("only a file that was read becomes a buffer");
+        };
+        if let Some(id) = self.buffer_visiting(&path) {
+            return (id, None);
         }
         let name = path.file_name().map_or_else(
             || path.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
-
-        let (text, lossy, is_new) = match read_text(&path) {
-            Ok((text, lossy)) => (text, lossy, false),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => (Text::new(), false, true),
-            Err(error) => {
-                return Err(CmdError::msg(format!(
-                    "Cannot open {}: {error}",
-                    abbreviate_path(&path)
-                )));
-            }
-        };
         let mut buffer = Buffer::with_text(name, text);
-        buffer.disk_mtime = modified_time(&path);
+        buffer.disk_mtime = modified;
         self.history.visit(&path);
         self.note_project(&path);
         buffer.file = Some(path);
@@ -448,7 +870,7 @@ impl Editor {
         } else {
             None
         };
-        Ok((id, note))
+        (id, note)
     }
 
     fn buffer_visiting(&self, path: &Path) -> Option<BufferId> {
@@ -470,7 +892,14 @@ impl Editor {
         // With functions on the hook that runs before saving, Scheme runs
         // them and then asks for the write. They may wait for something, so
         // the buffer is named: another may be current by then.
-        if self.hook_active("before-save-hook") && self.has_script_host() {
+        // So does writing to another host, which takes a while.
+        let remote = file_system::is_remote(path);
+        if remote && !self.has_script_host() {
+            return Err(CmdError::msg(
+                "Files on other hosts are not written without Scheme",
+            ));
+        }
+        if (remote || self.hook_active("before-save-hook")) && self.has_script_host() {
             let name = self.buffer().name.as_str().into();
             let path = path.display().to_string().into();
             self.queue_named("%save-buffer", vec![name, path, kill.into()]);
@@ -485,22 +914,46 @@ impl Editor {
     }
 
     /// Writes the current buffer to `path`, without the hook that runs
-    /// before saving.
+    /// before saving. A file on another host is not written this way but
+    /// with [`Editor::send_buffer_promise`].
     pub fn write_buffer_now(&mut self, path: &Path) -> CmdResult {
+        if file_system::is_remote(path) {
+            return Err(CmdError::msg(format!(
+                "{} is on another host, and is written in the background by save-buffer and write-file",
+                path.display()
+            )));
+        }
         let unformatted = self.format_before_save();
         write_atomically(path, self.text()).map_err(|error| {
             CmdError::msg(format!("Cannot write {}: {error}", abbreviate_path(path)))
         })?;
         let path = file_system::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        let modified = modified_time(&path);
+        let id = self.window().buffer;
+        self.written(id, path, modified, None, unformatted);
+        Ok(())
+    }
+
+    /// Notes that a buffer has been written to a file, which is its file
+    /// from now on. With the state of the buffer that was written, if
+    /// that was a while ago: a buffer that has changed since is not saved.
+    fn written(
+        &mut self,
+        id: BufferId,
+        path: PathBuf,
+        modified: Option<SystemTime>,
+        tick: Option<u64>,
+        unformatted: Option<String>,
+    ) {
         let shown = abbreviate_path(&path);
-        let renamed = self.buffer().file.as_deref() != Some(&path);
+        let renamed = self.buffers[id].file.as_deref() != Some(&path);
         if renamed {
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| shown.clone());
             // Clear the old name first so that it does not count as taken.
-            self.buffer_mut().name.clear();
+            self.buffers[id].name.clear();
             let unique = (1..)
                 .map(|n| {
                     if n == 1 {
@@ -511,30 +964,36 @@ impl Editor {
                 })
                 .find(|candidate| self.find_buffer(candidate).is_none())
                 .expect("an unused name exists");
-            self.buffer_mut().name = unique;
+            self.buffers[id].name = unique;
         }
         self.remove_auto_save(&path);
         let point = self.point();
-        let buffer = self.buffer_mut();
-        // What a formatter or a hook changed just now is part of what was
-        // written.
-        buffer.commit_edits(point);
-        buffer.disk_mtime = modified_time(&path);
-        buffer.file = Some(path);
-        buffer.auto_saved_tick = None;
-        buffer.mark_saved();
-        match unformatted {
-            Some(problem) => self.message(format!("Wrote {shown}, not formatted: {problem}")),
-            None => self.message(format!("Wrote {shown}")),
+        let buffer = &mut self.buffers[id];
+        let current = tick.is_none_or(|tick| tick == buffer.tick());
+        if tick.is_none() {
+            // What a formatter or a hook changed just now is part of what
+            // was written.
+            buffer.commit_edits(point);
         }
-        let id = self.window().buffer;
+        buffer.disk_mtime = modified;
+        buffer.file = Some(path);
+        if current {
+            buffer.auto_saved_tick = None;
+            buffer.mark_saved();
+        }
+        match (unformatted, current) {
+            (Some(problem), _) => self.message(format!("Wrote {shown}, not formatted: {problem}")),
+            (None, true) => self.message(format!("Wrote {shown}")),
+            (None, false) => self.message(format!(
+                "Wrote {shown} as it was; the buffer has changed since"
+            )),
+        }
         self.lsp_did_save(id);
         // The hook runs later, when another buffer may be current.
         if self.hook_active("after-save-hook") {
-            let name = self.buffer().name.as_str().into();
+            let name = self.buffers[id].name.as_str().into();
             self.queue_named("%run-hook-in", vec![name, Value::sym("after-save-hook")]);
         }
-        Ok(())
     }
 }
 
@@ -557,5 +1016,82 @@ mod tests {
         assert_eq!(abbreviate_path(&home.join("a")), "~/a");
         assert_eq!(abbreviate_path(&home), "~");
         assert_eq!(abbreviate_path(Path::new("/etc/hosts")), "/etc/hosts");
+    }
+
+    /// Lets the threads in the background finish what `done` waits for.
+    fn settle(ed: &mut Editor, done: impl Fn(&Editor) -> bool) {
+        let start = Instant::now();
+        while !done(ed) {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "nothing happened"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+            ed.file_jobs_poll();
+        }
+    }
+
+    #[test]
+    fn a_remote_file_that_another_program_changed_is_read_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fs::canonicalize(dir.path()).unwrap().join("shared.txt");
+        fs::write(&path, "first").unwrap();
+        let name = PathBuf::from(format!("/sftp-test::{}", path.display()));
+        let change = |text: &str, seconds: u64| {
+            fs::write(&path, text).unwrap();
+            let file = fs::File::options().write(true).open(&path).unwrap();
+            file.set_modified(SystemTime::now() + Duration::from_secs(seconds))
+                .unwrap();
+        };
+
+        let mut ed = Editor::new(80, 10);
+        let (id, _) = ed.adopt(fetch(&name, false, None).unwrap());
+        let known = ed.buffers[id].disk_mtime;
+        assert!(known.is_some());
+
+        // Nothing has changed: nothing is read.
+        ed.reread(id, name.clone(), Some(known));
+        settle(&mut ed, |ed| ed.file_jobs.rereading.is_empty());
+        assert_eq!(ed.buffers[id].text().to_string(), "first");
+        assert_eq!(ed.buffers[id].disk_mtime, known);
+
+        change("second", 5);
+        ed.reread(id, name.clone(), Some(known));
+        settle(&mut ed, |ed| ed.file_jobs.rereading.is_empty());
+        assert_eq!(ed.buffers[id].text().to_string(), "second");
+        assert_ne!(ed.buffers[id].disk_mtime, known);
+        assert!(!ed.buffers[id].is_modified());
+
+        // A buffer with changes of its own keeps them.
+        let known = ed.buffers[id].disk_mtime;
+        change("third", 10);
+        ed.reread(id, name.clone(), Some(known));
+        ed.buffers[id].insert(0, "mine ").unwrap();
+        settle(&mut ed, |ed| ed.file_jobs.rereading.is_empty());
+        assert_eq!(ed.buffers[id].text().to_string(), "mine second");
+
+        // A file that is gone, or a host, is no reason to say anything.
+        fs::remove_file(&path).unwrap();
+        ed.reread(id, name, Some(known));
+        settle(&mut ed, |ed| ed.file_jobs.rereading.is_empty());
+        assert_eq!(ed.buffers[id].text().to_string(), "mine second");
+    }
+
+    #[test]
+    fn what_is_typed_over_is_dropped() {
+        let home = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
+        let base = Path::new("/base");
+        let typed = |path| expand_typed_path(path, base);
+        assert_eq!(typed("sub/file"), Path::new("/base/sub/file"));
+        assert_eq!(typed("~/src//etc/hosts"), Path::new("/etc/hosts"));
+        assert_eq!(typed("~/src//ssh:evo:/etc"), Path::new("/ssh:evo:/etc"));
+        assert_eq!(typed("/a//b//c"), Path::new("/c"));
+        assert_eq!(typed("/etc/~/notes"), home.join("notes"));
+        assert_eq!(typed("/ssh:evo:/etc/~"), home);
+        assert_eq!(typed("/tmp/~x/y"), Path::new("/tmp/~x/y"));
+        // The home directory of the host is not that of this machine.
+        assert_eq!(typed("/ssh:evo:~/src"), Path::new("/ssh:evo:~/src"));
+        assert_eq!(typed("/a//~/b"), home.join("b"));
+        assert_eq!(typed("/a/~//b"), Path::new("/b"));
     }
 }

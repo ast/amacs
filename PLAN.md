@@ -421,7 +421,34 @@ harness. ssh and sudo themselves are tried by hand on `evo`.
    without it that no test reaches. A host that stops answering holds
    the call until its program is ended; the connection manager of step 2
    has to do that.
-2. Visiting and saving remote files, auto-revert, completion.
+2. Visiting and saving remote files, auto-revert, completion. Done
+   2026-11-24, for `/ssh:host:` with keys or an agent (`BatchMode`, until
+   step 5 can ask), and `/sftp-test::`, this machine through its own
+   `sftp-server`, for the tests. `Connections` in `amacs-remote` keeps
+   one program per host, made on first use and again when lost;
+   `ControlMaster` is as planned. The SFTP client was reworked so that
+   nothing hangs: answers are handed out by request number, threads
+   share a connection, and a request gives up after the patience of its
+   thread: three seconds on the editor's thread, thirty in the
+   background. `ssh` itself notices a dead line (`ServerAliveInterval`).
+   Reading and writing are promises (`%fetch-file`, `%send-buffer`),
+   waited for in Scheme (`%visit-remote`, `%save-buffer`); `find-file`
+   is Scheme now, over `%find-file`. What is typed while a file is read
+   for a prompt waits for it. Reverting is in the background too, and
+   auto-revert asks every thirty seconds, only over a connection that is
+   there. Completion lists a remote directory on a thread, and completes
+   `/ssh:` to the hosts of `~/.ssh/config`. At a file prompt, `//` and
+   `/~` start the name anew, as in Emacs, so nothing has to be deleted
+   to type a remote name. `(remote-hosts)` and `(remote-disconnect
+   host)` are in. Until their steps come: programs are refused in a
+   remote directory (step 4) rather than run here, a remote file has no
+   project, no formatter and no language server, and renaming between
+   hosts is an error (step 3). A directory is shown by `dired` already,
+   through the seam. Not done: local files are still read on the
+   editor's thread; a client that waits (`amacsclient file`) and `+LINE`
+   are not carried to a remote file; `ssh` itself was not tried, since
+   this machine does not know its own host key and nobody was there to
+   accept it.
 3. `dired` on remote paths; copying between local and remote.
 4. Locations for `run-process`, `make-process`, `M-!`, the terminal.
 5. Askpass, `read-passwd`, `pass.scm`; sudo and multi-hop.

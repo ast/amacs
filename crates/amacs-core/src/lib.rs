@@ -49,7 +49,9 @@ pub use env::EnvState;
 pub use error::{CmdError, CmdResult};
 pub use extend::window_number;
 pub use faces::{FaceSpec, Faces};
-pub use files::{FileKind, abbreviate_path, expand_path, format_size, is_binary};
+pub use files::{
+    FileKind, abbreviate_path, expand_path, expand_typed_path, format_size, is_binary,
+};
 pub use format::Formatter;
 pub use frame::FrameId;
 pub use keymap::{Keymap, Lookup};

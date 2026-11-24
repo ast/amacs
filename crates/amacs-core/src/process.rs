@@ -305,7 +305,10 @@ impl Editor {
         sentinel: Option<ScriptFn>,
         pty: Option<(u16, u16)>,
     ) -> CmdResult<u64> {
-        let directory = directory.unwrap_or_else(|| self.working_directory().to_owned());
+        let directory = match directory {
+            Some(directory) if !crate::file_system::is_remote(&directory) => directory,
+            Some(_) | None => self.local_directory()?,
+        };
         let mut variables: Vec<(String, Option<String>)> = match self.environment(&directory) {
             Some(EnvState::Ready(environment)) => environment,
             _ => Vec::new(),

@@ -164,6 +164,7 @@ pub struct Editor {
     /// it replaces.
     natives: HashMap<String, fn(&mut Editor) -> CmdResult>,
     pub(crate) extend: ExtendState,
+    pub(crate) file_jobs: crate::files::FileJobs,
     pub(crate) spell: crate::spell::SpellState,
     pub(crate) processes: ProcessState,
     pub(crate) terminals: crate::terminal::Terminals,
@@ -250,6 +251,7 @@ impl Editor {
             keymaps: HashMap::new(),
             natives: HashMap::new(),
             extend: ExtendState::default(),
+            file_jobs: crate::files::FileJobs::default(),
             spell: crate::spell::SpellState::default(),
             processes: ProcessState::default(),
             terminals: crate::terminal::Terminals::default(),
@@ -842,6 +844,7 @@ impl Editor {
         self.environment_poll();
         self.lsp_poll(now);
         self.extend_poll(now);
+        self.file_jobs_poll();
         self.spell_poll();
         self.process_poll();
         self.completion_poll(now);

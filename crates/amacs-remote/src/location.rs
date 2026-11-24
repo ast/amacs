@@ -23,10 +23,13 @@ pub enum Method {
     Sudo,
     /// A container of that name on the host.
     Podman,
+    /// This machine through its own `sftp-server`, as the user that the
+    /// editor runs as: what the tests of remote files visit.
+    Test,
 }
 
 impl Method {
-    const ALL: [Self; 3] = [Self::Ssh, Self::Sudo, Self::Podman];
+    const ALL: [Self; 4] = [Self::Ssh, Self::Sudo, Self::Podman, Self::Test];
 
     /// The name that file names carry.
     pub fn name(self) -> &'static str {
@@ -34,6 +37,7 @@ impl Method {
             Self::Ssh => "ssh",
             Self::Sudo => "sudo",
             Self::Podman => "podman",
+            Self::Test => "sftp-test",
         }
     }
 
@@ -49,7 +53,7 @@ pub struct Hop {
     /// Whom to be there; `None` leaves it to the method.
     pub user: Option<String>,
     /// The host, or the container's name. Empty for the host that the hop
-    /// starts from, which only `sudo` allows. An IPv6 address is held
+    /// starts from, which `sudo` and the method of the tests allow. An IPv6 address is held
     /// without its brackets.
     pub host: String,
     pub port: Option<u16>,
@@ -89,6 +93,20 @@ impl Remote {
     pub fn host(&self) -> String {
         let hops: Vec<String> = self.hops.iter().map(Hop::to_string).collect();
         format!("/{}:", hops.join("|"))
+    }
+
+    /// The path as the host is asked for it: `~` is the home directory
+    /// there, which is where a path that is not absolute starts.
+    pub fn host_path(&self) -> &Path {
+        match self.path.strip_prefix("~") {
+            Ok(under_home) => under_home,
+            Err(_) => &self.path,
+        }
+    }
+
+    /// The name of another path on the same host.
+    pub fn name_of(&self, path: &Path) -> PathBuf {
+        PathBuf::from(format!("{}{}", self.host(), path.to_string_lossy()))
     }
 }
 
@@ -229,8 +247,13 @@ fn parse_hop(method: Method, text: &str) -> Result<Hop, ParseError> {
             None => (rest, None),
         }
     };
-    if host.is_empty() && method != Method::Sudo {
+    if host.is_empty() && !matches!(method, Method::Sudo | Method::Test) {
         return Err(ParseError::NoHost(method));
+    }
+    // What starts with a dash would be read as an option by the program
+    // that is handed it.
+    if host.starts_with('-') || user.is_some_and(|user| user.starts_with('-')) {
+        return Err(ParseError::BadHost(text.to_owned()));
     }
     let port = port
         .map(|port| {
@@ -370,6 +393,15 @@ mod tests {
     #[test]
     fn the_path_may_be_relative_to_home() {
         assert_eq!(remote("/ssh:evo:").path, Path::new(""));
+        assert_eq!(remote("/ssh:evo:").host_path(), Path::new(""));
+        assert_eq!(remote("/ssh:evo:~").host_path(), Path::new(""));
+        assert_eq!(remote("/ssh:evo:~/src").host_path(), Path::new("src"));
+        assert_eq!(remote("/ssh:evo:/~/src").host_path(), Path::new("/~/src"));
+        assert_eq!(
+            remote("/ssh:evo:~").name_of(Path::new("/home/albin")),
+            Path::new("/ssh:evo:/home/albin")
+        );
+        assert_eq!(remote("/sftp-test::/tmp").host(), "/sftp-test::");
         assert_eq!(remote("/ssh:evo:src/amacs").path, Path::new("src/amacs"));
         // Colons after the host are part of the path.
         assert_eq!(remote("/ssh:evo:/a:b|c").path, Path::new("/a:b|c"));
@@ -433,6 +465,14 @@ mod tests {
         assert_eq!(
             error("/ssh:evo/etc:/x"),
             ParseError::BadHost("evo/".to_owned())
+        );
+        assert_eq!(
+            error("/ssh:-oProxyCommand=x:/etc"),
+            ParseError::BadHost("-oProxyCommand=x".to_owned())
+        );
+        assert_eq!(
+            error("/ssh:-l@evo:/etc"),
+            ParseError::BadHost("-l@evo".to_owned())
         );
         assert_eq!(
             error("/ssh:[::1]x:/etc"),

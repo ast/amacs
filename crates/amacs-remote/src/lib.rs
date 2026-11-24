@@ -6,12 +6,15 @@
 //! through the pipes of a program that it does not look inside. That
 //! program is the user's own `ssh`, or an `sftp-server` run by `sudo` or
 //! inside a container, so there is no cryptography and no network code
-//! here, and nothing to install on the host.
+//! here, and nothing to install on the host. [`Connections`] keeps one
+//! such program for each host.
 
+mod connections;
 mod location;
 mod metadata;
 mod sftp;
 
+pub use connections::{Connections, ssh_hosts};
 pub use location::{Hop, Location, Method, ParseError, Remote};
 pub use metadata::{DirEntry, FileType, Metadata};
-pub use sftp::{FileReader, Sftp, sftp_server};
+pub use sftp::{FileReader, Sftp, sftp_server, with_patience};

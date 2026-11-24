@@ -31,6 +31,12 @@ impl Editor {
 
     /// The root of the project that `dir` is in, if it is in one.
     pub fn project_of(&self, dir: &Path) -> Option<PathBuf> {
+        // Asking a host about every directory above this one, on the
+        // editor's own thread, is not worth what it tells: there are no
+        // projects on other hosts yet.
+        if file_system::is_remote(dir) {
+            return None;
+        }
         let markers = self.project_markers();
         dir.ancestors()
             .find(|ancestor| {

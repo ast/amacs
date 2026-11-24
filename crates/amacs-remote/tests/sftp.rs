@@ -334,3 +334,50 @@ fn threads_share_a_connection() {
         }
     });
 }
+
+#[test]
+fn a_host_that_does_not_answer_is_not_waited_for() {
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    let server = sftp_server().unwrap();
+    let pid_file = dir.path().join("pid");
+    // A server that can be stopped and let go on.
+    let sftp = shell(&format!(
+        "{} <&0 & echo $! > {}; wait",
+        server.display(),
+        pid_file.display()
+    ))
+    .unwrap();
+    assert!(sftp.metadata(dir.path()).unwrap().is_dir());
+    // The shell writes the number a moment after the server is there.
+    let pid = loop {
+        match fs::read_to_string(&pid_file) {
+            Ok(pid) if pid.ends_with('\n') => break pid,
+            _ => std::thread::sleep(Duration::from_millis(2)),
+        }
+    };
+    let signal = |name: &str| {
+        let status = Command::new("kill")
+            .args([name, pid.trim()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+
+    signal("-STOP");
+    let asked = Instant::now();
+    let error =
+        amacs_remote::with_patience(Duration::from_millis(200), || sftp.metadata(dir.path()))
+            .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::TimedOut);
+    assert_eq!(error.to_string(), "the host is not answering");
+    assert!(asked.elapsed() < Duration::from_secs(2));
+
+    // The connection is as good as before, and the late answer is not
+    // taken for another.
+    signal("-CONT");
+    fs::write(dir.path().join("file"), "later").unwrap();
+    assert_eq!(sftp.read(&dir.path().join("file")).unwrap(), b"later");
+    assert!(!sftp.is_lost());
+}

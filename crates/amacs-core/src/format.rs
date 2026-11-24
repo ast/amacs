@@ -134,7 +134,7 @@ impl Editor {
         let formatter = self
             .buffer_formatter()?
             .ok_or_else(|| CmdError::msg("No formatter is set for this buffer"))?;
-        let directory = self.working_directory().to_owned();
+        let directory = self.local_directory()?;
         let file = self
             .buffer()
             .file
@@ -202,6 +202,10 @@ impl Editor {
     /// that fails is reported and the buffer is saved as it is.
     pub(crate) fn format_before_save(&mut self) -> Option<String> {
         if !matches!(self.option("format-on-save"), Ok(value) if value != Value::Bool(false)) {
+            return None;
+        }
+        // Formatters are programs, which are not run on other hosts yet.
+        if crate::file_system::is_remote(self.working_directory()) {
             return None;
         }
         match self.buffer_formatter() {

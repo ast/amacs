@@ -391,7 +391,26 @@ pub const API: &[ApiFn] = api! {
             ed.kill_buffer(id);
             Ok(Value::Void)
         };
-    "find-file" (1, Some(2)) "Visit a file in the selected window. A file that is not text is an error, and so is one above the size of the large-file-threshold option, unless the second argument is given and not #f." =>
+    "file-remote?" (1, Some(1)) "Whether a file name is that of a file on another host, in tramp's syntax: /ssh:user@host:/path. A name that starts as one and is not whole counts as one." =>
+        |ed, args| Ok(file_system::is_remote(&expand_path(string(args, 0)?, ed.working_directory())).into());
+    "%fetch-file" (3, Some(3)) "Start reading a file into a buffer in the background, as files on other hosts are read, also one above large-file-threshold if the second argument is not #f. If the third is not #f, what is typed meanwhile waits for the file, as it does when a command asks for it. Returns a promise for a list: (buffer name note) with something to tell the user or #f, (directory name), (large description), or (error message). See %visit-remote." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            Ok(Value::Int(ed.fetch_file_promise(path, boolean(args, 1), boolean(args, 2)) as i64))
+        };
+    "%send-buffer" (1, Some(1)) "Start writing the current buffer to a file in the background, as files on other hosts are written, and make that its file when it is written, without running before-save-hook. Returns a promise for #t, or for a string that says what went wrong." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            Ok(Value::Int(ed.send_buffer_promise(path) as i64))
+        };
+    "remote-hosts" (0, Some(0)) "The hosts that files have been asked of since the editor started: for each a list of the start of the names of its files, such as \"/ssh:evo:\", and how its connection is: \"connected\", \"connecting\", or why there is none." =>
+        |_, _| {
+            let hosts = amacs_core::file_system::hosts();
+            Ok(Value::List(hosts.into_iter().map(|(host, how)| Value::List(vec![host.into(), how.into()])).collect()))
+        };
+    "remote-disconnect" (1, Some(1)) "End the connection to a host, named as remote-hosts names it. What is under way there fails, and the next file asked for connects again. Returns whether the host was known." =>
+        |_, args| Ok(amacs_core::file_system::disconnect(string(args, 0)?).into());
+    "%find-file" (1, Some(2)) "Visit a file in the selected window, as find-file does. A file on another host is shown when it has been read, after this returns." =>
         |ed, args| {
             let path = expand_path(string(args, 0)?, ed.working_directory());
             if args.get(1).is_some_and(|anyway| *anyway != Value::Bool(false)) {
