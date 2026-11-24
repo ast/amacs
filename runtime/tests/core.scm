@@ -162,6 +162,11 @@
   (check-false (buffer-file-name))
   (check-false (buffer-modified? "*test*"))
   (check-true (if (member "*scratch*" (buffer-list)) #t #f))
+  (kill-buffer "*scratch*")
+  (check-false (member "*scratch*" (buffer-list)))
+  (scratch-buffer)
+  (check-equal? (buffer-name) "*scratch*")
+  (switch-to-buffer "*test*")
   (check-error (lambda () (buffer-string "no such buffer"))))
 
 (deftest environment

@@ -97,3 +97,7 @@ error if the program fails."
               (reverse (cdr (reverse lines)))
               lines))
         (error (string-append program " failed: " (string-trim (caddr result)))))))
+
+(define-command (scratch-buffer)
+  "Switch to the *scratch* buffer, making it anew if it was killed."
+  (switch-to-buffer "*scratch*"))
