@@ -200,8 +200,8 @@ doing any work:
 
 `PLAN.md` lays out the next three: processes and a terminal (M11), a coding
 agent over the Agent Client Protocol (M12) and remote files (M14). M11 is
-in but for a later pass, M12 is at its last step of five, and M14 is not
-started.
+in but for a later pass, M12 is at its last step of five, and M14 has its
+first step of six.
 
 - [x] Terminal emulator (M11): a shell or program on a pseudo-terminal in
       a buffer (`C-c v`), with scrollback, colours, point following the
@@ -222,7 +222,10 @@ started.
 - [ ] An empty Markdown buffer draws its first row in the colour of a
       removed line (seen in the compose buffer and in any empty buffer in
       `markdown-mode`, in the picture from `screen`).
-- [ ] Remote files (M14).
+- [ ] Remote files (M14). In: tramp's file names (`Location`), the SFTP
+      client, and one place for file access in the core
+      (`file_system.rs`), where every path is local still. Left: all
+      that a person would see, from visiting a remote file on.
 - [ ] Org.
 - [ ] age encryption.
 

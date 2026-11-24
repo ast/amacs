@@ -1020,6 +1020,7 @@ The language server tests run against a small server of their own
 | `amacs-client`      | The `amacsclient` binary and the connection code                             |
 | `amacs-gui`         | The `amacs-gui` binary: the Wayland window and its renderer                  |
 | `amacs-term`        | A terminal's screen as rows of text with faces, on Alacritty's state machine |
+| `amacs-remote`      | Files on other hosts: tramp's file names, and an SFTP client over a program  |
 | `amacs-gpu-surface` | The one unsafe call, which hands a GPU's driver a Wayland window             |
 | `amacs-scheme`      | The editor's own Scheme: reader, compiler, virtual machine                   |
 | `amacs-script`      | Editor primitives for Scheme, and the session that runs the two together     |

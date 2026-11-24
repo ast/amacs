@@ -1,7 +1,7 @@
 //! Visiting and saving files.
 
-use std::fs::{self, File};
-use std::io::{self, BufWriter, Read, Write};
+use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -10,6 +10,7 @@ use amacs_text::Text;
 use crate::buffer::{Buffer, BufferId};
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
+use crate::file_system::{self, FileSystem};
 use crate::script::{LARGE_FILE_THRESHOLD, Value};
 
 /// Expands a leading `~` and resolves a relative path against `base`,
@@ -68,57 +69,30 @@ pub enum FileKind {
 /// by: a NUL byte near its start. Only the start is read.
 pub fn is_binary(path: &Path) -> io::Result<bool> {
     let mut start = Vec::with_capacity(8192);
-    File::open(path)?.take(8192).read_to_end(&mut start)?;
+    file_system::read_with(path, |file| file.take(8192).read_to_end(&mut start))?;
     Ok(start.contains(&0))
 }
 
 /// Reads a file as UTF-8. Text that is not valid UTF-8 is decoded lossily;
 /// the flag reports that, since saving such text would change the file.
 fn read_text(path: &Path) -> io::Result<(Text, bool)> {
-    match Text::from_reader(File::open(path)?) {
+    match file_system::read_with(path, |file| Text::from_reader(file)) {
         Ok(text) => Ok((text, false)),
         Err(error) if error.kind() == io::ErrorKind::InvalidData => {
-            let bytes = fs::read(path)?;
+            let bytes = file_system::read(path)?;
             Ok((Text::from(&*String::from_utf8_lossy(&bytes)), true))
         }
         Err(error) => Err(error),
     }
 }
 
-/// Writes `text` to `path` so that a crash cannot leave a half-written file:
-/// the text goes to a temporary file that is then renamed over the target.
+/// Writes `text` to `path` so that a crash cannot leave a half-written file.
 fn write_atomically(path: &Path, text: &Text) -> io::Result<()> {
-    // Write through a symlink rather than replacing it with a regular file.
-    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-    let dir = target.parent().unwrap_or(Path::new("."));
-    let name = target
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
-    let mut temp_name = std::ffi::OsString::from(".#");
-    temp_name.push(name);
-    temp_name.push(format!(".{}.tmp", std::process::id()));
-    let temp = dir.join(temp_name);
-
-    let result = (|| {
-        let file = File::create(&temp)?;
-        if let Ok(meta) = fs::metadata(&target) {
-            file.set_permissions(meta.permissions())?;
-        }
-        let mut writer = BufWriter::new(&file);
-        text.write_to(&mut writer)?;
-        writer.flush()?;
-        drop(writer);
-        file.sync_all()?;
-        fs::rename(&temp, &target)
-    })();
-    if result.is_err() {
-        // Best effort: the write error is what the user needs to see.
-        let _ = fs::remove_file(&temp);
-    }
-    result
+    file_system::write_atomically(path, |out| text.write_to(out))
 }
 
 /// Writes auto-save data, creating the directory for the user only.
+/// Whatever the file, its auto-save data is on this machine.
 fn write_auto_save(path: &Path, text: &Text) -> io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
 
@@ -128,11 +102,11 @@ fn write_auto_save(path: &Path, text: &Text) -> io::Result<()> {
             .mode(0o700)
             .create(dir)?;
     }
-    write_atomically(path, text)
+    file_system::Local.write_atomically(path, &mut |out| text.write_to(out))
 }
 
 pub fn modified_time(path: &Path) -> Option<SystemTime> {
-    fs::metadata(path).and_then(|meta| meta.modified()).ok()
+    file_system::metadata(path).ok()?.modified
 }
 
 /// File name under the auto-save directory for a visited file: the path
@@ -345,7 +319,7 @@ impl Editor {
     /// Visits a file for a person who can be asked: about a large one, a
     /// question comes first.
     pub fn find_file_asking(&mut self, path: &Path) -> CmdResult {
-        let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        let resolved = file_system::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         if self.buffer_visiting(&resolved).is_none()
             && let FileKind::Large(size) = self.file_kind(&resolved)
         {
@@ -362,7 +336,7 @@ impl Editor {
     /// What a file is, as far as reading it into a buffer goes. A file
     /// that cannot be looked at counts as text: reading it says why.
     pub fn file_kind(&self, path: &Path) -> FileKind {
-        let Ok(meta) = fs::metadata(path) else {
+        let Ok(meta) = file_system::metadata(path) else {
             return FileKind::Text;
         };
         if !meta.is_file() {
@@ -372,8 +346,8 @@ impl Editor {
             return FileKind::Binary;
         }
         match self.option(LARGE_FILE_THRESHOLD) {
-            Ok(Value::Int(megabytes)) if meta.len() > (megabytes.max(0) as u64) << 20 => {
-                FileKind::Large(meta.len())
+            Ok(Value::Int(megabytes)) if meta.len > (megabytes.max(0) as u64) << 20 => {
+                FileKind::Large(meta.len)
             }
             _ => FileKind::Text,
         }
@@ -381,8 +355,8 @@ impl Editor {
 
     fn find_file_with(&mut self, path: &Path, anyway: bool) -> CmdResult {
         // Directories are shown by the file manager, which is Scheme.
-        if path.is_dir() && self.has_script_host() {
-            let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        if file_system::is_dir(path) && self.has_script_host() {
+            let path = file_system::canonicalize(path).unwrap_or_else(|_| path.to_owned());
             self.queue_named(
                 "%visit-directory",
                 vec![Value::Str(path.display().to_string())],
@@ -416,11 +390,11 @@ impl Editor {
         path: &Path,
         anyway: bool,
     ) -> CmdResult<(BufferId, Option<&'static str>)> {
-        let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        let path = file_system::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         if let Some(id) = self.buffer_visiting(&path) {
             return Ok((id, None));
         }
-        if path.is_dir() {
+        if file_system::is_dir(&path) {
             return Err(CmdError::msg(format!(
                 "{} is a directory",
                 abbreviate_path(&path)
@@ -428,7 +402,7 @@ impl Editor {
         }
         match self.file_kind(&path) {
             FileKind::Binary => {
-                let size = fs::metadata(&path).map_or(0, |meta| meta.len());
+                let size = file_system::metadata(&path).map_or(0, |meta| meta.len);
                 return Err(CmdError::msg(format!(
                     "{} is not text ({})",
                     abbreviate_path(&path),
@@ -517,7 +491,7 @@ impl Editor {
         write_atomically(path, self.text()).map_err(|error| {
             CmdError::msg(format!("Cannot write {}: {error}", abbreviate_path(path)))
         })?;
-        let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        let path = file_system::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         let shown = abbreviate_path(&path);
         let renamed = self.buffer().file.as_deref() != Some(&path);
         if renamed {

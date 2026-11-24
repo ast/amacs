@@ -169,7 +169,7 @@ impl Editor {
                     .find(|buffer| buffer.file.as_deref() == Some(&location.path));
                 let text = match open {
                     Some(buffer) => buffer.text().to_string(),
-                    None => std::fs::read_to_string(&location.path).unwrap_or_default(),
+                    None => crate::file_system::read_to_string(&location.path).unwrap_or_default(),
                 };
                 text.lines().map(str::to_owned).collect()
             });

@@ -11,6 +11,7 @@ use crate::buffer::BufferId;
 use crate::completion::{Candidate, Completion};
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
+use crate::file_system;
 use crate::files::{abbreviate_path, expand_path};
 use crate::script::Value;
 
@@ -32,7 +33,11 @@ impl Editor {
     pub fn project_of(&self, dir: &Path) -> Option<PathBuf> {
         let markers = self.project_markers();
         dir.ancestors()
-            .find(|ancestor| markers.iter().any(|marker| ancestor.join(marker).exists()))
+            .find(|ancestor| {
+                markers
+                    .iter()
+                    .any(|marker| file_system::exists(&ancestor.join(marker)))
+            })
             .map(Path::to_owned)
     }
 
@@ -113,7 +118,7 @@ pub fn project_switch_project(ed: &mut Editor) -> CmdResult {
         .entries("project")
         .iter()
         .rev()
-        .filter(|root| Path::new(root).is_dir())
+        .filter(|root| file_system::is_dir(Path::new(root)))
         .map(|root| Candidate::new(abbreviate_path(Path::new(root))))
         .collect();
     if candidates.is_empty() {
@@ -125,7 +130,7 @@ pub fn project_switch_project(ed: &mut Editor) -> CmdResult {
     };
     ed.read_string("Switch to project: ", "", completion, |ed, root| {
         let root = expand_path(&root, Path::new("/"));
-        if !root.is_dir() {
+        if !file_system::is_dir(&root) {
             return Err(CmdError::msg(format!(
                 "{} is not a directory",
                 abbreviate_path(&root)

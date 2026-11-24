@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 use nucleo::pattern::{CaseMatching, Normalization};
 use nucleo::{Config, Injector, Nucleo};
 
+use crate::file_system;
+
 /// Called from a worker thread when new results are ready, to wake the
 /// thread that owns the editor.
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
@@ -152,15 +154,19 @@ fn inject(injector: &Injector<Candidate>, candidate: Candidate) {
 /// The entries of a directory as candidates, directories first and with a
 /// trailing slash.
 fn list_directory(dir: &Path) -> Vec<Candidate> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = file_system::read_dir(dir) else {
         return Vec::new();
     };
     let mut names: Vec<(bool, String)> = entries
-        .flatten()
+        .into_iter()
         .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
-            // `metadata` follows symlinks, so a link to a directory counts.
-            let is_dir = entry.path().metadata().is_ok_and(|meta| meta.is_dir());
+            let name = entry.name.into_string().ok()?;
+            // A link to a directory counts, and only a link needs another
+            // look to tell.
+            let is_dir = match entry.metadata {
+                Some(meta) if !meta.is_symlink() => meta.is_dir(),
+                _ => file_system::is_dir(&dir.join(&name)),
+            };
             Some((!is_dir, if is_dir { format!("{name}/") } else { name }))
         })
         .collect();

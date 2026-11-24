@@ -7,6 +7,7 @@
 //! Buffer positions are zero-based char offsets: the first position is 0 and
 //! the last is the buffer's length.
 
+use amacs_core::file_system;
 use amacs_core::{
     Buffer, BufferId, Candidate, CmdError, CmdResult, CommandBody, Completion, Editor, FaceSpec,
     Formatter, ServerConfig, Value, WindowId, expand_path, window_number,
@@ -403,9 +404,9 @@ pub const API: &[ApiFn] = api! {
     "file-size" (1, Some(1)) "The size of a file in bytes." =>
         |ed, args| {
             let path = expand_path(string(args, 0)?, ed.working_directory());
-            let meta = std::fs::metadata(&path)
+            let meta = file_system::metadata(&path)
                 .map_err(|error| CmdError::msg(format!("cannot look at {}: {error}", path.display())))?;
-            Ok(Value::Int(meta.len() as i64))
+            Ok(Value::Int(meta.len as i64))
         };
     "file-text?" (1, Some(1)) "Whether a file looks like text: its start holds no NUL byte. Only the start is read. A file that cannot be read is an error." =>
         |ed, args| {
@@ -448,7 +449,7 @@ pub const API: &[ApiFn] = api! {
     "read-file" (1, Some(1)) "The contents of a file, as a string. A relative name is taken from the working directory, and a leading ~ is the home directory." =>
         |ed, args| {
             let path = expand_path(string(args, 0)?, ed.working_directory());
-            std::fs::read_to_string(&path)
+            file_system::read_to_string(&path)
                 .map(Value::from)
                 .map_err(|error| CmdError::msg(format!("cannot read {}: {error}", path.display())))
         };
@@ -914,9 +915,9 @@ pub const API: &[ApiFn] = api! {
             Ok(path.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned()).into())
         };
     "file-exists?" (1, Some(1)) "Whether there is a file, directory or link of this name." =>
-        |ed, args| Ok(expand_path(string(args, 0)?, ed.working_directory()).symlink_metadata().is_ok().into());
+        |ed, args| Ok(file_system::symlink_metadata(&expand_path(string(args, 0)?, ed.working_directory())).is_ok().into());
     "file-directory?" (1, Some(1)) "Whether the name is that of a directory, or of a link to one." =>
-        |ed, args| Ok(expand_path(string(args, 0)?, ed.working_directory()).is_dir().into());
+        |ed, args| Ok(file_system::is_dir(&expand_path(string(args, 0)?, ed.working_directory())).into());
     "directory-entries" (1, Some(1)) "What a directory holds, in order of name: for each entry a list of its name, 'directory or 'file (a link counts as what it leads to), its size in bytes, when it was last changed in seconds since 1970, what it links to if it is a link (else #f), and whether it can be run as a program." =>
         |ed, args| {
             let directory = expand_path(string(args, 0)?, ed.working_directory());
@@ -924,26 +925,26 @@ pub const API: &[ApiFn] = api! {
                 CmdError::msg(format!("cannot read {}: {error}", directory.display()))
             };
             let mut entries = Vec::new();
-            for entry in std::fs::read_dir(&directory).map_err(failed)? {
-                let entry = entry.map_err(failed)?;
-                let own = entry.metadata().ok();
-                let link = own
-                    .as_ref()
-                    .filter(|own| own.file_type().is_symlink())
-                    .and_then(|_| std::fs::read_link(entry.path()).ok());
-                // What a link leads to says what it is, if it leads anywhere.
-                let followed = std::fs::metadata(entry.path()).ok().or(own);
-                let (is_dir, size, changed, runs) = followed.as_ref().map_or((false, 0, 0, false), |meta| {
-                    use std::os::unix::fs::PermissionsExt;
+            for entry in file_system::read_dir(&directory).map_err(failed)? {
+                let path = directory.join(&entry.name);
+                let own = entry.metadata;
+                let is_link = own.is_some_and(|own| own.is_symlink());
+                let link = is_link.then(|| file_system::read_link(&path).ok()).flatten();
+                // What a link leads to says what it is, if it leads
+                // anywhere; nothing else needs a second look.
+                let followed = match own {
+                    Some(own) if !is_link => Some(own),
+                    _ => file_system::metadata(&path).ok().or(own),
+                };
+                let (is_dir, size, changed, runs) = followed.map_or((false, 0, 0, false), |meta| {
                     let changed = meta
-                        .modified()
-                        .ok()
+                        .modified
                         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
                         .map_or(0, |since| since.as_secs());
-                    (meta.is_dir(), meta.len(), changed, !meta.is_dir() && meta.permissions().mode() & 0o111 != 0)
+                    (meta.is_dir(), meta.len, changed, meta.is_executable())
                 });
                 entries.push((
-                    entry.file_name().to_string_lossy().into_owned(),
+                    entry.name.to_string_lossy().into_owned(),
                     Value::List(vec![
                         Value::Void,
                         Value::sym(if is_dir { "directory" } else { "file" }),
@@ -970,22 +971,21 @@ pub const API: &[ApiFn] = api! {
     "write-file" (2, Some(2)) "Write a string to a file, replacing what the file held." =>
         |ed, args| {
             let path = expand_path(string(args, 0)?, ed.working_directory());
-            std::fs::write(&path, string(args, 1)?)
+            file_system::write(&path, string(args, 1)?.as_bytes())
                 .map(|()| Value::Void)
                 .map_err(|error| CmdError::msg(format!("cannot write {}: {error}", path.display())))
         };
     "make-directory" (1, Some(1)) "Create a directory, and the directories above it that are missing." =>
         |ed, args| {
             let path = expand_path(string(args, 0)?, ed.working_directory());
-            std::fs::create_dir_all(&path)
+            file_system::mkdir(&path)
                 .map(|()| Value::Void)
                 .map_err(|error| CmdError::msg(format!("cannot create {}: {error}", path.display())))
         };
     "delete-file" (1, Some(1)) "Delete a file or a link. A directory is deleted with everything in it." =>
         |ed, args| {
             let path = expand_path(string(args, 0)?, ed.working_directory());
-            let is_dir = path.symlink_metadata().is_ok_and(|meta| meta.is_dir());
-            if is_dir { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) }
+            file_system::delete(&path)
                 .map(|()| Value::Void)
                 .map_err(|error| CmdError::msg(format!("cannot delete {}: {error}", path.display())))
         };
@@ -993,10 +993,10 @@ pub const API: &[ApiFn] = api! {
         |ed, args| {
             let from = expand_path(string(args, 0)?, ed.working_directory());
             let to = expand_path(string(args, 1)?, ed.working_directory());
-            if to.symlink_metadata().is_ok() {
+            if file_system::symlink_metadata(&to).is_ok() {
                 return Err(CmdError::msg(format!("{} exists already", to.display())));
             }
-            std::fs::rename(&from, &to)
+            file_system::rename(&from, &to)
                 .map(|()| Value::Void)
                 .map_err(|error| CmdError::msg(format!("cannot rename {}: {error}", from.display())))
         };

@@ -407,7 +407,20 @@ harness. ssh and sudo themselves are tried by hand on `evo`.
 ### Steps
 
 1. `Location`, the `FileSystem` seam with local behaviour unchanged, and
-   the SFTP client against `sftp-server`.
+   the SFTP client against `sftp-server`. Done 2026-11-24:
+   `crates/amacs-remote` has `Location` and `Sftp`, and
+   `amacs_core::file_system` is the seam, with every path local still.
+   What the user's files go through moved to it (visiting, saving, the
+   file primitives of Scheme, completion, project roots); what the editor
+   keeps for itself on this machine did not (auto-save data, histories,
+   dictionaries, `.envrc`), nor the working directories of programs,
+   which are step 4. The client reads and writes a file eight pieces at
+   a time. Found on the way: `sftp-server` gives a path for a file that
+   is not there where `canonicalize` gives an error, and the rename that
+   replaces is an extension of OpenSSH, with a fallback for servers
+   without it that no test reaches. A host that stops answering holds
+   the call until its program is ended; the connection manager of step 2
+   has to do that.
 2. Visiting and saving remote files, auto-revert, completion.
 3. `dired` on remote paths; copying between local and remote.
 4. Locations for `run-process`, `make-process`, `M-!`, the terminal.

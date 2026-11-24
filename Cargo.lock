@@ -63,6 +63,7 @@ version = "0.1.0"
 dependencies = [
  "amacs-lsp",
  "amacs-proto",
+ "amacs-remote",
  "amacs-term",
  "amacs-text",
  "amacs-treesit",
@@ -140,6 +141,13 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "unicode-width",
+]
+
+[[package]]
+name = "amacs-remote"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]

@@ -4,6 +4,7 @@ use crate::buffer::BufferId;
 use crate::completion::Completion;
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
+use crate::file_system;
 use crate::files::{abbreviate_path, expand_path, modified_time};
 use crate::minibuffer::default_directory;
 
@@ -99,11 +100,11 @@ pub fn write_file(ed: &mut Editor) -> CmdResult {
     let base = ed.working_directory().to_owned();
     ed.read_string("Write file: ", &dir, Completion::File, move |ed, input| {
         let path = expand_path(&input, &base);
-        if input.is_empty() || input.ends_with('/') || path.is_dir() {
+        if input.is_empty() || input.ends_with('/') || file_system::is_dir(&path) {
             return Err(CmdError::msg("Please give a file name"));
         }
         let is_own_file = ed.buffer().file.as_deref() == Some(&path);
-        if path.exists() && !is_own_file {
+        if file_system::exists(&path) && !is_own_file {
             let name = abbreviate_path(&path);
             ed.ask_yes_no(format!("File {name} exists; overwrite?"), move |ed| {
                 ed.write_buffer(&path)

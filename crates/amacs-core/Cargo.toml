@@ -10,6 +10,7 @@ publish.workspace = true
 amacs-lsp.workspace = true
 amacs-term.workspace = true
 amacs-proto.workspace = true
+amacs-remote.workspace = true
 amacs-text.workspace = true
 amacs-treesit.workspace = true
 anyhow.workspace = true

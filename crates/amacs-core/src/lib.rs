@@ -16,6 +16,7 @@ mod env;
 mod error;
 mod extend;
 mod faces;
+pub mod file_system;
 mod files;
 mod format;
 mod frame;

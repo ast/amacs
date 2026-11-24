@@ -12,6 +12,7 @@ publish = false
 amacs-text = { path = "crates/amacs-text" }
 amacs-treesit = { path = "crates/amacs-treesit" }
 amacs-proto = { path = "crates/amacs-proto" }
+amacs-remote = { path = "crates/amacs-remote" }
 amacs-client = { path = "crates/amacs-client" }
 amacs-core = { path = "crates/amacs-core" }
 amacs-lsp = { path = "crates/amacs-lsp" }

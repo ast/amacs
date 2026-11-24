@@ -48,9 +48,11 @@
           tests = amacs.overrideAttrs (old: {
             pname = "amacs-tests";
             # Searching a project's files runs ripgrep, and so do its tests.
+            # The SFTP client is tested against the sftp-server of OpenSSH.
             nativeBuildInputs = old.nativeBuildInputs ++ [
               pkgs.ripgrep
               pkgs.git
+              pkgs.openssh
             ];
             # The renderer's tests draw text and need a known font.
             AMACS_TEST_FONTS = "${pkgs.jetbrains-mono}/share/fonts";

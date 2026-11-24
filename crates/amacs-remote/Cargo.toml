@@ -1,0 +1,13 @@
+[package]
+name = "amacs-remote"
+description = "Files on other hosts for amacs: tramp's file names, and an SFTP client that speaks through a program such as ssh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
