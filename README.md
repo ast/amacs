@@ -536,6 +536,18 @@ select some code and `C-c c r` adds a reference to it (`@path#L3-9`) to the
 prompt. The agent reads and writes files through the editor, so it sees your
 unsaved edits.
 
+You need not wait for the agent to write the next prompt. One sent while it
+is at work waits its turn: the conversation shows it as waiting, and it is
+sent when the turn is over. `C-c C-s` sends the prompt into the turn that
+is going on instead, to change its course, with an agent that takes such, as
+Claude does. `C-c c k` stops the turn, and what waited is not sent; `M-p`
+brings it back.
+
+An image is named in a prompt as a file is: `@shot.png`, written by hand or
+put there by `C-c c i` (`C-c C-a` in the compose buffer), which asks for the
+file. The image is sent with the prompt for the model to see: png, jpg, gif
+and webp.
+
 When the agent wants leave to change a file or run something, it does not
 take the minibuffer from you. The tool call says that it asks leave and
 lists the answers the agent offers, each with a key; the echo area and the
@@ -561,6 +573,24 @@ when point is back at the end. The mode line names the model and the mode,
 says how much of the model's context is used, and says when the agent is at
 work.
 
+There can be several sessions at once, each with an agent, a conversation
+and a compose buffer of its own: `*claude*`, `*claude*<2>` and so on. `C-c c
+c` goes to the session of the project you are in and starts one if there is
+none; with a prefix argument, `C-u C-c c c`, it starts another. `C-c c b`
+goes to another session, chosen by name, with where it works, what it is
+doing and the title of its conversation beside it. A command is about the
+session whose buffer it is given in, or else the one of the project. `C-c c
+y` and `C-c c n` answer whichever session asks.
+
+Conversations outlive their agents. `C-c c R` lists the conversations that
+were had in the project, the latest first with their titles, as Claude Code
+keeps them, those of its own terminal interface among them; the one you
+choose is shown again from its start and goes on. `C-c c f` starts another
+session from the one you are in, as it is now, and leaves that one alone: a
+way to try something else from here. An agent that was stopped (`M-x
+claude-quit`) or that ended takes its conversation up where it was when `C-c
+c c` is pressed in it.
+
 A session might go like this:
 
 1. In a file of the project, `C-c c c`. The conversation says "Ready."
@@ -581,10 +611,15 @@ A session might go like this:
 
 | Key | Does |
 |---|---|
-| `C-c c c` | Start Claude for the project, or show its windows |
+| `C-c c c` | Start Claude for the project, or show its windows; with `C-u`, start another session |
+| `C-c c b` | Go to another session |
+| `C-c c R` | Take up a conversation that was had in the project before |
+| `C-c c f` | Start another session from this one as it is |
 | `C-c c p` | Show the compose buffer |
-| `C-c C-c` | In the compose buffer, send the prompt |
+| `C-c C-c` | In the compose buffer, send the prompt, or have it wait for the turn to end |
+| `C-c C-s` | In the compose buffer, send the prompt into the turn that is going on |
 | `C-c C-k` | Clear the compose buffer |
+| `C-c c i`, `C-c C-a` | Add an image to the prompt |
 | `M-p`, `M-n` | Earlier and later prompts |
 | `C-c c r` | Add a reference to the region of the current file to the prompt |
 | `C-c c l` | Ask a one-line question in the minibuffer |
@@ -595,7 +630,7 @@ A session might go like this:
 | `C-c c /` | Send a slash command |
 | `TAB` | In the conversation, fold or open the section at point |
 | `RET` | In the conversation, go to the file and line at point, or give the answer at point |
-| `y`, `o`, `m`, `/` | In the conversation, as `C-c c` and the same key |
+| `y`, `o`, `m`, `/`, `b` | In the conversation, as `C-c c` and the same key |
 | `M-n`, `M-p` | In the conversation, the next and the previous turn |
 | `g` | In the conversation, draw it again |
 
@@ -604,7 +639,23 @@ elsewhere. It is written in `runtime/lib/acp.scm`, on the process and JSON
 primitives and on `runtime/lib/section.scm`. An agent that has no shell of
 its own can have the editor run programs for it (the protocol's
 `terminal/*`), and the tool call shows what they write; Claude Code runs its
-own. Several sessions and other agents are next.
+own.
+
+An agent has the Model Context Protocol servers of its own configuration.
+The `acp-mcp-servers` option gives it more with each session, a command or
+the URL of a server that speaks HTTP, and `acp-additional-directories`
+directories to work in besides that of the project:
+
+```scheme
+;; A program that speaks the protocol, and a server on the network.
+(set-option! 'acp-mcp-servers
+  '(("amacs" "amacs-mcp")
+    ("docs" "https://example.org/mcp")))
+(set-option! 'acp-additional-directories '("/home/me/src/other"))
+```
+
+Not there yet: other agents than Claude by name, and what belongs to Claude
+Code's own terminal interface, such as going back to a checkpoint.
 
 ## Spelling
 

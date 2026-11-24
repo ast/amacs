@@ -15,56 +15,200 @@
 ;;; agent sends changes a model of the conversation, and the buffer is drawn
 ;;; from the model, so that a tool call changes where it stands.
 ;;;
-;;; It is deliberately one connection and one buffer for now; several
-;;; sessions and the backend seam for other agents come next.
+;;; There can be several sessions at once, each with an agent of its own, a
+;;; conversation and a compose buffer. What is known of a session is in
+;;; session variables, made with `define-acp-variable`: they hold the values
+;;; of the session at hand, as the local variables of a buffer hold those of
+;;; the current buffer. A command makes the session of the buffer it is
+;;; given in the one at hand, and what comes from an agent is handled with
+;;; the session of that agent at hand.
 
 (define-option 'acp-command '("claude-agent-acp")
   "The command that speaks the Agent Client Protocol, a list of the program
 and its arguments. The default is the Claude Code adapter.")
 
-(define %acp-buffer "*claude*")
-(define %acp-process #f)
-(define %acp-session #f)
-(define %acp-next-id 0)
+(define-option 'acp-mcp-servers '()
+  "The Model Context Protocol servers that an agent is given with each
+session, besides those of its own configuration. Each is a list of a name
+and a command with its arguments, such as (\"amacs\" \"amacs-mcp\"), or of a
+name and the URL of a server that speaks HTTP.")
+
+(define-option 'acp-additional-directories '()
+  "Directories besides that of the project that an agent may work in, for
+an agent that takes such: a list of absolute paths, given with each session
+that is started.")
+
+;;; Sessions
+
+;; The session variables, in the order they were defined: each a vector of
+;; a procedure that makes the value a new session starts with, one that
+;; reads the variable and one that sets it.
+(define %acp-variables '())
+
+(define-syntax define-acp-variable
+  (syntax-rules ()
+    [(_ name init)
+     (begin
+       (define name init)
+       (set! %acp-variables
+         (append %acp-variables
+                 (list (vector (lambda () init)
+                               (lambda () name)
+                               (lambda (value) (set! name value)))))))]))
+
+(set-documentation! 'define-acp-variable
+  "(define-acp-variable name init)
+Defines a variable that has a value of its own in each session with an
+agent: it holds the value of the session at hand. The expression is
+evaluated anew for each session that is made.")
+
+;; A session is a vector of the values of its variables, as they were when
+;; it was last at hand, and its number, which its buffers are named by. The
+;; variables themselves hold the values of the session at hand.
+(define %acp-here (vector '() 1))
+;; Every session, the oldest first.
+(define %acp-sessions (list %acp-here))
+
+(define (%acp-name base number)
+  ;; The name of a buffer of a session: the first has the plain name.
+  (if (= number 1)
+      base
+      (string-append base "<" (number->string number) ">")))
+
+(define (%acp-enter! session)
+  ;; Makes a session the one at hand: the variables are given its values,
+  ;; and those of the one that was at hand are kept with it.
+  (unless (eq? session %acp-here)
+    (vector-set! %acp-here 0
+                 (map (lambda (variable) ((vector-ref variable 1))) %acp-variables))
+    (set! %acp-here session)
+    (for-each (lambda (variable value) ((vector-ref variable 2) value))
+              %acp-variables
+              (vector-ref session 0))))
+
+(define (%acp-in session thunk)
+  ;; Calls a procedure with a session at hand, and has the one that was at
+  ;; hand so again afterwards.
+  (let ((before %acp-here))
+    (dynamic-wind
+      (lambda () (%acp-enter! session))
+      thunk
+      (lambda () (%acp-enter! before)))))
+
+(define (%acp-bound proc)
+  ;; A procedure that calls another with the session that is at hand now,
+  ;; for what an agent or a program does later.
+  (let ((session %acp-here))
+    (lambda arguments
+      (%acp-in session (lambda () (apply proc arguments))))))
+
+(define (%acp-session-showing name)
+  ;; The session that a buffer is the conversation or the compose buffer of.
+  (find (lambda (session)
+          (let ((number (vector-ref session 1)))
+            (or (equal? name (%acp-name "*claude*" number))
+                (equal? name (%acp-name "*claude prompt*" number)))))
+        %acp-sessions))
+
+(define (%acp-new-session!)
+  ;; A session of which nothing is known yet, which becomes the one at
+  ;; hand. Those whose agent has ended and whose conversation was killed
+  ;; are forgotten, and their numbers are free again.
+  (set! %acp-sessions
+    (filter (lambda (session)
+              (or (eq? session %acp-here)
+                  (%acp-in session
+                    (lambda () (or (%acp-connected?) (member %acp-buffer (buffer-list)))))))
+            %acp-sessions))
+  (let* ((taken (map (lambda (session) (vector-ref session 1)) %acp-sessions))
+         (number (let loop ((n 1)) (if (memv n taken) (loop (+ n 1)) n)))
+         (session (vector '() number)))
+    (vector-set! %acp-here 0
+                 (map (lambda (variable) ((vector-ref variable 1))) %acp-variables))
+    (set! %acp-sessions (append %acp-sessions (list session)))
+    (set! %acp-here session)
+    (for-each (lambda (variable) ((vector-ref variable 2) ((vector-ref variable 0))))
+              %acp-variables)
+    session))
+
+(define (%acp-find-session wanted?)
+  ;; The first session of which a procedure, called with it at hand, says
+  ;; yes: the one at hand before the others.
+  (find (lambda (session) (%acp-in session wanted?))
+        (cons %acp-here %acp-sessions)))
+
+(define (%acp-select!)
+  ;; Makes the session that a command is about the one at hand: that of the
+  ;; conversation or compose buffer it is given in, or one whose agent
+  ;; works in the project of the buffer, or else the one already at hand.
+  (let ((root (or (project-root) (working-directory))))
+    (%acp-enter!
+     (or (%acp-session-showing (buffer-name))
+         (%acp-find-session (lambda () (and (%acp-connected?) (equal? %acp-root root))))
+         %acp-here))))
+
+(define-acp-variable %acp-buffer (%acp-name "*claude*" (vector-ref %acp-here 1)))
+(define-acp-variable %acp-prompt-buffer
+  (%acp-name "*claude prompt*" (vector-ref %acp-here 1)))
+(define-acp-variable %acp-process #f)
+(define-acp-variable %acp-session #f)
+(define-acp-variable %acp-next-id 0)
 ;; Ids we are waiting on, to the procedure (result error) that handles the reply.
-(define %acp-pending (make-hash-table))
+(define-acp-variable %acp-pending (make-hash-table))
 ;; Output from the agent not yet split into whole lines.
-(define %acp-input "")
-;; Whether a turn is in progress, for the mode line and to refuse overlap.
-(define %acp-busy #f)
+(define-acp-variable %acp-input "")
+;; What the agent said of itself when the connection was made: what it can
+;; do is in it.
+(define-acp-variable %acp-agent #f)
+;; Whether a turn is in progress, for the mode line and to hold back the
+;; prompts written meanwhile.
+(define-acp-variable %acp-busy #f)
+;; Prompts written while the agent was at work, oldest first: each a list
+;; of the text and, if it has more than text, what is sent for it.
+(define-acp-variable %acp-queue '())
 ;; Where the agent works, which its relative paths are taken from.
-(define %acp-root #f)
+(define-acp-variable %acp-root #f)
+;; The title that the agent has given the conversation, or #f.
+(define-acp-variable %acp-title #f)
+;; The session that the agent of this conversation had when it ended, to
+;; take it up again where it was.
+(define-acp-variable %acp-resumable #f)
+;; Whether the agent is telling of a conversation that was, and the id of
+;; the last message of the user in it.
+(define-acp-variable %acp-replaying #f)
+(define-acp-variable %acp-replayed-id #f)
 ;; The model and the mode of the session, as the agent names them.
-(define %acp-model #f)
-(define %acp-mode #f)
+(define-acp-variable %acp-model #f)
+(define-acp-variable %acp-mode #f)
 ;; How much of the model's context the conversation fills, and how much
 ;; there is, in tokens; #f until the agent has said.
-(define %acp-used #f)
-(define %acp-size #f)
+(define-acp-variable %acp-used #f)
+(define-acp-variable %acp-size #f)
 ;; What of the session can be set, as the agent tells of it: the mode, the
 ;; model and whatever else, each an object with its values and the one now.
-(define %acp-options '())
+(define-acp-variable %acp-options '())
 ;; The modes as agents told of them before there were options, kept for an
 ;; agent that has no option for the mode.
-(define %acp-modes #f)
+(define-acp-variable %acp-modes #f)
 ;; The slash commands that the agent knows, objects with a name, a
 ;; description and perhaps a hint of what to write after the name.
-(define %acp-commands '())
+(define-acp-variable %acp-commands '())
 ;; What the agent has asked leave for and has no answer to yet, oldest
 ;; first. Each is a vector of the id of the request, the id of the tool
 ;; call, and the options: lists of a key, a label, the id to answer with and
 ;; the kind.
-(define %acp-permissions '())
+(define-acp-variable %acp-permissions '())
 ;; The programs run for the agent, by the ids they were given. Each is a
 ;; vector of the process, what it has written, whether the start of that
 ;; was dropped, how it ended (#f while it runs, then a pair of the exit
 ;; status and the signal), the requests that wait for it to end, how many
 ;; bytes of output to keep, how many are kept, whether the editor ended it,
 ;; and whether the agent is done with it.
-(define %acp-terminals (make-hash-table))
+(define-acp-variable %acp-terminals (make-hash-table))
+;; The ids are of every session, since the programs are named by them.
 (define %acp-next-terminal 0)
 ;; The tool call that shows a terminal, by the id of the terminal.
-(define %acp-terminal-tools (make-hash-table))
+(define-acp-variable %acp-terminal-tools (make-hash-table))
 
 (set-face! 'agent-prompt 'fg 'blue 'bold #t)
 (set-face! 'agent-tool 'bold #t)
@@ -162,6 +306,13 @@ comes."
       [(equal? kind "config_option_update")
        (%acp-read-options! (%acp-get update 'configOptions))
        (%acp-show-state)]
+      [(equal? kind "session_info_update")
+       (when (%acp-get update 'title) (set! %acp-title (%acp-get update 'title)))]
+      [(equal? kind "user_message_chunk")
+       ;; What the user wrote is only news in a conversation that was.
+       (when %acp-replaying
+         (%acp-replay-prompt! (%acp-content-text (%acp-get update 'content))
+                              (%acp-get update 'messageId)))]
       [else #f])))
 
 (define (%acp-content-text content)
@@ -284,7 +435,9 @@ comes."
     (set! %acp-permissions (append %acp-permissions (list request)))
     (%acp-changed!)
     (%acp-show-state)
-    (message "Claude asks leave: " (%acp-request-title request)
+    (message "Claude asks leave"
+             (if (null? (cdr %acp-sessions)) "" (string-append " in " %acp-buffer))
+             ": " (%acp-request-title request)
              " (C-c c y allows, C-c c n refuses, C-c c o chooses)")))
 
 (define (%acp-request-title request)
@@ -321,9 +474,17 @@ comes."
              (loop (cdr kinds))))))
 
 (define (%acp-asked)
-  (when (null? %acp-permissions)
-    (error "Claude is not asking leave for anything"))
-  (car %acp-permissions))
+  ;; The request to answer: the oldest of the session of this buffer if it
+  ;; asks, or of the one at hand, or of any other that asks. That session
+  ;; becomes the one at hand.
+  (let* ((asks? (lambda () (pair? %acp-permissions)))
+         (shown (%acp-session-showing (buffer-name)))
+         (session (or (and shown (%acp-in shown asks?) shown)
+                      (%acp-find-session asks?))))
+    (unless session
+      (error "Claude is not asking leave for anything"))
+    (%acp-enter! session)
+    (car %acp-permissions)))
 
 (define-command (claude-allow)
   "Allow, this once, what Claude has asked leave for the longest. Works from
@@ -425,17 +586,19 @@ longest, each with its key, and give the one whose key is pressed."
          (if (and (null? arguments) (string-search command " "))
              (list "sh" "-c" command)
              (cons command arguments))
-         'filter (lambda (process text) (%acp-terminal-output! name terminal text))
-         'sentinel (lambda (process status)
-                     (vector-set! terminal 3
-                       (cons status
-                             (and (not status)
-                                  (if (vector-ref terminal 7) "SIGKILL" "unknown"))))
-                     (for-each (lambda (waiting)
-                                 (%acp-respond waiting (%acp-terminal-exit terminal)))
-                               (vector-ref terminal 4))
-                     (vector-set! terminal 4 '())
-                     (%acp-terminal-changed! name))
+         'filter (%acp-bound
+                  (lambda (process text) (%acp-terminal-output! name terminal text)))
+         'sentinel (%acp-bound
+                    (lambda (process status)
+                      (vector-set! terminal 3
+                        (cons status
+                              (and (not status)
+                                   (if (vector-ref terminal 7) "SIGKILL" "unknown"))))
+                      (for-each (lambda (waiting)
+                                  (%acp-respond waiting (%acp-terminal-exit terminal)))
+                                (vector-ref terminal 4))
+                      (vector-set! terminal 4 '())
+                      (%acp-terminal-changed! name)))
          'directory (or (%acp-get params 'cwd) %acp-root (working-directory))
          'environment (map (lambda (variable)
                              (list (%acp-get variable 'name) (%acp-get variable 'value)))
@@ -472,21 +635,22 @@ longest, each with its key, and give the one whose key is pressed."
 ;; A turn: its number, the prompt that started it (#f for what came before
 ;; the first prompt), and what came in answer, newest first. Each of those
 ;; is a vector of its kind and what it holds: the text of a 'message, a
-;; 'thought or a 'note, the fields of a 'tool call, the entries of a 'plan.
+;; 'thought or a 'note, the fields of a 'tool call, the entries of a 'plan,
+;; the text of what the user 'said into the turn while it went on.
 ;; A turn that is over keeps the sections it was last drawn as, so that a
 ;; long conversation is not worked out anew for each piece of an answer.
 (define-record-type acp-turn
   (%make-acp-turn number prompt items drawn)
   %acp-turn?
   (number %acp-turn-number)
-  (prompt %acp-turn-prompt)
+  (prompt %acp-turn-prompt %acp-turn-set-prompt!)
   (items %acp-turn-items %acp-turn-set-items!)
   (drawn %acp-turn-drawn %acp-turn-set-drawn!))
 
 ;; The turns, newest first.
-(define %acp-turns '())
+(define-acp-variable %acp-turns '())
 ;; Tool calls by their id, to find the one that an update is about.
-(define %acp-tools (make-hash-table))
+(define-acp-variable %acp-tools (make-hash-table))
 
 (define (%acp-turn)
   (when (null? %acp-turns)
@@ -498,6 +662,20 @@ longest, each with its key, and give the one whose key is pressed."
     (cons (%make-acp-turn (+ 1 (%acp-turn-number (%acp-turn))) prompt '() #f)
           %acp-turns))
   (%acp-changed!))
+
+(define (%acp-replay-prompt! text id)
+  ;; A prompt of a conversation that was, as the agent tells of it again:
+  ;; it heads a turn, and the pieces of one message join.
+  (unless (equal? text "")
+    (let ((turn (%acp-turn)))
+      (if (and id (equal? id %acp-replayed-id)
+               (%acp-turn-prompt turn)
+               (null? (%acp-turn-items turn)))
+          (begin
+            (%acp-turn-set-prompt! turn (string-append (%acp-turn-prompt turn) text))
+            (%acp-changed!))
+          (%acp-start-turn! text)))
+    (set! %acp-replayed-id id)))
 
 (define (%acp-add! item)
   (let ((turn (%acp-turn)))
@@ -854,6 +1032,7 @@ be #f for a file that is new."
     (case kind
       [(message) (%acp-line-sections index (%acp-text-lines what) #f "")]
       [(note) (%acp-line-sections index (%acp-text-lines what) 'shadow "")]
+      [(said) (%acp-line-sections index (%acp-text-lines what) 'agent-prompt "› ")]
       [(thought) (if (null? (%acp-text-lines what)) '() (list (%acp-thought-section what index)))]
       [(tool) (list (%acp-tool-section what index))]
       [(plan) (list (%acp-plan-section what index))]
@@ -886,8 +1065,26 @@ be #f for a file that is new."
                          answer)
                  (list 'turn number)))))))
 
+(define (%acp-waiting-sections)
+  ;; The prompts that wait for the turn at work to end, a line for each.
+  (if (null? %acp-queue)
+      '()
+      (cons (make-section (list 'gap 'waiting) "" '() #f)
+            (map (lambda (entry n)
+                   (let ((lines (%acp-text-lines (car entry))))
+                     (make-section
+                      (list 'waiting n)
+                      (list (cons (string-append
+                                   "Waits its turn: "
+                                   (%acp-short (if (pair? lines) (car lines) "") 60))
+                                  'shadow))
+                      '() #f)))
+                 %acp-queue
+                 (iota (length %acp-queue))))))
+
 (define (%acp-sections)
-  (let ((sections (apply append (map %acp-turn-sections (reverse %acp-turns)))))
+  (let ((sections (append (apply append (map %acp-turn-sections (reverse %acp-turns)))
+                          (%acp-waiting-sections))))
     ;; No empty line above the first turn when nothing came before it.
     (if (and (pair? sections) (eq? (car (section-key (car sections))) 'gap))
         (cdr sections)
@@ -896,26 +1093,32 @@ be #f for a file that is new."
 ;;; The buffer
 
 ;; What the user has folded and opened in the conversation.
-(define %acp-view (make-section-view))
+(define-acp-variable %acp-view (make-section-view))
 ;; Whether a redraw has been asked for and not yet done.
-(define %acp-redraw-waits #f)
+(define-acp-variable %acp-redraw-waits #f)
 
 (define-major-mode agent-mode #f "Agent"
   "Major mode of the conversation with a coding agent. TAB folds and opens
 what is at point, RET goes to the file that a tool call or a line of a
 change is about, M-n and M-p move by turn. When the agent asks leave, y
 allows it, o shows every answer, and RET on an answer gives it. m sets the
-mode or the model, and / sends a slash command. Start with C-c c c.")
+mode or the model, / sends a slash command, and b goes to another session.
+Start with C-c c c.")
 
 (define (%acp-ensure-buffer)
-  (switch-to-buffer %acp-buffer)
-  (unless (eq? (major-mode) 'agent-mode)
-    (agent-mode)
-    ;; What the agent writes is Markdown, and is coloured as such; the
-    ;; faces of the sections lie over that.
-    (set-buffer-language! "markdown")
-    (set-buffer-read-only! #t)
-    (%acp-redraw!))
+  ;; A conversation that no window showed is shown at its end, which the
+  ;; window then follows.
+  (let ((shown? (and (member %acp-buffer (buffer-list))
+                     (pair? (buffer-windows %acp-buffer)))))
+    (switch-to-buffer %acp-buffer)
+    (unless (eq? (major-mode) 'agent-mode)
+      (agent-mode)
+      ;; What the agent writes is Markdown, and is coloured as such; the
+      ;; faces of the sections lie over that.
+      (set-buffer-language! "markdown")
+      (set-buffer-read-only! #t)
+      (%acp-redraw!))
+    (unless shown? (goto-char (point-max))))
   %acp-buffer)
 
 (define (%acp-changed!)
@@ -923,7 +1126,7 @@ mode or the model, and / sends a slash command. Start with C-c c c.")
   ;; is drawn once, after them.
   (unless %acp-redraw-waits
     (set! %acp-redraw-waits #t)
-    (run-later %acp-redraw!)))
+    (run-later (%acp-bound %acp-redraw!))))
 
 (define (%acp-at-end?)
   ;; Whether point is at the end, where the redraws leave it until the
@@ -989,7 +1192,10 @@ mode or the model, and / sends a slash command. Start with C-c c c.")
                                     (string-append (%acp-tokens %acp-used) "/"
                                                    (%acp-tokens %acp-size)))
                                (and (pair? %acp-permissions) "asks leave")
-                               (and %acp-busy "working")))))
+                               (and %acp-busy "working")
+                               (and (pair? %acp-queue)
+                                    (string-append (number->string (length %acp-queue))
+                                                   " waiting"))))))
       (with-current-buffer %acp-buffer
         (set-mode-line-text!
          (and (pair? parts) (string-append "[" (string-join parts ", ") "]")))))))
@@ -997,6 +1203,7 @@ mode or the model, and / sends a slash command. Start with C-c c c.")
 (define-command (agent-toggle-section)
   "Fold or open the section at point: a turn, a thought, a tool call, the
 plan."
+  (%acp-select!)
   (unless (section-view-toggle! %acp-view)
     (message "Nothing to fold here")))
 
@@ -1004,6 +1211,7 @@ plan."
   "Go to the file that the tool call or the line of a change at point is
 about, at its line. On an answer to what the agent asks leave for, give
 that answer. Elsewhere, fold or open the section."
+  (%acp-select!)
   (let* ((values (map section-value (section-chain-at-point %acp-view)))
          (leave (and (pair? values) (pair? (car values)) (eq? (caar values) 'leave)
                      (car values)))
@@ -1030,16 +1238,19 @@ that answer. Elsewhere, fold or open the section."
 
 (define-command (agent-next-turn)
   "Move to the prompt of the next turn."
+  (%acp-select!)
   (let ((line (%acp-turn-line (- (line-number-at-pos) 1) 1)))
     (if line (goto-line line) (message "No turn after this"))))
 
 (define-command (agent-previous-turn)
   "Move to the prompt of this turn, or of the one before."
+  (%acp-select!)
   (let ((line (%acp-turn-line (- (line-number-at-pos) 1) -1)))
     (if line (goto-line line) (message "No turn before this"))))
 
 (define-command (agent-redraw)
   "Draw the conversation again."
+  (%acp-select!)
   (%acp-redraw!))
 
 (for-each
@@ -1049,25 +1260,67 @@ that answer. Elsewhere, fold or open the section."
    ("M-n" agent-next-turn) ("M-p" agent-previous-turn)
    ("g" agent-redraw)
    ("y" claude-allow) ("o" claude-answer) ("m" claude-set-option)
-   ("/" claude-slash-command)))
+   ("/" claude-slash-command) ("b" claude-switch)))
 
 ;;; Commands
 
 (define (%acp-connected?)
   (and %acp-process (process-live? %acp-process)))
 
+(define (%acp-capability . path)
+  ;; Something that the agent said it can do when the connection was made,
+  ;; by the names that lead to it; #f if it did not say so.
+  (let loop ((value (%acp-get %acp-agent 'agentCapabilities)) (path path))
+    (cond [(null? path) (if (null? value) #t value)]
+          [(pair? value) (loop (%acp-get value (car path)) (cdr path))]
+          [else #f])))
+
+(define (%acp-claim! root fresh?)
+  ;; Makes the session to start an agent in the one at hand: one whose
+  ;; agent has ended, the one of this buffer before any other of the
+  ;; project, or else a new one. With `fresh?`, only one with no
+  ;; conversation in it will do.
+  (let* ((free? (lambda ()
+                  (and (not (%acp-connected?))
+                       (or (not %acp-root) (equal? %acp-root root))
+                       (or (not fresh?) (null? %acp-turns)))))
+         (shown (%acp-session-showing (buffer-name)))
+         (session (or (and shown (%acp-in shown free?) shown)
+                      (%acp-find-session free?))))
+    (if session
+        (%acp-enter! session)
+        (%acp-new-session!))))
+
+(define (%acp-start! root fresh? open)
+  ;; Starts an agent in a directory and shows its conversation. `open` is
+  ;; called, with the session at hand, when the connection is made.
+  (%acp-claim! root fresh?)
+  (%acp-ensure-buffer)
+  (%acp-connect root open)
+  (%acp-show-ui))
+
 (define-command (claude)
   "Start Claude for this project over the Agent Client Protocol, showing
 the conversation and a buffer to write prompts in; or show them if it is
-already running. Write a prompt and send it with C-c C-c."
-  (if (%acp-connected?)
-      (%acp-show-ui)
-      ;; The project is that of the buffer the command was given in, so it
-      ;; is asked for before the conversation takes the window.
-      (let ((root (or (project-root) (working-directory))))
-        (%acp-ensure-buffer)
-        (%acp-connect root)
-        (%acp-show-ui))))
+already running. Write a prompt and send it with C-c C-c. With a prefix
+argument, start another session beside those that run. In a conversation
+whose agent has ended, the agent is started again and takes the
+conversation up where it was."
+  ;; The project is that of the buffer the command was given in, so it is
+  ;; asked for before the conversation takes the window.
+  (let* ((root (or (project-root) (working-directory)))
+         (shown (%acp-session-showing (buffer-name)))
+         (running? (lambda () (and (%acp-connected?) (equal? %acp-root root))))
+         (running (and (= (prefix-arg) 1)
+                       (or (and shown (%acp-in shown %acp-connected?) shown)
+                           (%acp-find-session running?)))))
+    (if running
+        (begin (%acp-enter! running) (%acp-show-ui))
+        (%acp-start! root (not (= (prefix-arg) 1))
+          (lambda ()
+            (if (and %acp-resumable (%acp-capability 'sessionCapabilities 'resume))
+                (%acp-open-session "session/resume" %acp-resumable)
+                (%acp-open-session "session/new" #f)))))))
 
 ;;; The window layout: the conversation above, a compose buffer below.
 
@@ -1095,19 +1348,21 @@ already running. Write a prompt and send it with C-c C-c."
              (let ((now (window-height)))
                (when (> now height) (loop now (- guard 1))))]))))
 
-(define (%acp-connect root)
+(define (%acp-connect root open)
+  ;; Starts the agent of the session at hand in a directory. `open` is
+  ;; called, with the session at hand, when the agent has said what it is.
   (set! %acp-input "")
-  (set! %acp-session #f)
   (set! %acp-next-id 0)
   (set! %acp-pending (make-hash-table))
   (%acp-forget-session!)
   (set! %acp-root root)
   (with-current-buffer %acp-buffer (set-buffer-directory! root))
   (set! %acp-process
-    (make-process "claude-acp" (option 'acp-command)
-                  'filter %acp-filter
+    (make-process (%acp-name "claude-acp" (vector-ref %acp-here 1))
+                  (option 'acp-command)
+                  'filter (%acp-bound %acp-filter)
                   'stderr %acp-stderr
-                  'sentinel %acp-sentinel
+                  'sentinel (%acp-bound %acp-sentinel)
                   'directory root))
   (%acp-note "Starting Claude…")
   (%acp-request "initialize"
@@ -1117,23 +1372,65 @@ already running. Write a prompt and send it with C-c C-c."
                                       'terminal #t)
                  'clientInfo (json-object 'name "amacs" 'version "0.1.0"))
     (lambda (result error)
-      (if error
-          (%acp-note (string-append "[initialize failed: " (or (%acp-get error 'message) "?") "]"))
-          (%acp-new-session root)))))
+      (cond [error
+             (%acp-note (string-append "[initialize failed: "
+                                       (or (%acp-get error 'message) "?") "]"))]
+            [else
+             (set! %acp-agent result)
+             (open)]))))
 
-(define (%acp-new-session root)
-  (%acp-request "session/new"
-    (json-object 'cwd root 'mcpServers (json-array))
-    (lambda (result error)
-      (if error
-          (%acp-note (string-append "[session/new failed: " (or (%acp-get error 'message) "?") "]"))
-          (begin
-            (set! %acp-session (%acp-get result 'sessionId))
-            (set! %acp-modes (%acp-get result 'modes))
-            (set! %acp-mode (%acp-get %acp-modes 'currentModeId))
-            (%acp-read-options! (%acp-get result 'configOptions))
-            (%acp-show-state)
-            (%acp-note "Ready. Write a prompt below and send it with C-c C-c."))))))
+(define (%acp-mcp-servers)
+  ;; The servers of the `acp-mcp-servers` option, as the protocol has them.
+  (list->vector
+   (map (lambda (server)
+          (let ((name (car server))
+                (what (cadr server)))
+            (if (or (string-prefix? "http://" what) (string-prefix? "https://" what))
+                (json-object 'type "http" 'name name 'url what 'headers (json-array))
+                (json-object 'name name 'command what
+                             'args (list->vector (cddr server))
+                             'env (json-array)))))
+        (option 'acp-mcp-servers))))
+
+(define (%acp-open-session method id)
+  ;; Opens the session of the agent: a new one with "session/new", or with
+  ;; the id of one that was, "session/load" to be told of it again from its
+  ;; start, "session/resume" to go on without that, "session/fork" for
+  ;; another that starts as it is.
+  (let ((directories (option 'acp-additional-directories)))
+    (when (equal? method "session/load")
+      (set! %acp-replaying #t)
+      (set! %acp-replayed-id #f))
+    (%acp-request method
+      (append (if id (json-object 'sessionId id) '())
+              (json-object 'cwd %acp-root 'mcpServers (%acp-mcp-servers))
+              (if (and (pair? directories)
+                       (%acp-capability 'sessionCapabilities 'additionalDirectories))
+                  (json-object 'additionalDirectories (list->vector directories))
+                  '()))
+      (lambda (result error)
+        (set! %acp-replaying #f)
+        (cond
+          [error
+           (%acp-note (string-append "[" method " failed: "
+                                     (or (%acp-get error 'message) "?") "]"))
+           ;; A conversation that cannot be taken up again gives way to a
+           ;; new one.
+           (when (equal? method "session/resume")
+             (set! %acp-resumable #f)
+             (%acp-open-session "session/new" #f))]
+          [else
+           (set! %acp-session (or (%acp-get result 'sessionId) id))
+           (set! %acp-modes (%acp-get result 'modes))
+           (set! %acp-mode (%acp-get %acp-modes 'currentModeId))
+           (%acp-read-options! (%acp-get result 'configOptions))
+           (%acp-show-state)
+           (%acp-note
+            (cond [(equal? method "session/new")
+                   "Ready. Write a prompt below and send it with C-c C-c."]
+                  [(equal? method "session/fork")
+                   "Ready, in a session of its own that starts as the other was."]
+                  [else "Ready, with the conversation as it was."]))])))))
 
 (define (%acp-stderr process text)
   ;; The adapter's own logs on standard error: kept apart from the protocol
@@ -1143,7 +1440,10 @@ already running. Write a prompt and send it with C-c C-c."
 (define (%acp-forget-session!)
   ;; What was known of a session that is over, or of the one before a new.
   (set! %acp-session #f)
+  (set! %acp-agent #f)
   (set! %acp-busy #f)
+  (set! %acp-queue '())
+  (set! %acp-replaying #f)
   (set! %acp-model #f)
   (set! %acp-mode #f)
   (set! %acp-used #f)
@@ -1156,32 +1456,41 @@ already running. Write a prompt and send it with C-c C-c."
   (%acp-end-terminals!))
 
 (define (%acp-sentinel process status)
-  (set! %acp-process #f)
-  (%acp-forget-session!)
-  (for-each (lambda (turn) (%acp-turn-set-drawn! turn #f)) %acp-turns)
-  (%acp-show-state)
-  (%acp-note (string-append "[Claude ended" (if status (string-append " (" (number->string status) ")") "") "]")))
+  ;; An agent that was ended to start another in its place has nothing to
+  ;; say of the one that runs now.
+  (when (or (not %acp-process) (equal? process %acp-process))
+    (set! %acp-process #f)
+    (when %acp-session (set! %acp-resumable %acp-session))
+    (%acp-forget-session!)
+    (for-each (lambda (turn) (%acp-turn-set-drawn! turn #f)) %acp-turns)
+    (%acp-show-state)
+    (%acp-note (string-append "[Claude ended"
+                              (if status (string-append " (" (number->string status) ")") "")
+                              "]"))))
 
 (define-command (claude-send)
   "Ask the running Claude a one-line question from the minibuffer, a quick
-alternative to the compose buffer."
+alternative to the compose buffer. While Claude is at work, the question
+waits its turn."
+  (%acp-select!)
   (unless %acp-session (error "Claude is not running; C-c c c first"))
-  (when %acp-busy (error "Claude is still working; C-c c k to cancel"))
-  (let ((text (read-string "Ask Claude: ")))
+  (let ((session %acp-here)
+        (text (read-string "Ask Claude: ")))
+    (%acp-enter! session)
     (unless (equal? (string-trim text) "")
-      (%acp-send-prompt text))))
+      (%acp-submit text))))
 
 ;;; The compose buffer
 
-(define %acp-prompt-buffer "*claude prompt*")
-;; Prompts sent, oldest first, for M-p and M-n.
+;; Prompts sent, oldest first, for M-p and M-n: those of every session.
 (define %acp-history '())
-(define %acp-history-index #f)
+(define-acp-variable %acp-history-index #f)
 
 (define-minor-mode claude-compose-mode "Compose"
-  "Writing a prompt for Claude. C-c C-c sends it, C-c C-k clears it, C-c C-r
-inserts a reference to the region in the other window, and M-p and M-n walk
-earlier prompts.")
+  "Writing a prompt for Claude. C-c C-c sends it, or has it wait its turn
+while Claude is at work; C-c C-s sends it into the turn that is going on.
+C-c C-k clears it, C-c C-r inserts a reference to the region in the other
+window, C-c C-a one to an image, and M-p and M-n walk earlier prompts.")
 
 (define (%acp-open-compose)
   (switch-to-buffer %acp-prompt-buffer)
@@ -1192,29 +1501,63 @@ earlier prompts.")
 
 (define-command (claude-compose)
   "Show the conversation and the compose buffer, with point ready to type."
+  (%acp-select!)
   (unless (%acp-connected?) (error "Claude is not running; C-c c c first"))
   (%acp-show-ui))
 
 (define-command (claude-compose-send)
   "Send the prompt in the compose buffer to Claude, and clear it for the
-next one."
+next one. While Claude is at work the prompt waits its turn, and is sent
+when the turn is over. An image named in it as @path is sent with it."
+  (%acp-select!)
   (let ((text (buffer-string)))
     (cond [(not %acp-session) (error "Claude is not running")]
-          [%acp-busy (error "Claude is still working; C-c c k to cancel")]
           [(equal? (string-trim text) "") (error "The prompt is empty")]
           [else
-           (%acp-send-prompt text)
-           (set! %acp-history (append %acp-history (list text)))
-           (set! %acp-history-index #f)
-           (%replace-buffer-text! "")])))
+           (%acp-submit text)
+           (%acp-sent! text)])))
+
+(define (%acp-sent! text)
+  ;; A prompt written in the compose buffer has gone: it is kept for M-p,
+  ;; and the buffer is cleared for the next.
+  (set! %acp-history (append %acp-history (list text)))
+  (set! %acp-history-index #f)
+  (when (member %acp-prompt-buffer (buffer-list))
+    (with-current-buffer %acp-prompt-buffer (%replace-buffer-text! ""))))
+
+(define-command (claude-compose-steer)
+  "Send the prompt in the compose buffer into the turn that Claude is at
+work on, to change its course, where C-c C-c would have it wait for the
+turn to end. When no turn is going on it is sent as any prompt."
+  (%acp-select!)
+  (let ((text (buffer-string)))
+    (cond [(not %acp-session) (error "Claude is not running")]
+          [(equal? (string-trim text) "") (error "The prompt is empty")]
+          [(not %acp-busy) (%acp-submit text) (%acp-sent! text)]
+          [(not (%acp-get (%acp-get (%acp-get %acp-agent '_meta) 'steering) 'supported))
+           (error "This agent takes nothing into a turn; C-c C-c has the prompt wait")]
+          [else
+           (let ((session %acp-here)
+                 (blocks (%acp-prompt-blocks text)))
+             (%acp-enter! session)
+             (%acp-request "_session/steering"
+               (json-object 'sessionId %acp-session 'prompt blocks)
+               (lambda (result error)
+                 (when error
+                   (%acp-note (string-append "[Claude did not take it: "
+                                             (or (%acp-get error 'message) "?") "]")))))
+             (%acp-add! (vector 'said text))
+             (%acp-sent! text))])))
 
 (define-command (claude-compose-clear)
   "Clear the compose buffer."
+  (%acp-select!)
   (%replace-buffer-text! "")
   (set! %acp-history-index #f))
 
 (define-command (claude-compose-previous)
   "Put the previous sent prompt in the compose buffer."
+  (%acp-select!)
   (let ((n (length %acp-history)))
     (when (> n 0)
       (let ((i (if %acp-history-index (max 0 (- %acp-history-index 1)) (- n 1))))
@@ -1224,6 +1567,7 @@ next one."
 
 (define-command (claude-compose-next)
   "Put the next sent prompt in the compose buffer, or empty it past the end."
+  (%acp-select!)
   (when %acp-history-index
     (let ((i (+ %acp-history-index 1)))
       (if (< i (length %acp-history))
@@ -1261,6 +1605,18 @@ next one."
                (string-append "@" rel "#L" (number->string start))
                (string-append "@" rel "#L" (number->string start) "-" (number->string end)))))))
 
+(define (%acp-insert-in-prompt! text)
+  ;; Adds something to the end of the prompt that is being written, apart
+  ;; from what is there.
+  (%acp-ensure-compose)
+  (with-current-buffer %acp-prompt-buffer
+    (goto-char (point-max))
+    (let ((end (point-max)))
+      (when (and (> end 0) (not (equal? (buffer-substring (- end 1) end) "\n"))
+                 (not (equal? (buffer-substring (- end 1) end) " ")))
+        (insert " ")))
+    (insert text " ")))
+
 (define (%acp-ensure-compose)
   (unless (member %acp-prompt-buffer (buffer-list))
     (save-excursion
@@ -1274,15 +1630,80 @@ to the compose buffer: @file#L3-9. Select the code, then this, then keep
 writing the prompt."
   (let ((ref (%acp-reference)))
     (unless ref (error "This buffer has no file to point at"))
-    (%acp-ensure-compose)
-    (with-current-buffer %acp-prompt-buffer
-      (goto-char (point-max))
-      (let ((end (point-max)))
-        (when (and (> end 0) (not (equal? (buffer-substring (- end 1) end) "\n"))
-                   (not (equal? (buffer-substring (- end 1) end) " ")))
-          (insert " ")))
-      (insert ref " "))
+    (%acp-select!)
+    (%acp-insert-in-prompt! ref)
     (message "Added " ref " to the prompt")))
+
+;;; Images
+;;;
+;;; An image is named in a prompt as a file is, @path, and is sent with the
+;;; prompt for the model to see, if the agent takes images.
+
+(define %acp-image-types
+  '((".png" . "image/png") (".jpg" . "image/jpeg") (".jpeg" . "image/jpeg")
+    (".gif" . "image/gif") (".webp" . "image/webp")))
+
+(define (%acp-image-type path)
+  ;; The media type of an image by the end of its name, or #f.
+  (let ((name (string-downcase path)))
+    (let loop ((types %acp-image-types))
+      (cond [(null? types) #f]
+            [(string-suffix? (caar types) name) (cdar types)]
+            [else (loop (cdr types))]))))
+
+(define (%acp-words text)
+  ;; The words of a text: what its spaces and line breaks are between.
+  (let loop ((chars (string->list text)) (word '()) (words '()))
+    (define (ended)
+      (if (null? word) words (cons (list->string (reverse word)) words)))
+    (cond [(null? chars) (reverse (ended))]
+          [(char-whitespace? (car chars)) (loop (cdr chars) '() (ended))]
+          [else (loop (cdr chars) (cons (car chars) word) words)])))
+
+(define (%acp-images text)
+  ;; The images that a prompt names as @path and that are there: pairs of
+  ;; the path in full and the media type.
+  (filter-map
+   (lambda (word)
+     (and (string-prefix? "@" word)
+          (let* ((path (expand-file-name (substring word 1 (string-length word))
+                                         (or %acp-root (working-directory))))
+                 (type (%acp-image-type path)))
+            (and type (file-exists? path) (cons path type)))))
+   (%acp-words text)))
+
+(define (%acp-prompt-blocks text)
+  ;; What is sent for a prompt: its text, and after it the images that it
+  ;; names, if the agent takes images. This waits for a program, so it is
+  ;; for commands.
+  (let ((session %acp-here)
+        (images (if (%acp-capability 'promptCapabilities 'image) (%acp-images text) '())))
+    (list->vector
+     (cons (json-object 'type "text" 'text text)
+           (map (lambda (image)
+                  (let ((result (run-process "base64" (list "-w0" (car image)))))
+                    (%acp-enter! session)
+                    (unless (eqv? (car result) 0)
+                      (error (string-append "Could not read " (car image))))
+                    (json-object 'type "image"
+                                 'mimeType (cdr image)
+                                 'data (string-trim (cadr result)))))
+                images)))))
+
+(define-command (claude-attach-image)
+  "Add an image to the prompt that is being written: choose the file, and
+a reference to it, @path, goes into the compose buffer. The image is sent
+with the prompt."
+  (%acp-select!)
+  (let* ((session %acp-here)
+         (path (read-file-name "Image: ")))
+    (%acp-enter! session)
+    (unless (%acp-image-type path)
+      (error "Not an image that can be sent: png, jpg, gif and webp are"))
+    (unless (file-exists? path) (error (string-append "No such file: " path)))
+    (let ((ref (string-append "@" (%acp-relative (or %acp-root (working-directory)) path))))
+      (%acp-insert-in-prompt! ref)
+      (message "Added " ref " to the prompt"))))
 
 (define-command (claude-compose-insert-reference)
   "In the compose buffer, insert a reference to the region in another
@@ -1295,22 +1716,50 @@ window that shows a file."
 (define-key 'claude-compose-mode "C-c C-c" 'claude-compose-send)
 (define-key 'claude-compose-mode "C-c C-k" 'claude-compose-clear)
 (define-key 'claude-compose-mode "C-c C-r" 'claude-compose-insert-reference)
+(define-key 'claude-compose-mode "C-c C-s" 'claude-compose-steer)
+(define-key 'claude-compose-mode "C-c C-a" 'claude-attach-image)
 (define-key 'claude-compose-mode "M-p" 'claude-compose-previous)
 (define-key 'claude-compose-mode "M-n" 'claude-compose-next)
 
-(define (%acp-send-prompt text)
+(define (%acp-submit text)
+  ;; Sends a prompt, or has it wait until the turn at work is over. For
+  ;; commands: an image that the prompt names is read first.
+  (let ((entry (if (null? (%acp-images text))
+                   (list text)
+                   (list text (%acp-prompt-blocks text)))))
+    (set! %acp-queue (append %acp-queue (list entry)))
+    (cond [%acp-busy
+           (%acp-changed!)
+           (%acp-show-state)
+           (message "Claude is at work; the prompt waits its turn")]
+          [else (%acp-send-waiting!)])))
+
+(define (%acp-send-waiting!)
+  ;; Sends the prompt that has waited the longest, if one waits.
+  (when (and %acp-session (pair? %acp-queue))
+    (let ((entry (car %acp-queue)))
+      (set! %acp-queue (cdr %acp-queue))
+      (apply %acp-send-prompt entry))))
+
+(define (%acp-send-prompt text . blocks)
+  ;; Starts a turn with a prompt. What is sent for it is its text, unless
+  ;; it is given: the text with the images that it names.
   (%acp-start-turn! text)
   (set! %acp-busy #t)
   (%acp-show-state)
   (%acp-request "session/prompt"
     (json-object 'sessionId %acp-session
-                 'prompt (json-array (json-object 'type "text" 'text text)))
+                 'prompt (if (pair? blocks)
+                             (car blocks)
+                             (json-array (json-object 'type "text" 'text text))))
     (lambda (result error)
       (set! %acp-busy #f)
       (%acp-show-state)
       (%acp-note (if error
                      (string-append "[error: " (or (%acp-get error 'message) "?") "]")
-                     (string-append "— " (or (%acp-get result 'stopReason) "done") " —"))))))
+                     (string-append "— " (or (%acp-get result 'stopReason) "done") " —")))
+      ;; A turn that failed leaves what waits for the user to send again.
+      (if error (%acp-changed!) (%acp-send-waiting!)))))
 
 ;;; The mode, the model and the other options of the session
 
@@ -1358,8 +1807,10 @@ window that shows a file."
   "Set the mode, the model or another option of the session with Claude:
 choose which, among those the agent tells of, and then its value. The mode
 line of the conversation shows the mode and the model in force."
+  (%acp-select!)
   (unless %acp-session (error "Claude is not running; C-c c c first"))
-  (let ((options (%acp-settable-options)))
+  (let ((options (%acp-settable-options))
+        (session %acp-here))
     (when (null? options) (error "The agent has told of nothing to set"))
     (let* ((name (if (null? (cdr options))
                      (%acp-option-name (car options))
@@ -1382,6 +1833,7 @@ line of the conversation shows the mode and the model in force."
                       'agent-value))
              (choice (find (lambda (choice) (equal? (cadr choice) picked)) choices)))
         (unless choice (error (string-append name " cannot be " picked)))
+        (%acp-enter! session)
         (%acp-set-option! option choice)))))
 
 (define (%acp-set-option! option choice)
@@ -1416,11 +1868,13 @@ line of the conversation shows the mode and the model in force."
 
 (define-command (claude-slash-command)
   "Send one of the slash commands that Claude knows: choose it by name, and
-write what it takes after its name if it takes something."
+write what it takes after its name if it takes something. While Claude is
+at work, the command waits its turn."
+  (%acp-select!)
   (unless %acp-session (error "Claude is not running; C-c c c first"))
-  (when %acp-busy (error "Claude is still working; C-c c k to cancel"))
   (when (null? %acp-commands) (error "The agent has told of no commands"))
-  (let* ((picked (completing-read
+  (let* ((session %acp-here)
+         (picked (completing-read
                   "Command: "
                   (map (lambda (command)
                          (%acp-candidate (string-append "/" (%acp-get command 'name))
@@ -1436,29 +1890,199 @@ write what it takes after its name if it takes something."
                      (string-trim (read-string (string-append picked " (" hint "): ")))
                      ""))
            (text (if (equal? more "") picked (string-append picked " " more))))
-      (when %acp-busy (error "Claude is still working; C-c c k to cancel"))
-      (%acp-send-prompt text)
+      (%acp-enter! session)
+      (unless %acp-session (error "Claude is not running; C-c c c first"))
+      (%acp-submit text)
       (set! %acp-history (append %acp-history (list text))))))
 
 (define-command (claude-cancel)
   "Cancel the current Claude turn. What Claude was asking leave for goes
-unanswered."
+unanswered, and the prompts that waited for the turn to end are not sent:
+M-p in the compose buffer brings them back."
+  (%acp-select!)
   (when (and %acp-session %acp-busy)
-    (%acp-notify "session/cancel" (json-object 'sessionId %acp-session))
-    ;; The protocol wants every question that waits answered so.
-    (for-each (lambda (request) (%acp-answer! request #f)) %acp-permissions)
-    (message "Asked Claude to stop.")))
+    (let ((waiting (length %acp-queue)))
+      (set! %acp-queue '())
+      (%acp-notify "session/cancel" (json-object 'sessionId %acp-session))
+      ;; The protocol wants every question that waits answered so.
+      (for-each (lambda (request) (%acp-answer! request #f)) %acp-permissions)
+      (%acp-changed!)
+      (%acp-show-state)
+      (message "Asked Claude to stop."
+               (if (> waiting 0)
+                   (string-append " " (number->string waiting)
+                                  (if (= waiting 1) " prompt" " prompts")
+                                  " that waited will not be sent.")
+                   "")))))
 
 (define-command (claude-quit)
-  "Stop the Claude process."
+  "Stop the Claude of this session. C-c c c in its conversation starts it
+again, and it takes the conversation up where it was."
+  (%acp-select!)
   (when (%acp-connected?)
     (delete-process %acp-process))
   (set! %acp-process #f)
+  (when %acp-session (set! %acp-resumable %acp-session))
   (%acp-forget-session!)
   (for-each (lambda (turn) (%acp-turn-set-drawn! turn #f)) %acp-turns)
   (%acp-changed!)
   (%acp-show-state)
   (message "Claude stopped."))
+
+;;; Several sessions, and those that were
+
+(define (%acp-ask method params)
+  ;; For a command: sends a request and waits for the answer, which is
+  ;; returned. An answer that is an error is an error here.
+  (let ((session %acp-here)
+        (answer #f))
+    (%acp-request method params
+                  (lambda (result error) (set! answer (list result error))))
+    (let loop ((left 600))
+      (cond [answer
+             (when (cadr answer)
+               (error (string-append "Claude: "
+                                     (or (%acp-get (cadr answer) 'message) "it failed"))))
+             (car answer)]
+            [(not (%acp-connected?)) (error "Claude has ended")]
+            [(= left 0) (error "Claude does not answer")]
+            [else
+             (sleep-for 50)
+             (%acp-enter! session)
+             (loop (- left 1))]))))
+
+(define (%acp-await-agent)
+  ;; For a command: waits until the agent that was started has said what
+  ;; it is.
+  (let ((session %acp-here))
+    (let loop ((left 600))
+      (cond [%acp-agent #t]
+            [(not (%acp-connected?)) (error "Claude has ended")]
+            [(= left 0) (error "Claude does not answer")]
+            [else
+             (sleep-for 50)
+             (%acp-enter! session)
+             (loop (- left 1))]))))
+
+(define (%acp-state)
+  ;; What the session at hand is doing, in a word or two.
+  (cond [(not (%acp-connected?)) "ended"]
+        [(pair? %acp-permissions) "asks leave"]
+        [%acp-busy "working"]
+        [else "ready"]))
+
+(define-command (claude-switch)
+  "Go to another of the sessions with Claude: choose it by the name of its
+conversation, beside which is where it works, what it is doing and the
+title of the conversation."
+  (let* ((sessions (filter (lambda (session) (%acp-in session (lambda () %acp-root)))
+                           %acp-sessions))
+         (name (lambda (session) (%acp-name "*claude*" (vector-ref session 1)))))
+    (when (null? sessions) (error "No session with Claude; C-c c c starts one"))
+    (let* ((picked (completing-read
+                    "Session: "
+                    (map (lambda (session)
+                           (list (name session)
+                                 (%acp-in session
+                                   (lambda ()
+                                     (string-join
+                                      (filter (lambda (part) part)
+                                              (list %acp-root (%acp-state) %acp-title))
+                                      "  ")))))
+                         sessions)
+                    'agent-session))
+           (session (find (lambda (session) (equal? (name session) picked)) sessions)))
+      (unless session (error (string-append "No session is called " picked)))
+      (%acp-enter! session)
+      (%acp-show-ui))))
+
+(define (%acp-session-candidates sessions)
+  ;; What to choose among for the conversations that were: lists of a name
+  ;; that no other has, when it was last written to, and its id.
+  (let loop ((rest sessions) (seen '()) (out '()))
+    (if (null? rest)
+        (reverse out)
+        (let* ((session (car rest))
+               (title (or (%acp-get session 'title) "(no title)"))
+               (count (length (filter (lambda (other) (equal? other title)) seen)))
+               (name (if (= count 0)
+                         title
+                         (string-append title " (" (number->string (+ count 1)) ")")))
+               (when (or (%acp-get session 'updatedAt) "")))
+          (loop (cdr rest)
+                (cons title seen)
+                (cons (list name
+                            (if (>= (string-length when) 16)
+                                (string-append (substring when 0 10) " " (substring when 11 16))
+                                when)
+                            (%acp-get session 'sessionId))
+                      out))))))
+
+(define-command (claude-resume)
+  "Take up a conversation with Claude that was had in this project before:
+choose it by its title, the latest first, and it is shown again from its
+start in a session of its own, ready to go on. If none is chosen, the
+session has a new conversation."
+  (let ((root (or (project-root) (working-directory))))
+    (%acp-start! root #t (lambda () #t))
+    (let ((session %acp-here)
+          (opened #f))
+      (dynamic-wind
+        (lambda () #f)
+        (lambda ()
+          (%acp-await-agent)
+          (unless (and (%acp-capability 'loadSession)
+                       (%acp-capability 'sessionCapabilities 'list))
+            (error "This agent cannot take up a conversation that was; this is a new one"))
+          (let* ((sessions (%acp-list
+                            (%acp-get (%acp-ask "session/list" (json-object 'cwd root))
+                                      'sessions)))
+                 (candidates (%acp-session-candidates sessions)))
+            (when (null? candidates)
+              (error "No conversation was had here before; this is a new one"))
+            (let* ((picked (completing-read "Take up: "
+                                            (map (lambda (candidate) (list-head candidate 2))
+                                                 candidates)
+                                            'agent-conversation))
+                   (candidate (find (lambda (candidate) (equal? (car candidate) picked))
+                                    candidates)))
+              (unless candidate
+                (error (string-append "No conversation is called " picked
+                                      "; this is a new one")))
+              (%acp-enter! session)
+              (set! %acp-title (car candidate))
+              (set! opened #t)
+              (%acp-open-session "session/load" (caddr candidate)))))
+        ;; Whatever came between, the agent that was started is not left
+        ;; without a conversation.
+        (lambda ()
+          (unless opened
+            (%acp-in session
+              (lambda ()
+                (when (and (%acp-connected?) %acp-agent (not %acp-session))
+                  (%acp-open-session "session/new" #f))))))))))
+
+(define-command (claude-fork)
+  "Start another session that takes the conversation up as it is now, and
+leaves this one as it is: a way to try something else from here."
+  (%acp-select!)
+  (unless %acp-session (error "Claude is not running; C-c c c first"))
+  (when %acp-busy (error "Claude is still working; C-c c k to cancel"))
+  (unless (%acp-capability 'sessionCapabilities 'fork)
+    (error "This agent cannot start a session from another"))
+  (let ((id %acp-session)
+        (root %acp-root)
+        (title %acp-title)
+        (turns (map (lambda (turn)
+                      (%make-acp-turn (%acp-turn-number turn) (%acp-turn-prompt turn)
+                                      (%acp-turn-items turn) #f))
+                    %acp-turns)))
+    (%acp-new-session!)
+    (set! %acp-turns turns)
+    (set! %acp-title title)
+    (%acp-ensure-buffer)
+    (%acp-connect root (lambda () (%acp-open-session "session/fork" id)))
+    (%acp-show-ui)))
 
 (global-set-key "C-c c c" 'claude)
 (global-set-key "C-c c p" 'claude-compose)
@@ -1470,3 +2094,7 @@ unanswered."
 (global-set-key "C-c c o" 'claude-answer)
 (global-set-key "C-c c m" 'claude-set-option)
 (global-set-key "C-c c /" 'claude-slash-command)
+(global-set-key "C-c c b" 'claude-switch)
+(global-set-key "C-c c R" 'claude-resume)
+(global-set-key "C-c c f" 'claude-fork)
+(global-set-key "C-c c i" 'claude-attach-image)

@@ -5,9 +5,16 @@
 //! and lets its mode and its model be set. To a prompt that starts with
 //! "ask" it asks leave for a tool call and says which answer it got; to one
 //! that starts with "run" it has the editor run a program and says how that
-//! ended. To every other prompt it gives the same turn: a thought, a
-//! message that repeats the prompt, a tool call that changes a file and
-//! shows the change, a plan, and the end.
+//! ended; to one that starts with "slow" it answers after a while, and to
+//! one that starts with "look" it says how many images came with it. To
+//! every other prompt it gives the same turn: a thought, a message that
+//! repeats the prompt, a tool call that changes a file and shows the
+//! change, a plan, and the end.
+//!
+//! It tells of two conversations that were, and takes one up again by
+//! telling of it from its start (`session/load`), by going on with it
+//! (`session/resume`) or in a session of its own (`session/fork`). What it
+//! was given with a session, it says in a message.
 
 use std::io::{self, BufRead, Lines, StdinLock, Write};
 
@@ -194,6 +201,33 @@ fn options(mode: &str, model: &str) -> Value {
     ])
 }
 
+/// The answer to a request that opens a session, and what follows it.
+fn opened(id: &Value, session: &str, mode: &str, model: &str, params: &Value) {
+    send(&json!({"jsonrpc": "2.0", "id": id, "result": {
+        "sessionId": session,
+        "modes": {"currentModeId": mode},
+        "configOptions": options(mode, model),
+    }}));
+    update(&json!({
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+            {"name": "compact", "description": "Make the conversation shorter"},
+            {"name": "review", "description": "Review a change",
+             "input": {"hint": "which change"}},
+        ],
+    }));
+    let servers = params["mcpServers"].as_array().map_or(0, Vec::len);
+    let directories = params["additionalDirectories"]
+        .as_array()
+        .map_or(0, Vec::len);
+    if servers + directories > 0 {
+        text(
+            "agent_message_chunk",
+            &format!("Given {servers} servers and {directories} directories."),
+        );
+    }
+}
+
 fn main() {
     let mut mode = String::from("default");
     let mut model = String::from("fake-model");
@@ -210,25 +244,73 @@ fn main() {
         let result = match message["method"].as_str().unwrap_or("") {
             "initialize" => json!({
                 "protocolVersion": 1,
-                "agentCapabilities": {},
+                "agentCapabilities": {
+                    "loadSession": true,
+                    "promptCapabilities": {"image": true},
+                    "sessionCapabilities": {
+                        "list": {}, "resume": {}, "fork": {}, "additionalDirectories": {},
+                    },
+                },
                 "authMethods": [],
+                "_meta": {"steering": {"supported": true}},
             }),
             "session/new" => {
-                send(&json!({"jsonrpc": "2.0", "id": id, "result": {
-                    "sessionId": "fake",
-                    "modes": {"currentModeId": mode},
-                    "configOptions": options(&mode, &model),
-                }}));
-                update(&json!({
-                    "sessionUpdate": "available_commands_update",
-                    "availableCommands": [
-                        {"name": "compact", "description": "Make the conversation shorter"},
-                        {"name": "review", "description": "Review a change",
-                         "input": {"hint": "which change"}},
-                    ],
-                }));
+                opened(&id, "fake", &mode, &model, &message["params"]);
                 continue;
             }
+            "session/list" => json!({"sessions": [
+                {"sessionId": "about-notes", "cwd": message["params"]["cwd"],
+                 "title": "About the notes", "updatedAt": "2026-11-23T14:02:11.000Z"},
+                {"sessionId": "about-tests", "cwd": message["params"]["cwd"],
+                 "title": "About the tests", "updatedAt": "2026-11-20T09:30:00.000Z"},
+            ]}),
+            "session/load" => {
+                // The conversation that was, from its start, before the answer.
+                let said = |kind: &str, text: &str, id: &str| {
+                    update(&json!({
+                        "sessionUpdate": kind,
+                        "messageId": id,
+                        "content": {"type": "text", "text": text},
+                    }));
+                };
+                let session = message["params"]["sessionId"].as_str().unwrap_or("");
+                said("user_message_chunk", "What is in ", "m1");
+                said("user_message_chunk", "the notes?", "m1");
+                said("agent_message_chunk", &format!("This was {session}."), "m2");
+                said("user_message_chunk", "And then?", "m3");
+                said("agent_message_chunk", "Then nothing.", "m4");
+                update(
+                    &json!({"sessionUpdate": "session_info_update", "title": "About the notes"}),
+                );
+                opened(&id, session, &mode, &model, &message["params"]);
+                continue;
+            }
+            "session/resume" => {
+                let session = message["params"]["sessionId"].as_str().unwrap_or("");
+                if session == "gone" {
+                    send(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {"code": -32002, "message": "no such session"},
+                    }));
+                    continue;
+                }
+                opened(&id, session, &mode, &model, &message["params"]);
+                text("agent_message_chunk", &format!("Going on with {session}."));
+                continue;
+            }
+            "session/fork" => {
+                let session = message["params"]["sessionId"].as_str().unwrap_or("");
+                opened(
+                    &id,
+                    &format!("fork-of-{session}"),
+                    &mode,
+                    &model,
+                    &message["params"],
+                );
+                continue;
+            }
+            "_session/steering" => json!({"outcome": "injected"}),
             "session/set_config_option" => {
                 let value = message["params"]["value"].as_str().unwrap_or("").to_owned();
                 match message["params"]["configId"].as_str() {
@@ -246,6 +328,21 @@ fn main() {
                     asking(&mut input);
                 } else if prompt.starts_with("run") {
                     running(&mut input);
+                } else if prompt.starts_with("slow") {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    text("agent_message_chunk", &format!("At last: {prompt}"));
+                } else if prompt.starts_with("look") {
+                    let images = message["params"]["prompt"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|block| {
+                            block["type"] == "image"
+                                && block["mimeType"] == "image/png"
+                                && block["data"].as_str().is_some_and(|data| !data.is_empty())
+                        })
+                        .count();
+                    text("agent_message_chunk", &format!("Saw {images} images."));
                 } else {
                     turn(prompt);
                 }

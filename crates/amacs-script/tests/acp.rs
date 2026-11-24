@@ -1,8 +1,9 @@
 //! The agent workflow: the compose buffer, prompt history, code references,
 //! the window layout, and the conversation as sections. For most of it the
-//! connection is stubbed and what an agent would send is fed in; one test
-//! talks to `fake-acp`, an agent that speaks the protocol. The real adapter
-//! is tried by hand.
+//! connection is stubbed and what an agent would send is fed in; the rest
+//! talk to `fake-acp`, an agent that speaks the protocol, and those are the
+//! tests of several sessions, of conversations taken up again, of prompts
+//! that wait and of images. The real adapter is tried by hand.
 
 mod common;
 
@@ -17,6 +18,7 @@ fn connected() -> Harness {
     h.eval(
         r#"(set! %acp-connected? (lambda () #t))
            (set! %acp-session "stub")
+           (set! %acp-root (or (project-root) (working-directory)))
            (define sent '())
            (set! %acp-send-prompt (lambda (text) (set! sent (cons text sent))))"#,
     );
@@ -88,6 +90,7 @@ fn a_reference_to_the_region_is_added_from_a_file_buffer() {
     h.eval(
         r#"(set! %acp-connected? (lambda () #t))
            (set! %acp-session "stub")
+           (set! %acp-root (or (project-root) (working-directory)))
            (set! %acp-send-prompt (lambda (text) #f))
            (find-file "/nonexistent/amacs-test/sub/code.rs")
            (insert "line1\nline2\nline3\nline4\n")"#,
@@ -111,6 +114,7 @@ fn talking() -> Harness {
     h.eval(
         r#"(set! %acp-connected? (lambda () #t))
            (set! %acp-session "stub")
+           (set! %acp-root (or (project-root) (working-directory)))
            (set! %acp-request (lambda (method params callback) #f))"#,
     );
     h.keys("C-c c c");
@@ -750,5 +754,302 @@ fn a_whole_turn_with_an_agent_that_speaks_the_protocol() {
         h.eval("%acp-root"),
         format!("{:?}", dir.path().display().to_string())
     );
+    h.eval("(claude-quit)");
+}
+
+// Several sessions, and those that were
+
+/// A harness with `fake-acp` as the agent, in a directory, and nothing
+/// started yet.
+fn fake_agent(dir: &std::path::Path) -> Harness {
+    let mut h = Harness::new(80, 40);
+    h.session.editor_mut().set_default_directory(dir);
+    let agent = amacs_testkit::example_path("fake-acp");
+    h.eval(&format!(
+        "(set-option! 'acp-command (list {:?}))",
+        agent.display().to_string()
+    ));
+    h
+}
+
+#[test]
+fn another_session_has_a_conversation_of_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = with_fake_agent(dir.path());
+    h.type_text("first").keys("C-c C-c");
+    see(&mut h, "— end_turn —");
+    // C-c c c shows the session that runs; with a prefix argument it
+    // starts another, with buffers of its own.
+    h.keys("C-c c c");
+    assert_eq!(h.eval("(length %acp-sessions)"), "1");
+    h.keys("C-u C-c c c");
+    see(&mut h, "Ready.");
+    assert_eq!(h.eval("(length %acp-sessions)"), "2");
+    assert_eq!(h.eval("(buffer-name)"), "\"*claude prompt*<2>\"");
+    h.type_text("second").keys("C-c C-c");
+    see(&mut h, "You said: second");
+    see(&mut h, "— end_turn —");
+    // Each conversation holds what was said in it.
+    let first = h.eval(r#"(buffer-string "*claude*")"#);
+    let second = h.eval(r#"(buffer-string "*claude*<2>")"#);
+    assert!(
+        first.contains("You said: first") && !first.contains("second"),
+        "{first}"
+    );
+    assert!(
+        second.contains("You said: second") && !second.contains("first"),
+        "{second}"
+    );
+    // A command given in a conversation is about its session.
+    h.eval(r#"(switch-to-buffer "*claude*")"#);
+    h.keys("m");
+    h.type_text("Mode").keys("RET");
+    h.type_text("Plan").keys("RET");
+    h.wait_until(|h| {
+        h.eval(r#"(with-current-buffer "*claude*" (mode-line-text))"#)
+            .contains("plan")
+    });
+    assert!(
+        h.eval(r#"(with-current-buffer "*claude*<2>" (mode-line-text))"#)
+            .contains("default")
+    );
+    // C-c c b goes to another, chosen by name.
+    h.keys("C-c c b");
+    assert!(h.screen.text().contains("ready"), "{}", h.screen.text());
+    h.type_text("*claude*<2>").keys("RET");
+    assert_eq!(h.eval("(buffer-name)"), "\"*claude prompt*<2>\"");
+    // Stopping one leaves the other.
+    h.eval("(claude-quit)");
+    assert_eq!(
+        h.eval(r#"(map (lambda (session) (%acp-in session %acp-connected?)) %acp-sessions)"#),
+        "(#t #f)"
+    );
+    h.eval(r#"(switch-to-buffer "*claude*")"#);
+    h.eval("(claude-quit)");
+}
+
+#[test]
+fn a_prompt_written_during_a_turn_waits_for_its_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = with_fake_agent(dir.path());
+    h.type_text("slow one").keys("C-c C-c");
+    h.type_text("the next").keys("C-c C-c");
+    // It is not refused: it is shown as waiting, and the mode line counts it.
+    assert!(h.echo().contains("waits its turn"), "{}", h.echo());
+    see(&mut h, "Waits its turn: the next");
+    assert!(h.screen.text().contains("1 waiting"), "{}", h.screen.text());
+    // When the turn is over it is sent, and has a turn of its own.
+    see(&mut h, "At last: slow one");
+    see(&mut h, "You said: the next");
+    assert_eq!(rows_with(&h, "Waits its turn"), 0);
+    let text = h.eval(r#"(buffer-string "*claude*")"#);
+    assert!(
+        text.find("At last: slow one").unwrap() < text.find("▾ the next").unwrap(),
+        "{text}"
+    );
+    h.eval("(claude-quit)");
+}
+
+#[test]
+fn cancelling_drops_what_waited() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = with_fake_agent(dir.path());
+    h.type_text("slow one").keys("C-c C-c");
+    h.type_text("the next").keys("C-c C-c");
+    h.keys("C-c c k");
+    assert!(h.echo().contains("1 prompt that waited"), "{}", h.echo());
+    see(&mut h, "At last: slow one");
+    h.wait_until(|h| h.eval("%acp-busy") == "#f");
+    assert_eq!(h.eval("%acp-queue"), "()");
+    assert!(!h.screen.text().contains("You said: the next"));
+    // It is still among the prompts that M-p brings back.
+    h.keys("M-p");
+    assert_eq!(h.eval("(buffer-string)"), "\"the next\"");
+    h.eval("(claude-quit)");
+}
+
+#[test]
+fn a_prompt_goes_into_the_turn_that_is_going_on() {
+    let mut h = talking();
+    h.eval(
+        r#"(define steered '())
+           (set! %acp-busy #t)
+           (set! %acp-agent (json-decode "{\"_meta\":{\"steering\":{\"supported\":true}}}"))
+           (set! %acp-request
+             (lambda (method params callback)
+               (set! steered (cons (list method (json-ref (vector-ref (json-ref params 'prompt) 0) 'text))
+                                   steered))))"#,
+    );
+    say(
+        &mut h,
+        "agent_message_chunk",
+        "I will start with the first.",
+    );
+    let turns = h.eval("(length %acp-turns)");
+    h.type_text("No, the second").keys("C-c C-s");
+    assert_eq!(
+        h.eval("steered"),
+        r#"(("_session/steering" "No, the second"))"#
+    );
+    // It is shown in the turn, where it was said, and no new turn starts.
+    see(&mut h, "› No, the second");
+    assert_eq!(h.eval("(length %acp-turns)"), turns);
+    assert_eq!(h.eval("(buffer-string)"), "\"\"");
+    // An agent that takes nothing into a turn is not sent it.
+    h.eval("(set! %acp-agent #f)");
+    h.type_text("again").keys("C-c C-s");
+    assert!(
+        h.echo().contains("takes nothing into a turn"),
+        "{}",
+        h.echo()
+    );
+    assert_eq!(h.eval("(length steered)"), "1");
+}
+
+#[test]
+fn an_image_named_in_a_prompt_is_sent_with_it() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("shot.png"), b"\x89PNG not really").unwrap();
+    let mut h = with_fake_agent(dir.path());
+    // The command adds the reference; one that is typed does as well.
+    h.keys("C-c C-a");
+    h.type_text("shot.png").keys("RET");
+    assert_eq!(h.eval("(buffer-string)"), "\"@shot.png \"");
+    h.keys("C-c C-k");
+    h.type_text("look at @shot.png and @missing.png")
+        .keys("C-c C-c");
+    see(&mut h, "Saw 1 images.");
+    assert!(
+        h.screen.text().contains("▾ look at @shot.png"),
+        "{}",
+        h.screen.text()
+    );
+    // A file that is no image is not taken.
+    std::fs::write(dir.path().join("notes.txt"), "notes").unwrap();
+    h.keys("C-c C-a");
+    h.type_text("notes.txt").keys("RET");
+    assert!(h.echo().contains("Not an image"), "{}", h.echo());
+    h.eval("(claude-quit)");
+}
+
+#[test]
+fn a_conversation_that_was_is_taken_up_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = fake_agent(dir.path());
+    h.keys("C-c c R");
+    // The conversations of the directory, with when they were last written.
+    h.wait_until(|h| h.prompt().contains("Take up"));
+    let screen = h.screen.text();
+    assert!(
+        screen.contains("About the notes") && screen.contains("2026-11-23 14:02"),
+        "{screen}"
+    );
+    assert!(screen.contains("About the tests"), "{screen}");
+    h.type_text("About the notes").keys("RET");
+    see(&mut h, "Ready, with the conversation as it was.");
+    // It is shown from its start: each prompt heads a turn, its pieces joined.
+    let text = h.eval(r#"(buffer-string "*claude*")"#);
+    assert!(text.contains("▾ What is in the notes?"), "{text}");
+    assert!(text.contains("This was about-notes."), "{text}");
+    assert!(text.contains("▾ And then?"), "{text}");
+    assert!(!text.contains("Write a prompt below"), "{text}");
+    assert_eq!(h.eval("%acp-session"), "\"about-notes\"");
+    assert_eq!(h.eval("%acp-title"), "\"About the notes\"");
+    // And it goes on.
+    h.type_text("more").keys("C-c C-c");
+    see(&mut h, "You said: more");
+    h.eval("(claude-quit)");
+}
+
+#[test]
+fn an_agent_that_ended_takes_its_conversation_up_where_it_was() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = with_fake_agent(dir.path());
+    h.type_text("hello").keys("C-c C-c");
+    see(&mut h, "— end_turn —");
+    h.eval("(claude-quit)");
+    see(&mut h, "Claude stopped");
+    assert_eq!(h.eval("%acp-resumable"), "\"fake\"");
+    // Started again in its conversation, it goes on with the session.
+    h.keys("C-c c c");
+    see(&mut h, "Going on with fake.");
+    assert_eq!(h.eval("(length %acp-sessions)"), "1");
+    assert!(
+        h.eval(r#"(buffer-string "*claude*")"#)
+            .contains("You said: hello")
+    );
+    h.eval("(claude-quit)");
+    // A session that cannot be gone on with gives way to a new one.
+    h.eval(r#"(set! %acp-resumable "gone")"#);
+    h.keys("C-c c c");
+    see(&mut h, "[session/resume failed: no such session]");
+    h.wait_until(|h| h.eval("%acp-session") == "\"fake\"");
+    assert_eq!(h.eval("%acp-resumable"), "#f");
+    h.eval("(claude-quit)");
+}
+
+#[test]
+fn a_session_is_started_from_another_as_it_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = with_fake_agent(dir.path());
+    h.type_text("hello").keys("C-c C-c");
+    see(&mut h, "— end_turn —");
+    h.keys("C-c c f");
+    see(&mut h, "Ready, in a session of its own");
+    assert_eq!(h.eval("%acp-session"), "\"fork-of-fake\"");
+    assert_eq!(h.eval("%acp-buffer"), "\"*claude*<2>\"");
+    // It starts with what was said, and what is said next is its own.
+    h.type_text("onwards").keys("C-c C-c");
+    see(&mut h, "You said: onwards");
+    let first = h.eval(r#"(buffer-string "*claude*")"#);
+    let second = h.eval(r#"(buffer-string "*claude*<2>")"#);
+    assert!(
+        second.contains("You said: hello") && second.contains("You said: onwards"),
+        "{second}"
+    );
+    assert!(
+        first.contains("You said: hello") && !first.contains("onwards"),
+        "{first}"
+    );
+    h.eval("(claude-quit)");
+    h.eval(r#"(switch-to-buffer "*claude*") (claude-quit)"#);
+}
+
+#[test]
+fn servers_and_directories_are_given_with_a_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = fake_agent(dir.path());
+    h.eval(
+        r#"(set-option! 'acp-mcp-servers
+             '(("amacs" "amacs-mcp" "--socket" "/run/amacs.sock")
+               ("docs" "https://example.org/mcp")))
+           (set-option! 'acp-additional-directories '("/tmp"))"#,
+    );
+    assert_eq!(
+        h.eval("(json-encode (%acp-mcp-servers))"),
+        format!(
+            "{:?}",
+            concat!(
+                r#"[{"name":"amacs","command":"amacs-mcp","args":["--socket","/run/amacs.sock"],"env":[]},"#,
+                r#"{"type":"http","name":"docs","url":"https://example.org/mcp","headers":[]}]"#
+            )
+        )
+    );
+    h.keys("C-c c c");
+    see(&mut h, "Given 2 servers and 1 directories.");
+    h.eval("(claude-quit)");
+}
+
+#[test]
+fn choosing_none_of_those_that_were_leaves_a_new_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = fake_agent(dir.path());
+    h.keys("C-c c R");
+    h.wait_until(|h| h.prompt().contains("Take up"));
+    h.keys("C-g");
+    see(&mut h, "Ready. Write a prompt below");
+    h.wait_until(|h| h.eval("%acp-session") == "\"fake\"");
+    h.type_text("hello").keys("C-c C-c");
+    see(&mut h, "You said: hello");
     h.eval("(claude-quit)");
 }
