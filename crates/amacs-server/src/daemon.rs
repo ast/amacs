@@ -452,11 +452,13 @@ impl Server {
             frame
         });
         let reply = if frame.is_some() {
-            let (font_family, font_size, subpixel) = self.session.editor().frame_font();
+            let editor = self.session.editor();
+            let (font_family, font_size, subpixel) = editor.frame_font();
             ServerMsg::Attached {
                 font_family,
                 font_size,
                 subpixel,
+                gpu: editor.frame_gpu(),
             }
         } else {
             ServerMsg::Opened

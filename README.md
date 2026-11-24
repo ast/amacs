@@ -921,10 +921,16 @@ backends, which give the same picture.
 The one that is used unless another is asked for draws on the CPU into
 memory shared with the compositor, repainting only what changed. The other
 draws with the GPU, through Vulkan, the whole frame each time from an atlas
-of glyphs:
+of glyphs. An option chooses it for every window:
+
+```scheme
+(set-option! 'gpu-renderer #t)
+```
+
+and for one window, whatever the option says:
 
     amacs-gui --renderer gpu FILE
-    AMACS_RENDERER=gpu amacsclient -c FILE
+    AMACS_RENDERER=cpu amacsclient -c FILE
 
 It says on standard error which GPU it draws with, or that it draws on the
 CPU after all and why, as when there is no Vulkan.

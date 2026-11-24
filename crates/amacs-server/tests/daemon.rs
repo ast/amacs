@@ -243,6 +243,26 @@ fn programs_get_errors_in_parts_and_what_the_code_wrote() {
 }
 
 #[test]
+fn a_frame_is_told_whether_to_draw_with_the_gpu() {
+    let server = Server::start();
+    let frame = FrameRequest::New { cols: 40, rows: 10 };
+    let gpu = |reply| match reply {
+        ServerMsg::Attached { gpu, .. } => gpu,
+        other => panic!("unexpected reply: {other:?}"),
+    };
+
+    let mut first = Client::connect(&server);
+    assert!(!gpu(first.edit(&[], false, frame)));
+
+    first.eval("(set-option! 'gpu-renderer #t)").unwrap();
+    let mut second = Client::connect(&server);
+    assert!(gpu(second.edit(&[], false, frame)));
+
+    let refused = first.eval("(set-option! 'gpu-renderer \"gpu\")");
+    assert!(refused.unwrap_err().contains("must be #t or #f"));
+}
+
+#[test]
 fn evaluates_scheme_for_programs() {
     let server = Server::start();
     let file = server.file("notes.txt", "first\nsecond\n");

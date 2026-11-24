@@ -56,6 +56,7 @@ impl Driver {
                     font_family,
                     font_size,
                     subpixel,
+                    ..
                 } => {
                     driver.font = (font_family, font_size, subpixel);
                     break;

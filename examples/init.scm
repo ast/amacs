@@ -20,6 +20,9 @@
 ;; Text in shades of grey. "rgb" draws it per subpixel: three times the
 ;; resolution across, with coloured fringes. Grey looks better here.
 (set-option! 'subpixel-order "none")
+;; Draw windows with the GPU, through Vulkan. Without it they are drawn on
+;; the CPU, as they are anyway where there is no Vulkan.
+(set-option! 'gpu-renderer #t)
 
 ;; The theme. Palette entries can be replaced in every theme at once; the
 ;; values are other palette names or colours such as "#aa0000". The

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{DrawOp, InputEvent};
 
 /// Changes whenever a message changes shape. Client and server must agree.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// Larger messages are refused, so that a corrupt length cannot make the
 /// reader allocate without bound.
@@ -117,11 +117,13 @@ impl SubpixelOrder {
 pub enum ServerMsg {
     /// The client has a frame: it must send input and apply draw operations.
     /// The font is what the user configured, for clients that draw text
-    /// themselves. The size is in pixels.
+    /// themselves. The size is in pixels. `gpu` says that the user would
+    /// have such a client draw with the GPU.
     Attached {
         font_family: String,
         font_size: u16,
         subpixel: SubpixelOrder,
+        gpu: bool,
     },
     /// The files were opened in an existing frame.
     Opened,

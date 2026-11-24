@@ -196,6 +196,7 @@ pub(crate) const LARGE_FILE_THRESHOLD: &str = "large-file-threshold";
 const FONT_FAMILY: &str = "font-family";
 const FONT_SIZE: &str = "font-size";
 const SUBPIXEL_ORDER: &str = "subpixel-order";
+const GPU_RENDERER: &str = "gpu-renderer";
 const LINE_NUMBERS: &str = "line-numbers";
 const INDENT_OFFSET: &str = "indent-offset";
 const INDENT_TABS: &str = "indent-tabs-mode";
@@ -364,6 +365,17 @@ impl ScriptState {
                       pixels from left to right, for each part by itself, which is \
                       three times the resolution across and sharper on a screen of \
                       low density."
+                    .to_owned(),
+            },
+        );
+        state.options.insert(
+            GPU_RENDERER.to_owned(),
+            OptionDef {
+                default: Value::Bool(false),
+                doc: "Whether graphical frames draw with the GPU, through Vulkan, \
+                      and not on the CPU. Read when a window opens; `--renderer` \
+                      and AMACS_RENDERER say otherwise for one window, and a \
+                      window draws on the CPU after all where there is no Vulkan."
                     .to_owned(),
             },
         );
@@ -695,6 +707,9 @@ impl Editor {
                 "subpixel-order must be \"none\", \"rgb\" or \"bgr\"",
             ));
         }
+        if name == GPU_RENDERER && !matches!(value, Value::Bool(_)) {
+            return Err(CmdError::msg("gpu-renderer must be #t or #f"));
+        }
         if name == INDENT_OFFSET && !matches!(value, Value::Int(1..=16)) {
             return Err(CmdError::msg(
                 "indent-offset must be an integer from 1 to 16",
@@ -740,6 +755,14 @@ impl Editor {
             _ => SubpixelOrder::None,
         };
         (family, size, subpixel)
+    }
+
+    /// Whether graphical frames are to draw with the GPU, as configured.
+    pub fn frame_gpu(&self) -> bool {
+        matches!(
+            self.script.option_values.get(GPU_RENDERER),
+            Some(Value::Bool(true))
+        )
     }
 
     /// Copies the options that the core itself uses into the buffers.

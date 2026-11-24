@@ -66,8 +66,9 @@ Options:
       --subpixel ORDER    Draw text for subpixels in this order, `rgb` or
                           `bgr`, or `none` for shades of grey, instead of
                           the `subpixel-order` option
-      --renderer KIND     Draw with the `cpu` (the default) or the `gpu`;
-                          AMACS_RENDERER in the environment says the same
+      --renderer KIND     Draw with the `cpu` or the `gpu`, instead of what
+                          the `gpu-renderer` option says; AMACS_RENDERER
+                          in the environment says the same
   -s, --socket-name PATH  Use this socket instead of the default
   -h, --help              Show this help
   -V, --version           Show the version";
@@ -382,12 +383,13 @@ fn run() -> Result<ExitCode> {
             rows: INITIAL_GRID.1,
         },
     })?;
-    let (family, font_size, subpixel) = match connection.receive()? {
+    let (family, font_size, subpixel, gpu) = match connection.receive()? {
         ServerMsg::Attached {
             font_family,
             font_size,
             subpixel,
-        } => (font_family, font_size, subpixel),
+            gpu,
+        } => (font_family, font_size, subpixel, gpu),
         ServerMsg::Exit { message, status } => {
             if let Some(message) = message {
                 eprintln!("{message}");
@@ -439,7 +441,11 @@ fn run() -> Result<ExitCode> {
     let kind = options
         .renderer
         .or_else(|| RendererKind::parse(&std::env::var("AMACS_RENDERER").ok()?))
-        .unwrap_or_default();
+        .unwrap_or(if gpu {
+            RendererKind::Gpu
+        } else {
+            RendererKind::Cpu
+        });
     let output = Output::new(
         kind,
         Fonts::new(&family, font_size).with_subpixel(subpixel),
