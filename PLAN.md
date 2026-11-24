@@ -454,6 +454,52 @@ harness. ssh and sudo themselves are tried by hand on `evo`.
 5. Askpass, `read-passwd`, `pass.scm`; sudo and multi-hop.
 6. README, `docs/extending.md`, `docs/ai.md`; then git and LSP.
 
+### Left over from the steps that are done
+
+What steps 1 and 2 did not do, beyond what the later steps are for:
+
+- `ssh` itself has not been tried. Everything is tested through
+  `/sftp-test::`, the same code with `sftp-server` in place of `ssh`; the
+  command line of `ssh`, `ControlMaster` and its socket under
+  `$XDG_RUNTIME_DIR/amacs/`, and what `ssh` says when it fails are only
+  read, not run. Try `C-x C-f //ssh:host:/etc/hostname` with a host whose
+  key is known and that a key or an agent opens; this machine did not
+  know its own host key.
+- Local files are still read on the editor's thread. `fetch` in
+  `files.rs` runs on any thread and `%fetch-file` takes any name, so
+  what is left is to send local visits that way and settle what the
+  callers in Rust that go on after `find_file` do (a line to go to, the
+  language server's locations, search results).
+- A remote file that a client asked for does not carry the client's
+  wishes: `amacsclient /ssh:host:/file` does not wait for `C-x #`, and
+  `+LINE` is dropped. The same for `open_file` of the MCP server with a
+  line.
+- `visit_file`, which reads a file into a buffer without showing it, is
+  refused for a remote name. Workspace edits of a language server use
+  it; they matter when language servers run on the host.
+- The rename that replaces a file is an extension of OpenSSH. The
+  fallback for a server without it (delete, then rename) is written and
+  no test reaches it.
+- A request that gave up leaves what it asked for to happen: a file
+  opened on the host after its request timed out stays open there until
+  the connection ends.
+- Making a connection is not bounded by this program but by `ssh`
+  (`ConnectTimeout`). Once passwords are asked (step 5) that is no
+  bound, and `remote-disconnect` does not end a program that is still
+  connecting.
+- Auto-revert of remote files has a unit test of the reading
+  (`reread`), not of the timer; the thirty seconds are a constant, not
+  an option.
+- `/ssh:` is completed to the hosts that `~/.ssh/config` names
+  outright; files that it includes are not read, and `/sudo:` and
+  `/podman:` are not completed.
+- Auto-save data of a remote file is kept on this machine and offered
+  again by the time the file had when it was read, since the host is
+  not asked again for that.
+- The MCP server's connection was from an older build during both
+  steps, so the editor was tried through `amacsclient -e` and not with
+  keys and the screen.
+
 ## Dependencies added
 
 | Crate | For | Licence |
