@@ -2,6 +2,8 @@
 
 #![allow(dead_code)]
 
+pub mod crypt;
+
 use std::time::{Duration, Instant};
 
 use amacs_proto::{FaceAttrs, InputEvent, Key, KeyCode, Mods, MouseEvent, NamedKey, parse_keys};

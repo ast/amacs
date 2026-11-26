@@ -58,6 +58,9 @@
               pkgs.zstd
               pkgs.zip
               pkgs.unzip
+              # What is encrypted is encrypted by these.
+              pkgs.gnupg
+              pkgs.age
             ];
             # zip and unzip are run in a UTF-8 locale, for names that are not
             # ASCII, and a build has no locales unless it is given them.
@@ -119,6 +122,8 @@
             zstd
             zip
             unzip
+            gnupg
+            age
           ];
         };
       });

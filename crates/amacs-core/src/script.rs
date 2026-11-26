@@ -908,12 +908,15 @@ impl Editor {
     }
 
     /// Makes `name` the current buffer's major mode. Buffer-local option
-    /// values belong to the old mode and are dropped.
+    /// values belong to the old mode and are dropped, but for the one
+    /// that says the buffer is secret.
     pub fn set_major_mode(&mut self, name: &str) -> CmdResult {
         self.check_mode(name)?;
         let buffer = self.buffer_mut();
         buffer.major_mode = name.to_owned();
-        buffer.locals.clear();
+        // A mode starts from nothing, except that what is secret stays
+        // secret whatever mode shows it.
+        buffer.locals.retain(|name, _| name == BUFFER_SECRET);
         buffer.set_language(None);
         self.apply_options();
         Ok(())

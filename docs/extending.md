@@ -400,6 +400,25 @@ fit for passwords, which those of `random` are not. `run-process` takes
 environment variables as a fourth argument, a list of lists of a name and a
 value, for programs such as `gpg` that are told where to look that way.
 
+A file whose name ends in `.gpg`, `.asc` or `.age` is an encrypted one:
+visiting it shows its plain text in a secret buffer, in the mode that the
+name asks for without that suffix, and saving encrypts the text again;
+`runtime/lib/crypt-file.scm` is the code. It is written for those whom a
+`.gpg-id` file (`.age-recipients` for age) in its directory or one above
+names, a line each, as in the password store; without one, for those it was
+for when it was read; and a new file with neither is asked about. gpg's
+agent asks for a passphrase or a PIN with its own pinentry program, or the
+editor asks in the minibuffer if the `crypt-pinentry` option is `loopback`.
+
+Under it is `runtime/lib/crypt.scm`, for code that has something to
+encrypt: `(crypt-decrypt file)` gives the plain text of a file,
+`(crypt-encrypt text recipients file)` writes one, `(crypt-recipients
+file)` says who a file is for and `(crypt-keys 'gpg)` whom there is. The
+backend is chosen by the end of the name, and `define-crypt-backend` adds
+one. The plain text goes to and from the programs through pipes and is
+never in a file, and a file is replaced only when all of it is written
+(`(replace-file from to)`).
+
 ## The file manager
 
 `C-x d`, or visiting a directory, lists it, and `C-x C-j` lists the

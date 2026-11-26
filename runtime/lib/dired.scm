@@ -425,6 +425,9 @@ act on the files. Start it with M-x dired.")
    [(file-remote? path) (%visit-remote path #f #t)]
    ;; What is in an archive is listed: runtime/lib/archive.scm.
    [(archive-file? path) (archive-open path)]
+   ;; A file whose bytes are not its text, such as an encrypted one, is
+   ;; read by its handler.
+   [(file-handler path) (find-file path)]
    [(not (file-text? path)) (%dired-open-externally (list path))]
    [(file-large? path)
     (when (y-or-n? (string-append (file-name-nondirectory path) " is "

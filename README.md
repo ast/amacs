@@ -28,6 +28,7 @@ Files:
 
 - Safe saving, with a warning if the file changed on disk
 - Auto-save, and recovery after a crash
+- Encrypted files (`.gpg`, `.asc`, `.age`), read and saved as any file
 - A file manager (`C-x d`) and a buffer list grouped by project (`C-x C-b`)
 - Files on other hosts over `ssh`, named as tramp names them:
   `/ssh:host:/path`
@@ -85,7 +86,6 @@ The larger things that the editor cannot do yet:
 - The mouse in a terminal
 - Interactive rebase in git
 - Fonts with letters of different widths
-- Encrypted files
 
 `TODO.md` has the full list, with the small things.
 
@@ -118,6 +118,7 @@ them:
 | Hunspell dictionaries                                | Spelling                                                       |
 | `xdg-open`                                           | Opening what is not text from the file manager                 |
 | `tar`, `zstd`, `gzip`, `xz`, `bzip2`, `zip`, `unzip` | Compressed files and archives in the file manager              |
+| `gpg`, `age` or `rage`                               | Encrypted files                                                |
 
 ### Installing with Nix
 

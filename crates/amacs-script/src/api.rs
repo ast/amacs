@@ -1231,6 +1231,22 @@ pub const API: &[ApiFn] = api! {
                 .map(|()| Value::Void)
                 .map_err(|error| CmdError::msg(format!("cannot delete {}: {error}", path.display())))
         };
+    "replace-file" (2, Some(2)) "Give a file on this machine the name of another, which it then replaces in one step: what has the name is the old file or the new one, whole, whatever happens. For a file that was written under another name in the same directory first. The directory is synced, so that the new file is the one after a power failure." =>
+        |ed, args| {
+            let from = expand_path(string(args, 0)?, ed.working_directory());
+            let to = expand_path(string(args, 1)?, ed.working_directory());
+            if file_system::is_remote(&from) || file_system::is_remote(&to) {
+                return Err(CmdError::msg("a file on another host cannot replace one, or be replaced"));
+            }
+            std::fs::rename(&from, &to)
+                .map_err(|error| CmdError::msg(format!("Cannot replace {}: {error}", to.display())))?;
+            if let Some(directory) = to.parent()
+                && let Ok(directory) = std::fs::File::open(directory)
+            {
+                let _ = directory.sync_all();
+            }
+            Ok(Value::Void)
+        };
     "%rename-file" (2, Some(2)) "Rename a file, as rename-file does, before this returns." =>
         |ed, args| {
             let from = expand_path(string(args, 0)?, ed.working_directory());
