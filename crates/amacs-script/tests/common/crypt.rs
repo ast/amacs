@@ -114,3 +114,32 @@ pub fn age_key(dir: &Path, name: &str) -> (PathBuf, String) {
 pub fn quoted(path: &Path) -> String {
     format!("{:?}", path.display().to_string())
 }
+
+/// A clipboard that the test can look at, standing in for the system's.
+#[derive(Clone, Default)]
+pub struct FakeClipboard(pub std::rc::Rc<std::cell::RefCell<Option<String>>>);
+
+impl FakeClipboard {
+    /// A clipboard that an editor uses from now on.
+    pub fn for_editor(h: &mut Harness) -> Self {
+        let clipboard = Self::default();
+        h.session
+            .editor_mut()
+            .set_clipboard(Box::new(clipboard.clone()));
+        clipboard
+    }
+
+    pub fn text(&self) -> String {
+        self.0.borrow().clone().unwrap_or_default()
+    }
+}
+
+impl amacs_core::Clipboard for FakeClipboard {
+    fn set(&mut self, text: &str) {
+        *self.0.borrow_mut() = Some(text.to_owned());
+    }
+
+    fn get(&mut self) -> Option<String> {
+        self.0.borrow().clone()
+    }
+}

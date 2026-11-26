@@ -76,6 +76,7 @@ or one that was added. #f for a file that is not an encrypted one."
 passphrase or a PIN if one is needed. It is an error if the file cannot be
 decrypted, with the reason."
   (%crypt-here! file)
+  (keep-from-program! "what is encrypted")
   ((list-ref (%crypt-entry file) 2) (expand-file-name file)))
 
 (define (crypt-encrypt text recipients file)

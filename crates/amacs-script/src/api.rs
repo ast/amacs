@@ -589,6 +589,13 @@ pub const API: &[ApiFn] = api! {
             ed.kill_new(string(args, 0)?.to_owned());
             Ok(Value::Void)
         };
+    "keep-from-program!" (1, Some(1)) "An error if the code that runs was asked for by a program and not by the user: Scheme that came over the socket to be evaluated, as from a language model, or what such code left to run. The argument says what is not given, for the message. For code that hands out a secret." =>
+        |ed, args| {
+            if ed.for_program() {
+                return Err(CmdError::msg(format!("a program is not given {}", string(args, 0)?)));
+            }
+            Ok(Value::Void)
+        };
     "clipboard-set!" (1, Some(1)) "Put a secret, such as a password, on the system clipboard and not on the kill ring, for the user to paste somewhere. Programs that keep what was on the clipboard are asked not to keep it. Returns whether there is a clipboard. (clipboard-clear!) takes it off again." =>
         |ed, args| Ok(ed.set_clipboard_secret(string(args, 0)?).into());
     "clipboard-clear!" (0, Some(0)) "Take what clipboard-set! put on the clipboard off it, if the clipboard still holds it, and off the kill ring if it was yanked in the editor. Returns whether the clipboard was cleared." =>

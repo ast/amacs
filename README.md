@@ -29,6 +29,8 @@ Files:
 - Safe saving, with a warning if the file changed on disk
 - Auto-save, and recovery after a crash
 - Encrypted files (`.gpg`, `.asc`, `.age`), read and saved as any file
+- The password store of `pass` (`M-x pass`): find an entry, copy its
+  password, read or change it, add and generate entries
 - A file manager (`C-x d`) and a buffer list grouped by project (`C-x C-b`)
 - Files on other hosts over `ssh`, named as tramp names them:
   `/ssh:host:/path`

@@ -419,6 +419,40 @@ one. The plain text goes to and from the programs through pipes and is
 never in a file, and a file is replaced only when all of it is written
 (`(replace-file from to)`).
 
+## The password store
+
+`M-x pass` finds an entry of the password store of
+[pass](https://www.passwordstore.org) by its name and then asks what to do
+with it: copy its password, its user or another field, open its address,
+read or edit it, generate a new password for it, rename or delete it.
+`M-x pass-browse` shows the store in the file manager, where the same is on
+keys for the entry on the line (`?` lists them) and `RET` reads an entry.
+`pass-insert` adds an entry with a password that is typed twice, and
+`pass-generate` one with a password from the random numbers of the system.
+What is copied goes to the clipboard and not to the kill ring, and is taken
+off again after the seconds of the `pass-clip-time` option.
+`runtime/lib/pass.scm` is the code.
+
+The store is read as it is, without the `pass` program: an entry is an
+encrypted file whose first line is the password and whose other lines say
+more as `key: value`, written for those whom the `.gpg-id` above it names.
+It is where the `pass-store-directory` option says, else the
+`PASSWORD_STORE_DIR` variable, else `~/.password-store`. A store of age
+files with `.age-recipients`, as passage keeps one, is read the same way. A
+change is committed if the store is a git repository, with the words that
+pass uses, so both can work on one store; `pass-git-pull` and
+`pass-git-push` exchange it, and nothing is pushed unasked.
+
+For other code: `(pass-entries)` lists the names, `(pass-password name)`
+and `(pass-field name key)` read an entry, and `(pass-copy-secret text
+what)` copies something with the clearing. Code that needs a password for
+a host does not ask the store but `(secret-get 'host "example.org" 'user
+"me")`, or `(secret-search ...)` for the entries, whose secret is a
+procedure, so that nothing is decrypted until it is used
+(`runtime/lib/secrets.scm`). The store answers as auth-source-pass does,
+from entries named `host`, `user@host`, `host:port` or `host/user`, and
+`define-secret-source` adds another source.
+
 ## The file manager
 
 `C-x d`, or visiting a directory, lists it, and `C-x C-j` lists the

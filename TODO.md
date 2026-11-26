@@ -108,6 +108,26 @@ the ones that are still not there, the ones that need the core first.
       saved) are not auto-saved and have no journal: a crash loses them.
 - [ ] The history of a file on another host is kept here, by its name.
 
+## Secrets (`runtime/lib/crypt.scm`, `crypt-file.scm`, `pass.scm`, `secrets.scm`)
+
+- [ ] Nothing asks `secret-get` yet: ssh and sudo for files on other
+      hosts, git over https and the keys of coding agents still need a
+      key, an agent or a helper of their own. One askpass program for all
+      of them (`amacsclient --askpass`) is the plan.
+- [ ] One-time passwords from the `otpauth://` lines of an entry.
+- [ ] A file encrypted with a passphrase alone (`gpg -c`) is read but
+      cannot be saved; age asks for a passphrase only through rage's
+      pinentry, not in the minibuffer.
+- [ ] Changing who a directory of the store is for (`pass init`): the
+      entries under it are not encrypted anew, and `.gpg-id` signatures
+      are not checked.
+- [ ] A buffer that visits an entry keeps the old file name when the
+      entry is renamed.
+- [ ] Secrets are not cached: each use decrypts, and gpg's agent decides
+      how often a passphrase is asked for.
+- [ ] Actions on an entry from inside the prompt of `M-x pass`: the list
+      of what `C-.` offers is fixed in the core.
+
 ## File manager (`runtime/lib/dired.scm`)
 
 - [ ] Preview pane.
