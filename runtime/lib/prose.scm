@@ -116,13 +116,25 @@ after a backslash is part of its cell."
         [(= index 0) (car items)]
         [else (%table-nth (cdr items) (- index 1) default)]))
 
+;; Whether a column holds numbers: at least half of its cells that are not
+;; empty look like numbers. Org lines such a column up to the right.
+(define (%table-numbers? rows index)
+  (let* ((cells (filter (lambda (cell) (not (string-null? cell)))
+                        (map (lambda (row) (%table-nth row index "")) rows)))
+         (numbers (filter (lambda (cell)
+                            (regexp-search "^[<>]?[-+^.0-9]*[0-9][-+^.0-9eEdDx()%:]*$" cell))
+                          cells)))
+    (and (pair? cells)
+         (>= (* 2 (length numbers)) (length cells)))))
+
 (define (table-format lines . style)
   "Takes the lines of a table and returns them with the cells of each
 column made equally wide. Rows that are short of cells get empty ones, and
 every line starts as the first one does. The style, which is that of the
 current buffer if none is given, says how the row of dashes is written.
 With bars, as in Markdown, that row says how each column is lined up: `:--`
-left, `--:` right, `:-:` in the middle."
+left, `--:` right, `:-:` in the middle. With plus signs, as in Org, a
+column of numbers is lined up to the right."
   (let* ((style (if (pair? style) (car style) (prose-style)))
          (plus? (eq? (property-ref style 'rule) 'plus))
          (indent (substring (car lines) 0 (%prose-indentation (car lines))))
@@ -142,7 +154,13 @@ left, `--:` right, `:-:` in the middle."
                        [(rule? (car rows)) (cdr (car rows))]
                        [else (loop (cdr rows))])))
          (alignments (map (lambda (index)
-                            (or (%table-alignment (%table-nth rule index "-")) 'none))
+                            (if plus?
+                                (if (%table-numbers? (filter (lambda (row) (not (rule? row)))
+                                                             rows)
+                                                     index)
+                                    'right
+                                    'none)
+                                (or (%table-alignment (%table-nth rule index "-")) 'none)))
                           indices))
          (widths (map (lambda (index)
                         (fold max (if plus? 1 3)
