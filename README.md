@@ -1,73 +1,93 @@
 # amacs
 
-An Emacs-like editor with a Rust core and Scheme as its extension language.
-The goal is a daemon with thin terminal and Wayland frontends.
+An editor like Emacs. The core is written in Rust. Features are written
+in Scheme, and you can change them while the editor runs. The Scheme is
+the editor's own: see `docs/scheme.md`.
 
-The Scheme is the editor's own, made so that the editor can be changed while
-it runs: see `docs/scheme.md`.
+The editor runs as a server. A terminal or a Wayland window connects to
+it and shows it.
 
 ![A chapter of The Count of Monte Cristo in a buffer, with the lines that contain a name listed below it](docs/images/editing.png)
 
 *A chapter of* The Count of Monte Cristo *in a buffer; `C-s` lists the
 lines that contain what is typed, and narrows as it grows.*
 
-## Status
+## What it can do
 
-Milestones M0 to M11 of the plan are done, and most of M12: the editor runs
-in a terminal or a Wayland window, alone or as a server with any number of
-clients, edits files with syntax highlighting, indentation and language
-servers, has a file manager, a git interface, a terminal emulator and a
-coding agent in it, and is extended in Scheme while it runs, by people and
-by language models.
+Editing:
 
-Working now:
+- Emacs keys: key sequences, prefix arguments, `ESC` as Meta
+- The kill ring, the region, rectangles and keyboard macros
+- Undo that keeps every change, shown as a tree
+- Windows that split, and many buffers
+- A minibuffer that lists the candidates and narrows the list as you type
+- Jumping to a place on screen by a label
+- Line wrapping, tabs, wide characters and emoji
 
-- Buffers on a rope, with markers and a branching undo tree
-- Windows: split below and right, delete, cycle
-- Emacs key sequences, prefix arguments, `ESC` as Meta, the kitty keyboard
-  protocol where the terminal supports it
-- Kill ring, region, yank and yank-pop
-- Minibuffer with a candidate list that narrows as you type (below)
-- Atomic saves, with a warning if the file changed on disk
-- Files are looked at before they are read: one that is not text is
-  refused, and one above 50 MB (`large-file-threshold`) is read after a
-  question
-- Line wrapping, tabs, wide characters, incremental redraw
-- Scheme: commands, key bindings, options, hooks, major and minor modes, an
-  init file, prompts that suspend the command, and `C-g` to stop runaway code
+Files:
 
-- Syntax highlighting and indentation for 22 languages, the Modus themes,
-  line numbers, paired delimiters and paredit (below)
-- Language servers: diagnostics, completion, definitions and references,
-  rename, code actions, symbols; snippets; formatting on save; direnv (below)
-- Projects, jumping by label, the undo history as a tree, rectangles,
-  marks over the text, files re-read when they change on disk (below)
-- A server (`amacs --daemon`) with `amacsclient` for frames, files and
-  `--eval`; auto-save with recovery after a crash
-- A Wayland window (`amacs-gui`, or `amacsclient -c`) with shaped text,
-  ligatures, colour emoji, fractional scaling and the system clipboard
-- A file manager (`C-x d`) and git views (`C-x g`): status, staging by file
-  or hunk, commits, branches, stashes, logs, blame, marks in the gutter
-  (below)
-- A buffer list (`C-x C-b`) grouped by project, with marks and commands
-  that kill or save many buffers at once (below)
-- A Model Context Protocol server (`amacs-mcp`) through which a language
-  model uses, inspects and changes the running editor: see `docs/ai.md`
-- A terminal emulator (`C-c v`): a shell or any program on a
-  pseudo-terminal, its screen in an ordinary buffer (below)
+- Safe saving, with a warning if the file changed on disk
+- Auto-save, and recovery after a crash
+- A file manager (`C-x d`) and a buffer list grouped by project (`C-x C-b`)
+- Files on other hosts over `ssh`, named as tramp names them:
+  `/ssh:host:/path`
+- A file that is not text is refused, and the editor asks before it reads
+  a very large one
+
+Code:
+
+- Syntax highlighting and indentation for 22 languages
+- Language servers: errors, completion, go to definition, references,
+  rename, code actions and symbols
+- Snippets, formatting on save and direnv
+- Projects: find a file or search the text in one
+- Git (`C-x g`): status, staging by file or by hunk, commits, branches,
+  stashes, rebase, logs, blame, and marks beside changed lines
+- Paired brackets, and paredit for Lisp
+
+Writing:
+
+- Markdown, with tables that line up and lists that continue
+- Spelling in several languages at once, with a wave under wrong words
+- The text fields of a web browser, edited here with the GhostText
+  extension
+
+Programs inside the editor:
+
+- A terminal (`C-c v`) that runs a shell or any other program
 - A coding agent (`C-c c c`): Claude Code, or another agent that speaks
-  the Agent Client Protocol, with its conversation in a buffer (below)
-- The text fields of a web browser in buffers, through the GhostText
-  extension, kept the same as the page while either is typed in (below)
-- Spelling: a wave under the misspelled words on screen, in several
-  languages at once, with Hunspell's dictionaries (below)
+  the Agent Client Protocol
 
-- Files on other hosts, named as tramp names them: `/ssh:host:/path` is
-  visited, saved and listed in the file manager over the user's own
-  `ssh` (below)
+The editor itself:
 
-Not yet: Org, programs and passwords on other hosts, and the rest of the
-later milestones. `TODO.md` lists what is left.
+- A server (`amacs --daemon`) with any number of terminals and windows
+- A Wayland window with ligatures, colour emoji, fractional scaling and
+  the system clipboard
+- The Modus themes
+- Scheme for commands, keys, options, hooks, modes and an init file. New
+  code works at once, without a restart
+- A server for language models (`amacs-mcp`), so that a model can use,
+  inspect and change the running editor: see `docs/ai.md`
+
+The sections below describe each of these.
+
+## What is left
+
+The larger things that the editor cannot do yet:
+
+- Org
+- On other hosts: programs, language servers and git. Passwords are not
+  asked for, so a host must let you in with a key
+- Narrowing, `repeat`, renaming a buffer, and regular expressions in `C-s`
+- Help in the editor for more than commands and keys
+- Reading a large file in the background. Now the editor waits for it
+- Drag and drop with other programs
+- The mouse in a terminal
+- Interactive rebase in git
+- Fonts with letters of different widths
+- Encrypted files
+
+`TODO.md` has the full list, with the small things.
 
 ## Building and running
 
@@ -725,30 +745,30 @@ A session might go like this:
 7. `C-c c /` and `/compact` when the conversation has grown long.
    `C-c c k` stops a turn that has gone astray.
 
-| Key | Does |
-|---|---|
-| `C-c c c` | Start Claude for the project, or show its windows; with `C-u`, start another session |
-| `C-c c b` | Go to another session |
-| `C-c c R` | Take up a conversation that was had in the project before |
-| `C-c c f` | Start another session from this one as it is |
-| `C-c c p` | Show the compose buffer |
-| `C-c C-c` | In the compose buffer, send the prompt, or have it wait for the turn to end |
-| `C-c C-s` | In the compose buffer, send the prompt into the turn that is going on |
-| `C-c C-k` | Clear the compose buffer |
-| `C-c c i`, `C-c C-a` | Add an image to the prompt |
-| `M-p`, `M-n` | Earlier and later prompts |
-| `C-c c r` | Add a reference to the region of the current file to the prompt |
-| `C-c c l` | Ask a one-line question in the minibuffer |
-| `C-c c k` | Cancel the current turn |
-| `C-c c y`, `C-c c n` | Allow once, or refuse, what the agent asks leave for |
-| `C-c c o` | Every answer to what the agent asks leave for, in a menu of keys |
-| `C-c c m` | Set the mode, the model or another option of the session |
-| `C-c c /` | Send a slash command |
-| `TAB` | In the conversation, fold or open the section at point |
-| `RET` | In the conversation, go to the file and line at point, or give the answer at point |
-| `y`, `o`, `m`, `/`, `b` | In the conversation, as `C-c c` and the same key |
-| `M-n`, `M-p` | In the conversation, the next and the previous turn |
-| `g` | In the conversation, draw it again |
+| Key                     | Does                                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------------ |
+| `C-c c c`               | Start Claude for the project, or show its windows; with `C-u`, start another session |
+| `C-c c b`               | Go to another session                                                                |
+| `C-c c R`               | Take up a conversation that was had in the project before                            |
+| `C-c c f`               | Start another session from this one as it is                                         |
+| `C-c c p`               | Show the compose buffer                                                              |
+| `C-c C-c`               | In the compose buffer, send the prompt, or have it wait for the turn to end          |
+| `C-c C-s`               | In the compose buffer, send the prompt into the turn that is going on                |
+| `C-c C-k`               | Clear the compose buffer                                                             |
+| `C-c c i`, `C-c C-a`    | Add an image to the prompt                                                           |
+| `M-p`, `M-n`            | Earlier and later prompts                                                            |
+| `C-c c r`               | Add a reference to the region of the current file to the prompt                      |
+| `C-c c l`               | Ask a one-line question in the minibuffer                                            |
+| `C-c c k`               | Cancel the current turn                                                              |
+| `C-c c y`, `C-c c n`    | Allow once, or refuse, what the agent asks leave for                                 |
+| `C-c c o`               | Every answer to what the agent asks leave for, in a menu of keys                     |
+| `C-c c m`               | Set the mode, the model or another option of the session                             |
+| `C-c c /`               | Send a slash command                                                                 |
+| `TAB`                   | In the conversation, fold or open the section at point                               |
+| `RET`                   | In the conversation, go to the file and line at point, or give the answer at point   |
+| `y`, `o`, `m`, `/`, `b` | In the conversation, as `C-c c` and the same key                                     |
+| `M-n`, `M-p`            | In the conversation, the next and the previous turn                                  |
+| `g`                     | In the conversation, draw it again                                                   |
 
 The adapter comes from `claude-agent-acp`; set `acp-command` if it is
 elsewhere. It is written in `runtime/lib/acp.scm`, on the process and JSON
@@ -886,8 +906,6 @@ minibuffer is part of the macro. `M-x name-last-kbd-macro` makes a command
 of the last macro, and `(execute-kbd-macro "C-a - SPC C-n")` types keys
 from code.
 
-Not there yet: narrowing, `repeat`, renaming a buffer, and regular
-expressions in `C-s`. `TODO.md` has the list.
 
 ## Text fields of a web browser
 
