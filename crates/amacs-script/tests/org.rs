@@ -389,3 +389,77 @@ fn a_block_is_written_from_a_snippet() {
     h.type_text("sh");
     assert_eq!(h.text(), "#+begin_src sh\n\n#+end_src");
 }
+
+/// The rows of the window that hold text.
+fn rows(h: &Harness) -> Vec<String> {
+    (0..14)
+        .map(|row| h.screen.row(row))
+        .take_while(|row| !row.is_empty())
+        .collect()
+}
+
+#[test]
+fn tab_and_shift_tab_fold_what_is_under_headings() {
+    let mut h = setup("* One\none\n** One a\na\n* TODO Two :tag:\n| a | b |\n");
+    h.keys("TAB");
+    assert_eq!(rows(&h), ["* One…", "* TODO Two :tag:", "| a | b |"]);
+    assert_eq!(h.screen.face_at(0, 5), h.face("fold"));
+    h.keys("TAB");
+    assert_eq!(
+        rows(&h),
+        ["* One", "one", "** One a…", "* TODO Two :tag:", "| a | b |"]
+    );
+    h.keys("TAB S-TAB");
+    assert_eq!(rows(&h), ["* One…", "* TODO Two :tag:…"]);
+    h.keys("S-TAB");
+    assert_eq!(rows(&h), ["* One…", "** One a…", "* TODO Two :tag:…"]);
+    h.keys("S-TAB");
+    assert_eq!(rows(&h).len(), 6);
+
+    // In a table the keys go from cell to cell, and the state of a folded
+    // heading changes with its text hidden.
+    h.keys("M-> C-p TAB");
+    assert_eq!(h.eval("(current-column)"), "6");
+    h.keys("C-p TAB C-c C-t");
+    assert_eq!(rows(&h)[4], "* DONE Two :tag:…");
+    // A new heading goes after the text that is folded.
+    h.keys("M-RET").type_text("Three");
+    assert!(h.text().ends_with("| a | b |\n* Three"), "{}", h.text());
+    assert_eq!(rows(&h)[4..], ["* DONE Two :tag:…", "* Three"]);
+}
+
+#[test]
+fn a_file_says_how_it_is_folded_when_it_is_visited() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = "* One\none\n** One a\na\n* Two\ntwo\n";
+    let write = |name: &str, first: &str| {
+        let path = dir.path().join(name);
+        std::fs::write(&path, format!("{first}{text}")).unwrap();
+        path.display().to_string()
+    };
+    let (plain, overview, content, all) = (
+        write("plain.org", ""),
+        write("overview.org", "#+STARTUP: overview\n"),
+        write("content.org", "#+startup: indent content\n"),
+        write("all.org", "#+STARTUP: showall\n"),
+    );
+    let mut h = Harness::new(60, 14);
+    let visit = |h: &mut Harness, path: &str| {
+        h.eval(&format!("(find-file {path:?})"));
+        rows(h)
+    };
+    assert_eq!(visit(&mut h, &plain).len(), 6);
+    assert_eq!(
+        visit(&mut h, &overview),
+        ["#+STARTUP: overview", "* One…", "* Two…"]
+    );
+    assert_eq!(
+        visit(&mut h, &content),
+        ["#+startup: indent content", "* One…", "** One a…", "* Two…"]
+    );
+
+    // The option says it for files that do not.
+    h.eval("(kill-buffer \"plain.org\") (set-option! 'org-startup-folded 'overview)");
+    assert_eq!(visit(&mut h, &plain), ["* One…", "* Two…"]);
+    assert_eq!(visit(&mut h, &all).len(), 7);
+}

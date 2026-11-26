@@ -155,15 +155,18 @@ of a heading. #f if there is no such heading."
 ;;; Keys
 
 (define-command (markdown-tab)
-  "In a table, line it up and go to the next cell; elsewhere, indent."
-  (if (table-bounds)
-      (table-next-cell)
-      (call-command 'indent-for-tab-command)))
+  "In a table, line it up and go to the next cell. On a heading, fold what
+is under it, or show it again. Elsewhere, indent."
+  (cond [(table-bounds) (table-next-cell)]
+        [(outline-heading-at) (outline-cycle)]
+        [else (call-command 'indent-for-tab-command)]))
 
 (define-command (markdown-backtab)
-  "In a table, line it up and go to the cell before this one."
-  (when (table-bounds)
-    (table-previous-cell)))
+  "In a table, line it up and go to the cell before this one. Elsewhere,
+fold the whole buffer to its headings, or show it again."
+  (if (table-bounds)
+      (table-previous-cell)
+      (outline-cycle-buffer)))
 
 (define-command (markdown-do)
   "Do what fits where point is: line up a table, or tick the box of an

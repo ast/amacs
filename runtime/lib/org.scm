@@ -17,6 +17,12 @@
 ;;;
 ;;; The words that the user sees are in Simplified Technical English.
 
+(define-option 'org-startup-folded #f
+  "How a file of Org is folded when it is visited: #f shows all of it,
+'overview shows its headings of the highest level, and 'content shows all
+its headings without the text under them. A line #+STARTUP: in the file
+with the word overview, content or showall says it for that file.")
+
 (define-option 'org-todo-keywords '(("TODO") ("DONE"))
   "The words for the states of a heading in Org: a list of the words for
 what is still to do and a list of the words for what is done, as in
@@ -324,21 +330,40 @@ name, and other text is a heading with that title or a place marked
 (define-prose-style 'org-mode 'rule 'plus 'tick "[X]" 'star-items? #f)
 
 (define-command (org-cycle)
-  "In a table, line it up and go to the next cell; elsewhere, indent."
-  (if (table-bounds)
-      (table-next-cell)
-      (call-command 'indent-for-tab-command)))
+  "In a table, line it up and go to the next cell. On a heading, fold what
+is under it, or show it again. Elsewhere, indent."
+  (cond [(table-bounds) (table-next-cell)]
+        [(outline-heading-at) (outline-cycle)]
+        [else (call-command 'indent-for-tab-command)]))
 
 (define-command (org-shifttab)
-  "In a table, line it up and go to the cell before this one."
-  (when (table-bounds)
-    (table-previous-cell)))
+  "In a table, line it up and go to the cell before this one. Elsewhere,
+fold the whole buffer to its headings, or show it again."
+  (if (table-bounds)
+      (table-previous-cell)
+      (outline-cycle-buffer)))
 
 ;;; The mode
 
+;; How a buffer of Org is folded when it is first shown: what its line
+;; #+STARTUP: says, or else the org-startup-folded option.
+(define (%org-startup)
+  (let* ((text (buffer-string))
+         (line (regexp-search "(?mi)^#\\+STARTUP:(.*)$" text))
+         (words (if line (string-split (apply substring text (cadr line)) #\space) '())))
+    (cond [(or (member "overview" words) (member "fold" words)) 'overview]
+          [(member "content" words) 'content]
+          [(or (member "showall" words) (member "showeverything" words)
+               (member "nofold" words))
+           #f]
+          [else (option 'org-startup-folded)])))
+
 (define (%org-setup)
   (let ((keywords (option 'org-todo-keywords)))
-    (set-syntax-keywords! (car keywords) (cadr keywords))))
+    (set-syntax-keywords! (car keywords) (cadr keywords)))
+  (case (%org-startup)
+    [(overview) (outline-fold-overview)]
+    [(content) (outline-fold-contents)]))
 
 (add-hook! 'org-mode-hook %org-setup)
 

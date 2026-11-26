@@ -150,3 +150,118 @@ fn a_mode_without_headings_says_so() {
     h.keys("<f5>");
     assert_eq!(h.echo(), "This mode has no headings");
 }
+
+/// The rows of the window that hold text.
+fn rows(h: &Harness) -> Vec<String> {
+    (0..14)
+        .map(|row| h.screen.row(row))
+        .take_while(|row| !row.is_empty())
+        .collect()
+}
+
+const FOLDED: &str = "# One\none\n## One a\na\n### Deep\ndeep\n## One b\nb\n# Two\ntwo\n";
+
+#[test]
+fn tab_folds_a_heading_then_shows_its_headings_then_all() {
+    let mut h = setup(FOLDED);
+    h.keys("TAB");
+    assert_eq!(rows(&h), ["# One…", "# Two", "two"]);
+    assert_eq!(h.echo(), "Folded");
+    h.keys("TAB");
+    assert_eq!(
+        rows(&h),
+        ["# One", "one", "## One a…", "## One b…", "# Two", "two"]
+    );
+    assert_eq!(h.echo(), "Headings shown");
+    h.keys("TAB");
+    assert_eq!(rows(&h).len(), 10);
+    assert_eq!(h.echo(), "All shown");
+
+    // A heading with text alone under it has two states.
+    goto(&mut h, "# Two");
+    h.keys("TAB");
+    assert_eq!(rows(&h).last().unwrap(), "# Two…");
+    h.keys("TAB");
+    assert_eq!(h.echo(), "All shown");
+    assert_eq!(rows(&h).len(), 10);
+    h.keys("TAB");
+    assert_eq!(h.echo(), "Folded");
+    h.keys("TAB");
+
+    // The next step is known by what is shown, so moving about between
+    // the steps changes nothing; folding something else does.
+    h.keys("M-< TAB TAB C-f C-b TAB");
+    assert_eq!(h.echo(), "All shown");
+    h.keys("TAB TAB C-n C-n TAB TAB M-< TAB");
+    assert_eq!(h.echo(), "Folded");
+    h.keys("TAB TAB");
+    assert_eq!(rows(&h).len(), 10);
+
+    // What was folded under a heading stays so when the heading is folded
+    // and shown again.
+    goto(&mut h, "### Deep");
+    h.keys("TAB");
+    goto(&mut h, "## One a");
+    h.keys("TAB TAB");
+    assert_eq!(rows(&h)[2..5], ["## One a", "a", "### Deep…"]);
+
+    // Text is typed at the end of a folded heading, and RET there opens a
+    // line under it.
+    h.keys("M-< TAB C-e").type_text("!");
+    assert_eq!(rows(&h)[..2], ["# One!…", "# Two"]);
+}
+
+#[test]
+fn shift_tab_goes_from_the_top_headings_to_all_headings_to_all() {
+    let mut h = setup(&format!("intro\n{FOLDED}"));
+    h.keys("S-TAB");
+    assert_eq!(rows(&h), ["intro", "# One…", "# Two…"]);
+    assert_eq!(h.echo(), "Headings of the highest level");
+    h.keys("S-TAB");
+    assert_eq!(
+        rows(&h),
+        [
+            "intro",
+            "# One…",
+            "## One a…",
+            "### Deep…",
+            "## One b…",
+            "# Two…"
+        ]
+    );
+    assert_eq!(h.echo(), "All headings");
+    h.keys("S-TAB");
+    assert_eq!(rows(&h).len(), 11);
+    assert_eq!(h.echo(), "All shown");
+
+    // Point in text that is folded away goes to its heading.
+    goto(&mut h, "deep");
+    h.keys("S-TAB");
+    assert_eq!(line(&mut h), "# One");
+    // Going to a heading by its name shows it.
+    h.keys("C-c C-j").type_text("Deep");
+    h.keys("RET");
+    assert_eq!(line(&mut h), "### Deep");
+    assert_eq!(
+        rows(&h),
+        [
+            "intro", "# One", "one", "## One a", "a", "### Deep", "deep", "## One b", "b", "# Two…"
+        ]
+    );
+}
+
+#[test]
+fn a_folded_subtree_stays_folded_when_it_moves() {
+    let mut h = setup(FOLDED);
+    h.keys("TAB M-<down>");
+    assert_eq!(rows(&h), ["# Two", "two", "# One…"]);
+    assert_eq!(line(&mut h), "# One");
+    h.keys("C-p C-p TAB M-<down>");
+    assert_eq!(rows(&h), ["# One…", "# Two…"]);
+    h.keys("M-<up>");
+    assert_eq!(rows(&h), ["# Two…", "# One…"]);
+    // Its level changes with its text hidden.
+    h.keys("M-S-<right>");
+    assert_eq!(rows(&h), ["## Two…", "# One…"]);
+    assert!(h.text().starts_with("## Two\ntwo\n# One\n"), "{}", h.text());
+}

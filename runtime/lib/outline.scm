@@ -1,6 +1,6 @@
 ;;; Outlines: text under headings of levels, as Markdown and Org have.
-;;; This file moves by headings, changes their levels and moves a heading
-;;; with all that is under it. How a heading is written is the business of
+;;; This file moves by headings, changes their levels, moves a heading
+;;; with all that is under it, and folds away what is under a heading. How a heading is written is the business of
 ;;; each mode, which says so with define-outline.
 ;;;
 ;;; A heading is a list of the position of its line, its level from 1, and
@@ -206,6 +206,14 @@ important."
 
 ;;; Moving subtrees
 
+;; Folds the headings at some positions again that were folded before
+;; their text was moved: moving text shows it.
+(define (%outline-fold-again positions folded)
+  (for-each (lambda (pos folded?)
+              (when folded?
+                (outline-fold (outline-heading-at pos))))
+            positions folded))
+
 ;; Makes two pieces of text that follow one another change places: the
 ;; first is from START to MIDDLE, the second from MIDDLE to END. Only the
 ;; last piece of a buffer can be without a newline at its end, and the
@@ -229,7 +237,9 @@ the next heading of its level."
          (next (or (%outline-next-sibling here)
                    (error "No heading of this level after this")))
          (offset (- (point) (car here)))
+         (folded (map outline-folded? (list next here)))
          (moved (%outline-swap (car here) (car next) (outline-subtree-end next))))
+    (%outline-fold-again (list (car here) (+ (car here) moved)) folded)
     (goto-char (+ (car here) moved offset))))
 
 (define-command (outline-move-subtree-up)
@@ -239,6 +249,126 @@ the heading of its level that is before it."
                    (error "Point is before the first heading")))
          (previous (or (%outline-previous-sibling here)
                        (error "No heading of this level before this")))
-         (offset (- (point) (car here))))
-    (%outline-swap (car previous) (car here) (outline-subtree-end here))
+         (offset (- (point) (car here)))
+         (folded (map outline-folded? (list here previous)))
+         (moved (%outline-swap (car previous) (car here) (outline-subtree-end here))))
+    (%outline-fold-again (list (car previous) (+ (car previous) moved)) folded)
     (goto-char (+ (car previous) offset))))
+
+;;; Folding
+;;;
+;;; What is under a heading can be folded away: its lines are hidden, with
+;;; hide-lines!, and the heading shows a mark. Nothing is kept here of what
+;;; is folded: the hidden lines themselves say it.
+
+;; The lines under a heading, as a pair of the start of the first and the
+;; end of its subtree, or #f if nothing is under it.
+(define (%outline-body heading)
+  (let ((start (+ (line-end-position (car heading)) 1))
+        (end (outline-subtree-end heading)))
+    (and (< start end) (cons start end))))
+
+(define (outline-folded? heading)
+  "Whether what is under a heading is folded away: its first line is
+hidden."
+  (let ((body (%outline-body heading)))
+    (and body (hidden? (car body)))))
+
+(define (outline-fold heading)
+  "Folds away all that is under a heading."
+  (let ((body (%outline-body heading)))
+    (when body
+      (hide-lines! (car body) (cdr body)))))
+
+(define (outline-unfold heading)
+  "Shows all that is under a heading, with what is folded under the
+headings under it."
+  (let ((body (%outline-body heading)))
+    (when body
+      (show-lines! (car body) (cdr body)))))
+
+;; The headings directly under a heading.
+(define (%outline-children heading)
+  (let ((under (cdr (%outline-subtree heading))))
+    (if (null? under)
+        '()
+        (let ((level (fold min (cadr (car under)) (map cadr under))))
+          (filter (lambda (other) (= (cadr other) level)) under)))))
+
+;; What the last step of folding left, to know the next step by: a list of
+;; the buffer, what was stepped (the position of a heading, or the word
+;; buffer), the state it came to, and the hidden lines after it. A step
+;; goes on from that state only if all of these are as they were.
+(define %outline-last-step #f)
+
+(define (%outline-step! what state)
+  (set! %outline-last-step (list (buffer-name) what state (hidden-ranges))))
+
+(define (%outline-after-step? what state)
+  (equal? %outline-last-step (list (buffer-name) what state (hidden-ranges))))
+
+(define-command (outline-cycle)
+  "Fold and unfold what is under the heading at point: fold it away; at
+the next use show the headings under it, with their text folded; at the
+next show all of it."
+  (let* ((heading (%outline-here))
+         (body (%outline-body heading))
+         (under (cdr (%outline-subtree heading))))
+    (cond
+     [(not body) (message "Nothing is under this heading")]
+     [(outline-folded? heading)
+      ;; The fold of the heading itself: what is folded under it stays so.
+      (show-lines! (car body) (car body))
+      (for-each outline-fold (%outline-children heading))
+      (%outline-step! (car heading) 'headings)
+      (message (if (null? under) "All shown" "Headings shown"))]
+     [(and (pair? under) (%outline-after-step? (car heading) 'headings))
+      (outline-unfold heading)
+      (message "All shown")]
+     [else
+      (outline-fold heading)
+      (message "Folded")])))
+
+(define (outline-fold-overview)
+  "Folds the current buffer to its headings of the highest level: all that
+is under them is hidden."
+  (show-lines!)
+  (let ((headings (outline-headings)))
+    (unless (null? headings)
+      (let ((top (fold min (cadr (car headings)) (map cadr headings))))
+        (for-each (lambda (heading)
+                    (when (= (cadr heading) top)
+                      (outline-fold heading)))
+                  headings)))))
+
+(define (outline-fold-contents)
+  "Folds the current buffer to its headings: all headings are shown, and
+the text under each is hidden."
+  (show-lines!)
+  (let loop ((headings (outline-headings)))
+    (unless (null? headings)
+      (let ((start (+ (line-end-position (car (car headings))) 1))
+            (end (if (null? (cdr headings)) (point-max) (car (cadr headings)))))
+        (when (< start end)
+          (hide-lines! start end)))
+      (loop (cdr headings)))))
+
+(define-command (outline-cycle-buffer)
+  "Fold and unfold the whole buffer: from all shown to the headings of the
+highest level, then to all headings, then to all shown again."
+  (cond
+   [(%outline-after-step? 'buffer 'overview)
+    (outline-fold-contents)
+    (%outline-step! 'buffer 'contents)
+    (message "All headings")]
+   [(%outline-after-step? 'buffer 'contents)
+    (show-lines!)
+    (message "All shown")]
+   [else
+    (outline-fold-overview)
+    (%outline-step! 'buffer 'overview)
+    (message "Headings of the highest level")]))
+
+(define-command (outline-show-all)
+  "Show all lines of the buffer."
+  (show-lines!))

@@ -63,7 +63,9 @@ places than keys, some keys lead on to a second key, and so on."
             (loop (- index 1)
                   (if (and (match? chars index start)
                            ;; Where point already is, is nowhere to go.
-                           (not (and selected? (= (+ start index) here))))
+                           (not (and selected? (= (+ start index) here)))
+                           ;; Nor is a line that is not shown.
+                           (not (hidden? (+ start index))))
                       (cons (+ start index) found)
                       found)))))))
 
