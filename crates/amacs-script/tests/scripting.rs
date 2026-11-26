@@ -225,17 +225,35 @@ fn runaway_scheme_code_can_be_interrupted() {
     let interrupt = h.session.interrupt_handle();
     assert!(!interrupt.interrupt(), "nothing is running yet");
 
-    let watchdog = std::thread::spawn(move || {
-        let start = Instant::now();
-        while !interrupt.interrupt() {
-            assert!(
-                start.elapsed() < Duration::from_secs(10),
-                "the loop never started"
-            );
-            std::thread::sleep(Duration::from_millis(5));
+    // Typing runs Scheme too, for a moment: an interrupt that came then
+    // would be spent before the loop starts, which would then go on for
+    // ever. So the watchdog starts when the expression is about to be
+    // evaluated, and goes on until the loop was left.
+    let armed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let left = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watchdog = std::thread::spawn({
+        let (armed, left) = (armed.clone(), left.clone());
+        move || {
+            use std::sync::atomic::Ordering::SeqCst;
+            let start = Instant::now();
+            let mut interrupted = false;
+            while !left.load(SeqCst) {
+                assert!(
+                    start.elapsed() < Duration::from_secs(10),
+                    "the loop never ended"
+                );
+                if armed.load(SeqCst) {
+                    interrupted |= interrupt.interrupt();
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(interrupted, "the loop never started");
         }
     });
-    h.keys("M-:").type_text("(spin)").keys("RET");
+    h.keys("M-:").type_text("(spin)");
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    h.keys("RET");
+    left.store(true, std::sync::atomic::Ordering::SeqCst);
     watchdog.join().unwrap();
     assert!(h.echo().contains("interrupted"), "{}", h.echo());
 
