@@ -7,6 +7,7 @@ use tree_sitter::{InputEdit, Node, Parser, Point, QueryCursor, StreamingIterator
 
 use crate::highlight::{Capture, Highlight};
 use crate::languages::{Grammar, Injections, Language};
+use crate::org::Org;
 
 /// Texts longer than this many bytes are not parsed, since the first parse
 /// would hold up the editor for too long.
@@ -29,14 +30,32 @@ impl Highlights {
         let index = *self.bytes.get(byte.checked_sub(self.start)?)?;
         Highlight::from_index(index.checked_sub(1)?)
     }
+
+    /// The bytes that these are the highlights of.
+    pub(crate) fn range(&self) -> Range<usize> {
+        self.start..self.start + self.bytes.len()
+    }
+
+    /// Gives the part of a range of bytes that is among these a highlight,
+    /// or none.
+    pub(crate) fn fill(&mut self, range: Range<usize>, highlight: Option<Highlight>) {
+        let shown = self.range();
+        let from = range.start.clamp(shown.start, shown.end) - shown.start;
+        let to = range.end.clamp(shown.start, shown.end) - shown.start;
+        if from < to {
+            self.bytes[from..to].fill(highlight.map_or(0, |highlight| highlight as u8 + 1));
+        }
+    }
 }
 
-/// A buffer's syntax tree.
+/// A buffer's syntax tree. A language that is read line by line, as Org
+/// is, has no tree, and what is known of its text instead.
 pub struct Syntax {
     language: &'static Language,
-    grammar: &'static Grammar,
+    grammar: Option<&'static Grammar>,
     parser: Parser,
     tree: Option<Tree>,
+    lines: Option<Org>,
     /// Whether the text has changed since the tree was parsed.
     stale: bool,
 }
@@ -47,7 +66,7 @@ impl std::fmt::Debug for Syntax {
     }
 }
 
-fn point(text: &Text, byte: usize) -> Point {
+pub(crate) fn point(text: &Text, byte: usize) -> Point {
     let row = text.byte_to_line(byte);
     Point::new(row, byte - text.line_to_byte(row))
 }
@@ -64,18 +83,34 @@ fn advance(start: Point, inserted: &str) -> Point {
 }
 
 impl Syntax {
-    /// A syntax tree for a language, or `None` if the language has no grammar.
+    /// A syntax tree for a language, or `None` if the language has no
+    /// grammar and is not read line by line either.
     pub fn new(language: &'static Language) -> Option<Self> {
-        let grammar = language.compiled()?;
         let mut parser = Parser::new();
-        parser.set_language(&grammar.language).ok()?;
+        let (grammar, lines) = if language.by_lines {
+            (None, Some(Org::default()))
+        } else {
+            let grammar = language.compiled()?;
+            parser.set_language(&grammar.language).ok()?;
+            (Some(grammar), None)
+        };
         Some(Self {
             language,
             grammar,
             parser,
             tree: None,
+            lines,
             stale: true,
         })
+    }
+
+    /// Says which words mark a heading as still to do and which as done, in
+    /// a language that has headings with such words.
+    pub fn set_keywords(&mut self, not_done: Vec<String>, done: Vec<String>) {
+        if let Some(lines) = &mut self.lines {
+            lines.set_keywords(not_done, done);
+            self.stale = true;
+        }
     }
 
     pub fn language(&self) -> &'static Language {
@@ -130,6 +165,10 @@ impl Syntax {
             return;
         }
         self.stale = false;
+        if let Some(lines) = &mut self.lines {
+            lines.scan(text);
+            return;
+        }
         if text.len_bytes() > MAX_PARSE_BYTES {
             self.tree = None;
             return;
@@ -168,10 +207,16 @@ impl Syntax {
             start: range.start,
             bytes: vec![0; range.len()],
         };
-        let Some(tree) = self.tree() else { return out };
+        if let Some(lines) = self.lines.as_ref().filter(|_| !self.stale) {
+            lines.paint(text, &mut out);
+            return out;
+        }
+        let (Some(tree), Some(grammar)) = (self.tree(), self.grammar) else {
+            return out;
+        };
 
         paint(
-            self.grammar,
+            grammar,
             self.language.first_pattern_wins,
             tree.root_node(),
             text,
@@ -298,9 +343,6 @@ fn paint_injected(
     text: &Text,
     out: &mut Highlights,
 ) {
-    let Some(grammar) = language.compiled() else {
-        return;
-    };
     if content.byte_range().len() > MAX_INJECTED_BYTES {
         return;
     }
@@ -324,9 +366,31 @@ fn paint_injected(
     if rest.start_byte < rest.end_byte {
         ranges.push(rest);
     }
-    if ranges.is_empty()
+    paint_ranges(parser, language, &ranges, whole, text, out);
+}
+
+/// Paints pieces of the text that are in another language, parsed as one
+/// text in that language. If the language owns all of the pieces, what it
+/// does not highlight in them is plain.
+pub(crate) fn paint_ranges(
+    parser: &mut Parser,
+    language: &'static Language,
+    ranges: &[tree_sitter::Range],
+    whole: bool,
+    text: &Text,
+    out: &mut Highlights,
+) {
+    let Some(grammar) = language.compiled() else {
+        return;
+    };
+    let bytes: usize = ranges
+        .iter()
+        .map(|range| range.end_byte - range.start_byte)
+        .sum();
+    if bytes == 0
+        || bytes > MAX_INJECTED_BYTES
         || parser.set_language(&grammar.language).is_err()
-        || parser.set_included_ranges(&ranges).is_err()
+        || parser.set_included_ranges(ranges).is_err()
     {
         return;
     }
@@ -346,7 +410,7 @@ fn paint_injected(
     // which is to stay as it is.
     let before = out.bytes.clone();
     if whole {
-        for range in &ranges {
+        for range in ranges {
             out.bytes[within(range)].fill(0);
         }
     }

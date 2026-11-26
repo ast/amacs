@@ -35,10 +35,25 @@ pub enum Highlight {
     Heading6,
     Heading7,
     Heading8,
+    /// A word that says a heading is still to do, and a box that is empty.
+    Todo,
+    /// A word that says a heading is done, and a box that is ticked.
+    Done,
+    /// The tags of a heading.
+    Tag,
+    /// What is about the text and not of it: settings, properties and the
+    /// lines that open and close blocks.
+    Metadata,
+    /// Text that is shown as it is written.
+    Verbatim,
+    /// The rows of a table.
+    Table,
+    /// A date, with or without a time.
+    Date,
 }
 
 impl Highlight {
-    pub const ALL: [Highlight; 30] = [
+    pub const ALL: [Highlight; 37] = [
         Highlight::Comment,
         Highlight::Doc,
         Highlight::String,
@@ -69,6 +84,13 @@ impl Highlight {
         Highlight::Heading6,
         Highlight::Heading7,
         Highlight::Heading8,
+        Highlight::Todo,
+        Highlight::Done,
+        Highlight::Tag,
+        Highlight::Metadata,
+        Highlight::Verbatim,
+        Highlight::Table,
+        Highlight::Date,
     ];
 
     /// The name of the face that draws this kind of text.
@@ -104,6 +126,13 @@ impl Highlight {
             Highlight::Heading6 => "heading-6",
             Highlight::Heading7 => "heading-7",
             Highlight::Heading8 => "heading-8",
+            Highlight::Todo => "prose-todo",
+            Highlight::Done => "prose-done",
+            Highlight::Tag => "prose-tag",
+            Highlight::Metadata => "prose-metadata",
+            Highlight::Verbatim => "prose-verbatim",
+            Highlight::Table => "prose-table",
+            Highlight::Date => "date",
         }
     }
 

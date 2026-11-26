@@ -175,6 +175,9 @@ pub struct Language {
     /// highlight. Queries written for tree-sitter before 0.25 expect that.
     pub(crate) first_pattern_wins: bool,
     pub(crate) injections: Option<&'static Injections>,
+    /// Whether the language is read line by line, by code written for it,
+    /// where others have a grammar.
+    pub(crate) by_lines: bool,
     compiled: OnceLock<Option<Grammar>>,
 }
 
@@ -196,6 +199,7 @@ impl Language {
             highlights: &[],
             first_pattern_wins: false,
             injections: None,
+            by_lines: false,
             compiled: OnceLock::new(),
         }
     }
@@ -244,6 +248,11 @@ impl Language {
         self
     }
 
+    const fn by_lines(mut self) -> Self {
+        self.by_lines = true;
+        self
+    }
+
     pub fn has_grammar(&self) -> bool {
         self.grammar.is_some()
     }
@@ -283,7 +292,7 @@ impl Language {
     }
 }
 
-static LANGUAGES: [Language; 24] = [
+static LANGUAGES: [Language; 25] = [
     Language::new("bash")
         .grammar(
             || tree_sitter_bash::LANGUAGE.into(),
@@ -417,6 +426,8 @@ static LANGUAGES: [Language; 24] = [
         .comment("#")
         .brackets(&NIX)
         .first_pattern_wins(),
+    // Org has no grammar: src/org.rs reads its lines.
+    Language::new("org").by_lines(),
     Language::new("python")
         .grammar(
             || tree_sitter_python::LANGUAGE.into(),

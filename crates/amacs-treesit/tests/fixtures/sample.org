@@ -1,0 +1,67 @@
+#+TITLE: Notes on a boot environment
+#+AUTHOR: someone
+#+OPTIONS: toc:2 num:t
+#+STARTUP: showall
+#+ and text
+
+* Goal                                                          :zfs:nixos:
+
+Install it on the ~zroot~ pool, with =verbatim= text, *strong*, /stressed/,
+_underlined_ and +struck+ words. See [[file:other.org][the other note]], [[*Goal]] or
+https://example.org/a_(b), and <2026-02-16 Mon> or [2026-02-18 Wed 11:51].
+Not *strong, not/stressed/ and a*b*c. A path /usr/bin/ is stressed, as in Org.
+
+- Keep it *bootable* (nothing destroyed).
+- [ ] a box
+- [X] a ticked box
+- [-] a box half done
+  1. numbered
+  2) also numbered
+  * a star that is indented
++ plus
+
+** TODO Write the ~configuration.nix~                              :work:
+SCHEDULED: <2026-03-01 Sun>
+:PROPERTIES:
+:ID:       247cce43-39aa-415e-8307-f367b408c8f4
+:END:
+*** DONE Third level with [[https://example.org][a link]]
+**** FEEDBACK Fourth, with a state that is not known
+********* Ninth level starts again
+
+| Pin | Function    | code |
+|-----+-------------+------|
+| B3  | =SPI SCK=   |    7 |
+
+# a comment
+#+begin_src bash :tangle setup.sh
+  echo "$HOME" # in a block
+  ls * | wc -l
+#+end_src
+
+#+BEGIN_SRC sh
+zfs list -o name   # åäö
+#+END_SRC
+
+  #+begin_src nosuchlanguage
+  *not strong* here
+  #+end_src
+
+#+begin_example
+[[not a link]] and *not strong*
+#+end_example
+
+#+begin_quote
+A quote holds *Org*.
+#+end_quote
+
+#+begin_comment
+nothing of this
+#+end_comment
+
+#+begin_src sh
+echo "cut short"
+* A heading ends a block that was not closed
+
+#+begin_src rust
+fn never_closed() {}

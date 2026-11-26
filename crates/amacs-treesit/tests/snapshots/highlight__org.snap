@@ -1,0 +1,71 @@
+---
+source: crates/amacs-treesit/tests/highlight.rs
+expression: "highlighted(\"org\", \"sample.org\")"
+---
+«prose-metadata|#+TITLE:»«heading| Notes on a boot environment»
+«prose-metadata|#+AUTHOR:» someone
+«prose-metadata|#+OPTIONS: toc:2 num:t»
+«prose-metadata|#+STARTUP: showall»
+#+ and text
+
+«heading|* Goal                                                          »«prose-tag|:zfs:nixos:»
+
+Install it on the «delimiter|~»«code|zroot»«delimiter|~» pool, with «delimiter|=»«prose-verbatim|verbatim»«delimiter|=» text, «delimiter|*»«strong|strong»«delimiter|*», «delimiter|/»«emphasis|stressed»«delimiter|/»,
+_underlined_ and +struck+ words. See «delimiter|[[file:other.org][»«link|the other note»«delimiter|]]», «delimiter|[[»«link|*Goal»«delimiter|]]» or
+«link|https://example.org/a_(b)», and «date|<2026-02-16 Mon>» or «date|[2026-02-18 Wed 11:51]».
+Not *strong, not/stressed/ and a*b*c. A path «delimiter|/»«emphasis|usr/bin»«delimiter|/» is stressed, as in Org.
+
+«delimiter|- »Keep it «delimiter|*»«strong|bootable»«delimiter|*» (nothing destroyed).
+«delimiter|- »«prose-todo|[ ]» a box
+«delimiter|- »«prose-done|[X]» a ticked box
+«delimiter|- »«prose-todo|[-]» a box half done
+  «delimiter|1. »numbered
+  «delimiter|2) »also numbered
+  «delimiter|* »a star that is indented
+«delimiter|+ »plus
+
+«heading-2|** »«prose-todo|TODO»«heading-2| Write the »«delimiter|~»«code|configuration.nix»«delimiter|~»«heading-2|                              »«prose-tag|:work:»
+«prose-metadata|SCHEDULED:» «date|<2026-03-01 Sun>»
+«prose-metadata|:PROPERTIES:»
+«prose-metadata|:ID:»       247cce43-39aa-415e-8307-f367b408c8f4
+«prose-metadata|:END:»
+«heading-3|*** »«prose-done|DONE»«heading-3| Third level with »«delimiter|[[https://example.org][»«link|a link»«delimiter|]]»
+«heading-4|**** FEEDBACK Fourth, with a state that is not known»
+«heading|********* Ninth level starts again»
+
+«prose-table|| Pin | Function    | code |»
+«prose-table||-----+-------------+------|»
+«prose-table|| B3  | »«delimiter|=»«prose-verbatim|SPI SCK»«delimiter|=»«prose-table|   |    7 |»
+
+«comment|# a comment»
+«prose-metadata|#+begin_src bash :tangle setup.sh»
+  «function-name|echo» «string|"»«operator|$»«property|HOME»«string|"» «comment|# in a block»
+  «function-name|ls» * «operator||» «function-name|wc» «constant|-l»
+«prose-metadata|#+end_src»
+
+«prose-metadata|#+BEGIN_SRC sh»
+«function-name|zfs» list «constant|-o» name   «comment|# åäö»
+«prose-metadata|#+END_SRC»
+
+«prose-metadata|  #+begin_src nosuchlanguage»
+  *not strong* here
+«prose-metadata|  #+end_src»
+
+«prose-metadata|#+begin_example»
+[[not a link]] and *not strong*
+«prose-metadata|#+end_example»
+
+«prose-metadata|#+begin_quote»
+A quote holds «delimiter|*»«strong|Org»«delimiter|*».
+«prose-metadata|#+end_quote»
+
+«prose-metadata|#+begin_comment»
+«comment|nothing of this»
+«prose-metadata|#+end_comment»
+
+«prose-metadata|#+begin_src sh»
+echo "cut short"
+«heading|* A heading ends a block that was not closed»
+
+«prose-metadata|#+begin_src rust»
+fn never_closed() {}

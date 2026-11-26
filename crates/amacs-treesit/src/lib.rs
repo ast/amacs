@@ -8,6 +8,7 @@
 mod highlight;
 mod indent;
 mod languages;
+mod org;
 mod syntax;
 
 pub use highlight::Highlight;

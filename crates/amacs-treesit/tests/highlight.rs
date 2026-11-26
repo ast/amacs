@@ -74,6 +74,7 @@ snapshots! {
     make: "make", "Makefile";
     markdown: "markdown", "sample.md";
     nix: "nix", "sample.nix";
+    org: "org", "sample.org";
     python: "python", "sample.py";
     rust: "rust", "sample.rs";
     scheme: "scheme", "sample.scm";
@@ -100,8 +101,39 @@ fn highlights_of_a_range_match_those_of_the_whole() {
 
 #[test]
 fn highlights_of_any_lines_of_text_in_other_languages_match_those_of_the_whole() {
-    let mut syntax = Syntax::new(language("markdown").unwrap()).unwrap();
-    let text = Text::from(fixture("sample.md").as_str());
+    any_lines_match_the_whole("markdown", "sample.md");
+}
+
+#[test]
+fn highlights_of_any_lines_of_org_match_those_of_the_whole() {
+    any_lines_match_the_whole("org", "sample.org");
+}
+
+#[test]
+fn the_words_for_the_states_of_a_heading_can_be_set() {
+    let mut syntax = Syntax::new(language("org").unwrap()).unwrap();
+    let text = Text::from("* TODO one\n* FEEDBACK two\n* DELEGATED three\n* DONE four\n");
+    syntax.update(&text);
+    assert_eq!(
+        marked(&syntax, &text),
+        "«heading|* »«prose-todo|TODO»«heading| one»\n«heading|* FEEDBACK two»\n\
+         «heading|* DELEGATED three»\n«heading|* »«prose-done|DONE»«heading| four»\n"
+    );
+    syntax.set_keywords(
+        vec!["TODO".into(), "FEEDBACK".into()],
+        vec!["DELEGATED".into()],
+    );
+    syntax.update(&text);
+    assert_eq!(
+        marked(&syntax, &text),
+        "«heading|* »«prose-todo|TODO»«heading| one»\n«heading|* »«prose-todo|FEEDBACK»«heading| two»\n\
+         «heading|* »«prose-done|DELEGATED»«heading| three»\n«heading|* DONE four»\n"
+    );
+}
+
+fn any_lines_match_the_whole(name: &str, file: &str) {
+    let mut syntax = Syntax::new(language(name).unwrap()).unwrap();
+    let text = Text::from(fixture(file).as_str());
     syntax.update(&text);
     let whole = syntax.highlights(&text, 0..text.len_bytes());
     let lines = text.len_lines();

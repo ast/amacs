@@ -863,6 +863,12 @@ pub const API: &[ApiFn] = api! {
             ed.set_language(args[0].as_name())?;
             Ok(Value::Void)
         };
+    "set-syntax-keywords!" (2, Some(2)) "Say which words at the start of a heading mark it as still to do, and which as done, in the current buffer: two lists of strings. They are coloured as such where the language of the buffer has headings with states, as Org has. Setting the language of the buffer anew forgets them." =>
+        |ed, args| {
+            let (not_done, done) = (strings(args, 0)?, strings(args, 1)?);
+            ed.buffer_mut().set_syntax_keywords(not_done, done);
+            Ok(Value::Void)
+        };
     "buffer-language" (0, Some(0)) "Name of the current buffer's language, or #f." =>
         |ed, _| Ok(ed.buffer().language().map(|language| language.name).into());
     "indent-line" (0, Some(0)) "Indent the current line as its language says." =>

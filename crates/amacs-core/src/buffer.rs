@@ -243,6 +243,15 @@ impl Buffer {
         self.syntax = language.and_then(Syntax::new);
     }
 
+    /// Says which words mark a heading as still to do and which as done,
+    /// for a language that has such headings, as Org has. Setting the
+    /// language anew forgets them.
+    pub fn set_syntax_keywords(&mut self, not_done: Vec<String>, done: Vec<String>) {
+        if let Some(syntax) = &mut self.syntax {
+            syntax.set_keywords(not_done, done);
+        }
+    }
+
     /// Whether the text has a syntax tree, which takes a language with a
     /// grammar.
     pub fn has_syntax(&self) -> bool {
