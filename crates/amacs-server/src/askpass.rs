@@ -11,6 +11,8 @@
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::RecvTimeoutError;
+use std::time::Duration;
 
 use amacs_core::Waker;
 use amacs_proto::{Answer, Ask, read_msg, socket_path, write_msg};
@@ -122,12 +124,37 @@ fn question(stream: &UnixStream) {
         return;
     };
     let answer = match amacs_core::askpass::ask(&ticket, &prompt, &kind) {
-        // The editor going away before it answers is no answer.
-        Ok(answers) => match answers.recv() {
-            Ok(Some(answer)) => Answer::Given(answer),
-            Ok(None) | Err(_) => Answer::None,
+        Ok((id, answers)) => loop {
+            match answers.recv_timeout(Duration::from_millis(250)) {
+                Ok(Some(answer)) => break Answer::Given(answer),
+                // The editor going away before it answers is no answer.
+                Ok(None) | Err(RecvTimeoutError::Disconnected) => break Answer::None,
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+            // A helper that is gone, as with a program that gave up
+            // waiting, takes its question with it.
+            if gone(stream) {
+                amacs_core::askpass::withdraw(id);
+                return;
+            }
         },
         Err(why) => Answer::Refused(why),
     };
     let _ = write_msg(stream, &answer);
+}
+
+/// Whether the other end of a stream has closed it. The helper writes
+/// nothing after its question, so anything else to read is the end.
+fn gone(stream: &UnixStream) -> bool {
+    use std::io::Read;
+    if stream.set_nonblocking(true).is_err() {
+        return true;
+    }
+    let mut byte = [0];
+    let mut reader = stream;
+    let ended = match reader.read(&mut byte) {
+        Ok(_) => true,
+        Err(error) => error.kind() != std::io::ErrorKind::WouldBlock,
+    };
+    ended || stream.set_nonblocking(false).is_err()
 }

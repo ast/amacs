@@ -548,9 +548,11 @@ question and reads the answer from it; the helper is `amacsclient`, which
 brings the question to the editor that started that `ssh`. This works in
 a window and in a terminal alike, also one that is reached over `ssh`.
 The words of a question are shown and not read, so every answer is typed
-hidden. For the first question to a host, the password store is looked in
-before the user is asked, under the full name that `ssh -G` gives for the
-host. One answer serves for as long as the connection is kept. `sudo`
+hidden. The password store is looked in before the user is asked, under
+the full name that `ssh -G` gives for the host, where the first question
+can only be for the password: no host is on the way, and `ssh` knows the
+key of the host (`ssh-keygen -F`). A question goes off the screen when
+`ssh` gives up. One answer serves for as long as the connection is kept. `sudo`
 must still ask no password: because it never does, or because it was
 used in a terminal a moment ago. Not there yet either: programs on the host, so a
 remote buffer has no `M-!`, terminal, git, formatter or language server.

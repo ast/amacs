@@ -579,12 +579,22 @@ fn a_prompt_says_what_scheme_tells_it_about_its_input() {
 }
 
 #[test]
-fn the_full_name_of_a_host_for_its_password_is_what_ssh_says_it_is() {
+fn a_password_is_looked_up_only_where_the_first_question_can_only_be_for_it() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("config");
+    let known = dir.path().join("known_hosts");
+    // A key that ssh knows for one host, and none for the others.
+    let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE3r3xhL0DnOUHcz0mCbfxxUmVTnQw1MXv9b0iT6Nw2D";
+    fs::write(&known, format!("[full.example.org]:2222 {key}\n")).unwrap();
     fs::write(
         &file,
-        "Host short\n  HostName full.example.org\n  User me\n  Port 2222\n",
+        format!(
+            "Host *\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile /dev/null\n\
+             Host short\n  HostName full.example.org\n  User me\n  Port 2222\n\
+             Host new\n  HostName new.example.org\n\
+             Host behind\n  HostName full.example.org\n  Port 2222\n  ProxyJump gate\n",
+            known.display()
+        ),
     )
     .unwrap();
     // Without an ssh that knows who runs it there is nothing to ask.
@@ -602,22 +612,27 @@ fn the_full_name_of_a_host_for_its_password_is_what_ssh_says_it_is() {
         h.eval(&format!(
             "(define facts 'none)
              (run-later (lambda ()
-                          (set! facts (%ssh-facts {place:?} (list \"-F\" {:?})))))",
+                          (set! facts (%ssh-password-facts {place:?} (list \"-F\" {:?})))))",
             file.display().to_string()
         ));
         h.wait_until(|h| h.eval("facts") != "none");
         h.eval("facts")
     };
+    // The full name, the user and the port are what ssh says they are.
     assert_eq!(
         facts(&mut h, "/ssh:short:"),
         "(\"full.example.org\" \"me\" \"2222\")"
     );
-    // What the name says wins over the configuration, as for ssh.
-    assert_eq!(
-        facts(&mut h, "/ssh:you@short#22:/etc"),
-        "(\"full.example.org\" \"you\" \"22\")"
-    );
-    // The last step is what asks; a step that is not ssh has no such facts.
+    // What the name says wins over the configuration, as for ssh. The
+    // key is known for the other port only.
+    assert_eq!(facts(&mut h, "/ssh:you@short#22:/etc"), "#f");
+    // A host that ssh does not know: ssh asks about its key first.
+    assert_eq!(facts(&mut h, "/ssh:new:"), "#f");
+    // A host on the way, in the configuration or in the name, asks
+    // first, and is not given the password of the host behind it.
+    assert_eq!(facts(&mut h, "/ssh:behind:"), "#f");
+    assert_eq!(facts(&mut h, "/ssh:gate|ssh:short:"), "#f");
+    // A step that is not ssh has no such facts.
     assert_eq!(facts(&mut h, "/ssh:short|sudo::/etc"), "#f");
     assert_eq!(facts(&mut h, "git push"), "#f");
 }

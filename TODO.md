@@ -117,15 +117,19 @@ the ones that are still not there, the ones that need the core first.
       cannot reach a helper on this machine), git (its credential
       helpers say the host and the user as data, which the askpass
       question does not), and the keys of coding agents.
-- [ ] A question of a program stays open when the program gives up
-      before it is answered, as `ssh` does after its time for logging
-      in: the answer then goes nowhere.
 - [ ] A user's own askpass program in place of the editor's, by an
       option: a window of pinentry, `ksshaskpass`.
 - [ ] What is typed for a program is always hidden, also a name or
       `yes`: no program says which answers may be shown.
-- [ ] With several hosts in a row (`/ssh:a|ssh:b:`), the password store
-      is asked for the last one, whichever host asks first.
+- [ ] The password store answers for `ssh` only where the first
+      question can only be for the password: one host, none on the way
+      to it, and a host key that `ssh` knows. A host behind another, and
+      a host on its first visit, always ask the user.
+- [ ] Code that a program had evaluated cannot make a ticket, but it
+      can define a method for remote files or put a function on
+      `askpass-functions`, and so come by a password from the store all
+      the same. This is the same gap as any hook leaves, see
+      `docs/ai.md`.
 - [ ] One-time passwords from the `otpauth://` lines of an entry.
 - [ ] A file encrypted with a passphrase alone (`gpg -c`) is read but
       cannot be saved; age asks for a passphrase only through rage's

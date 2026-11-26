@@ -162,6 +162,30 @@ impl Editor {
         Ok(id)
     }
 
+    /// Closes the prompt that a promise stands for, if it is the one
+    /// that is open, as if the user had left it: for a question that
+    /// nobody waits for any more. Returns whether it was open.
+    pub fn abandon_prompt(&mut self, promise: u64) -> bool {
+        if self
+            .minibuffer
+            .as_ref()
+            .is_some_and(|state| state.promise == Some(promise))
+        {
+            dismiss_minibuffer(self);
+            return true;
+        }
+        if self
+            .key_prompt
+            .as_ref()
+            .is_some_and(|question| question.promise == Some(promise))
+        {
+            self.key_prompt = None;
+            self.reject_promise(promise);
+            return true;
+        }
+        false
+    }
+
     /// Starts reading a secret, such as a password, for Scheme code: what
     /// is typed is drawn as stars, is in no history, and no hook sees it.
     /// Returns the promise that is resolved with it.

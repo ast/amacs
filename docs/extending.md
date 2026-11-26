@@ -414,7 +414,8 @@ the code, and `(askpass-answer who host user prompt kind before)` is where
 an answer is found: the functions of the hook `askpass-functions` are
 called first, with the same arguments, and the first that returns a string
 has answered; then, for the first question of a program with a host,
-`secret-get`; then the user. `kind` is what the program says of its
+`secret-get`; then the user. The option `askpass-variables` holds the
+variables that lead programs to the helper. `kind` is what the program says of its
 question, `confirm`, `none` or else `secret`, and the words of the
 question are not read for more. Files on other hosts use this for `ssh`.
 `(askpass-served?)` says whether anybody answers: not in a batch run.

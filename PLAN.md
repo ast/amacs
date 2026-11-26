@@ -391,7 +391,13 @@ where nobody answers (`unasked` in the command of a method). The time of
 a question is not counted against those who wait for the connection, and
 the editor's own thread does not wait for an answer at all. Nothing of
 what `ssh` writes or asks is read for its meaning: the full name of a
-host for the password store is what `ssh -G` says.
+host for the password store is what `ssh -G` says, and the store is
+asked only where the first question can only be for the password (one
+host, none on the way, a host key that `ssh-keygen -F` finds), which
+`runtime/lib/remote.scm` works out; the core gives the ticket of a
+connection no host. Which variables lead programs to the helper is the
+option `askpass-variables`. A question whose helper goes away is taken
+back and its prompt closed.
 
 ### For language models
 

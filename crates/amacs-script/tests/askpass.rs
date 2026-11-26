@@ -40,9 +40,19 @@ impl Asked {
 
     /// Asks as the helper of a program does, and lets the editor see it.
     fn ask(&mut self, ticket: &str, prompt: &str, kind: &str) -> Receiver<Option<String>> {
-        let answer = askpass::ask(ticket, prompt, kind).unwrap();
+        self.ask_numbered(ticket, prompt, kind).1
+    }
+
+    /// The same, with the number of the question.
+    fn ask_numbered(
+        &mut self,
+        ticket: &str,
+        prompt: &str,
+        kind: &str,
+    ) -> (u64, Receiver<Option<String>>) {
+        let asked = askpass::ask(ticket, prompt, kind).unwrap();
         self.h.redisplay();
-        answer
+        asked
     }
 }
 
@@ -206,6 +216,63 @@ fn a_hook_answers_first_and_an_open_prompt_is_not_broken_into() {
     asked.h.wait_until(|h| h.prompt() == "ssh to evo Password:");
     asked.h.type_text("x").keys("RET");
     assert_eq!(answer(&password).as_deref(), Some("x"));
+
+    // Nor is a question that one key answers.
+    asked.h.eval(
+        "(define saved 'open)
+         (define-command (ask-save) \"Ask.\" (set! saved (y-or-n? \"Save file?\")))",
+    );
+    asked.h.keys("M-x").type_text("ask-save").keys("RET");
+    let password = asked.ask(&ticket, "Password: ", "");
+    std::thread::sleep(Duration::from_millis(1200));
+    asked.h.redisplay();
+    assert!(
+        asked.h.echo().starts_with("Save file?"),
+        "{}",
+        asked.h.echo()
+    );
+    asked.h.keys("y");
+    assert_eq!(asked.h.eval("saved"), "#t");
+    asked.h.wait_until(|h| h.prompt() == "ssh to evo Password:");
+    asked.h.keys("C-g");
+    assert_eq!(answer(&password), None);
+}
+
+#[test]
+fn a_question_goes_away_with_the_program_that_asked() {
+    let mut asked = Asked::new();
+    let ticket = asked.ticket("\"ssh to evo\"");
+    // The one that is put: its prompt closes.
+    let (first, gone) = asked.ask_numbered(&ticket, "Password: ", "");
+    let (second, waiting) = asked.ask_numbered(&ticket, "Code: ", "");
+    assert_eq!(asked.h.prompt(), "ssh to evo Password:");
+    askpass::withdraw(first);
+    assert_eq!(answer(&gone), None);
+    // The next one is put. Taken back while it waits behind a prompt, a
+    // question is never put.
+    asked.h.wait_until(|h| h.prompt() == "ssh to evo Code:");
+    let (third, never) = asked.ask_numbered(&ticket, "More: ", "");
+    askpass::withdraw(third);
+    assert_eq!(answer(&never), None);
+    asked.h.type_text("1").keys("RET");
+    assert_eq!(answer(&waiting).as_deref(), Some("1"));
+    let _ = second;
+    asked.h.wait_until(|_| true);
+    std::thread::sleep(Duration::from_millis(50));
+    asked.h.redisplay();
+    assert_eq!(asked.h.prompt(), "");
+    // A question of yes or no closes the same way.
+    let (confirm, gone) = asked.ask_numbered(&ticket, "Allow?", "confirm");
+    assert!(
+        asked.h.echo().starts_with("ssh to evo Allow?"),
+        "{}",
+        asked.h.echo()
+    );
+    askpass::withdraw(confirm);
+    asked.h.redisplay();
+    assert_eq!(answer(&gone), None);
+    assert!(!asked.h.echo().contains("Allow?"), "{}", asked.h.echo());
+    assert_eq!(asked.h.eval("(prompt-open?)"), "#f");
 }
 
 #[test]

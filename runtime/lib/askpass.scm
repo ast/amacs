@@ -17,6 +17,26 @@
 ;;;
 ;;; The words that the user sees are in Simplified Technical English.
 
+(define-option 'askpass-variables
+  '(("SSH_ASKPASS" helper)
+    ("SSH_ASKPASS_REQUIRE" "force")
+    ("SUDO_ASKPASS" helper)
+    ("GIT_ASKPASS" helper))
+  "The environment variables that lead programs to the helper of the
+editor, for a program that is started to ask through it: a list of lists
+of a name and a value. The symbol helper as a value stands for the path
+of the helper. ssh runs the program that SSH_ASKPASS names, and with
+SSH_ASKPASS_REQUIRE set to force it does so also where it has a terminal
+or no display; sudo -A and git obey theirs. Call (askpass-use-variables!)
+after a change.")
+
+(define (askpass-use-variables!)
+  "Makes the askpass-variables option hold for the programs that are
+started from now on."
+  (%askpass-set-variables! (option 'askpass-variables)))
+
+(askpass-use-variables!)
+
 (define (askpass-environment who . properties)
   "The environment variables with which a program asks the user its
 questions through the editor, as the 'environment of make-process and
@@ -27,8 +47,10 @@ can come keys and values:
   'host  The host that the program can ask a password for.
   'user  The user on that host.
 
-With these, the sources of secrets are asked for the password first, see
-secret-get. Call (askpass-done! environment) when the program has ended.
+With a host, the first question of the program is answered from the
+sources of secrets, see secret-get, if they have a password for it. Give a
+host only for a program whose first question is for that password and
+nothing else: its questions are not read to see what they ask. Call (askpass-done! environment) when the program has ended.
 An error if nobody can answer in this session: see askpass-served?."
   (%askpass-variables
    (%askpass-ticket who
@@ -59,7 +81,12 @@ is what that returned. Returns whether the permission was there."
          (promise (start (string-append who " " (if (null? turned) "" (car turned)) " "))))
     (when (and (pair? turned) (pair? (cdr turned)))
       (set-prompt-hint! "" (string-join (reverse (cdr turned)) "\n")))
+    (set! %askpass-promise promise)
     (await promise)))
+
+;; The promise of the prompt that a question is put with, while it is
+;; open: what closes the prompt if the program gives up.
+(define %askpass-promise #f)
 
 ;; The first answer that a function of askpass-functions gives, or #f.
 (define (%askpass-from-hook who host user prompt kind before)
@@ -93,7 +120,9 @@ secret-get). Then the user."
      [(eq? kind 'none)
       (message who " " line)
       ""]
-     [(eq? kind 'confirm) (and (y-or-n? (string-append who " " line)) "yes")]
+     [(eq? kind 'confirm)
+      (and (%askpass-put (lambda (shown) (%y-or-n (string-trim shown))) who (list line))
+           "yes")]
      [(and (eqv? before 0)
            host
            (guard (e (#t (message "Cannot get the password from a source: "
@@ -116,16 +145,24 @@ secret-get). Then the user."
 ;; Whether a look at the questions is to come.
 (define %askpass-timer #f)
 
+;; The number of the question that is put now, and the number of the
+;; one that the user was told has to wait.
+(define %askpass-current #f)
+(define %askpass-told #f)
+
 ;; Puts the next question, if none is put. While the user types in a
 ;; different prompt, the question waits.
 (define (%askpass-next)
   (cond
    [(or %askpass-busy (null? %askpass-waiting)) #f]
-   [(in-minibuffer?)
+   ;; Not over a prompt that is open, of either kind.
+   [(prompt-open?)
+    (unless (eqv? %askpass-told (car (car %askpass-waiting)))
+      (set! %askpass-told (car (car %askpass-waiting)))
+      (message (cadr (car %askpass-waiting))
+               " has a question. Complete this prompt first."))
     (unless %askpass-timer
       (set! %askpass-timer #t)
-      (message (cadr (car %askpass-waiting))
-               " has a question. Complete this prompt first.")
       (run-after 500 (lambda ()
                        (set! %askpass-timer #f)
                        (%askpass-next))))]
@@ -135,6 +172,8 @@ secret-get). Then the user."
            (answered? #f))
       (set! %askpass-waiting (cdr %askpass-waiting))
       (set! %askpass-busy #t)
+      (set! %askpass-current id)
+      (set! %askpass-promise #f)
       ;; A prompt that the user leaves with C-g, and an error, give no
       ;; answer: the program that asked gives up.
       (unwind-protect
@@ -144,7 +183,19 @@ secret-get). Then the user."
         (unless answered?
           (%askpass-answer id #f))
         (set! %askpass-busy #f)
+        (set! %askpass-current #f)
+        (set! %askpass-promise #f)
         (run-later %askpass-next)))]))
+
+;; The editor's entry point: the program that asked a question is gone,
+;; as ssh is when a host has waited too long. The question is not put,
+;; or its prompt is closed.
+(define (%askpass-withdrawn id)
+  (set! %askpass-waiting
+        (filter (lambda (question) (not (eqv? (car question) id))) %askpass-waiting))
+  (when (and (eqv? %askpass-current id) %askpass-promise)
+    (%prompt-abandon! %askpass-promise)
+    (message "The program that asked is gone.")))
 
 ;; The editor's entry point: a program asks. The arguments are the number
 ;; of the question and those of askpass-answer.

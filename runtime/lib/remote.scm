@@ -426,39 +426,82 @@ can follow, so that a chain such as ssh:evo|sudo:: needs no memory."
            (substring (car lines) (+ (string-length word) 1) (string-length (car lines)))]
           [else (loop (cdr lines))])))
 
-;; What ssh makes of the last step of a place such as /ssh:nina:, by its
-;; own account (ssh -G, which connects to nothing): a list of the full
-;; name of the host, the user and the port, or #f. The name that is typed
-;; can be a short one that the configuration of the user gives a meaning.
-;; `options` are the words for ssh before these.
-(define (%ssh-facts place options)
+;; What ssh makes of a host, by its own account (ssh -G, which connects
+;; to nothing), as the text that it prints: a line for each setting. #f
+;; if ssh does not say. `options` are the words for ssh before the host,
+;; `user` and `port` are those of the step, or #f.
+(define (%ssh-settings options user port host)
+  (let ((result (run-process
+                 "ssh"
+                 (append options
+                         (if user (list "-l" user) '())
+                         (if port (list "-p" (number->string port)) '())
+                         (list "-G" "--" host)))))
+    (and (eqv? (car result) 0) (cadr result))))
+
+;; Whether a setting of ssh that names a way through something else is
+;; not set: ssh leaves the line out or says none.
+(define (%ssh-unset? settings word)
+  (member (%ssh-setting settings word) '(#f "none")))
+
+;; Whether the key of a host is in one of the files where ssh keeps the
+;; keys that it knows, by the account of ssh-keygen -F. Then ssh has no
+;; question about the host.
+(define (%ssh-host-known? settings)
+  (let* ((host (%ssh-setting settings "hostname"))
+         (port (or (%ssh-setting settings "port") "22"))
+         (name (or (let ((alias (%ssh-setting settings "hostkeyalias")))
+                     (and alias (not (equal? alias "none")) alias))
+                   (if (equal? port "22")
+                       host
+                       (string-append "[" host "]:" port))))
+         (files (append
+                 (string-split (or (%ssh-setting settings "userknownhostsfile") "") #\space)
+                 (string-split (or (%ssh-setting settings "globalknownhostsfile") "") #\space))))
+    (let loop ((files files))
+      (cond [(null? files) #f]
+            [(and (not (string-null? (car files)))
+                  (file-exists? (expand-file-name (car files)))
+                  (eqv? 0 (car (run-process
+                                "ssh-keygen"
+                                (list "-F" name "-f" (expand-file-name (car files)))))))
+             #t]
+            [else (loop (cdr files))]))))
+
+;; The host, the user and the port to look a password up for, if the
+;; first question of the ssh of a place can only be the one for that
+;; password, and else #f. The questions of ssh are not read to see what
+;; they ask, so this is worked out before: the place is one host, with
+;; no host on the way to it, in the name or in the configuration, since
+;; such a host asks first; and ssh knows the key of the host, since it
+;; asks about one that it does not know. (A key with a passphrase and no
+;; agent asks first too. That question is answered by ssh on this
+;; machine, and the password goes no further.)
+(define (%ssh-password-facts place options)
   (let* ((parts (file-remote-steps place))
-         (step (and (pair? parts)
-                    (not (eq? (car parts) 'error))
-                    (last (car parts)))))
-    (and step
-         (equal? (car step) "ssh")
-         (let* ((user (cadr step))
-                (port (cadddr step))
-                (result (run-process
-                         "ssh"
-                         (append options
-                                 (if user (list "-l" user) '())
-                                 (if port (list "-p" (number->string port)) '())
-                                 (list "-G" "--" (caddr step)))))
-                (text (cadr result))
-                (host (and (eqv? (car result) 0) (%ssh-setting text "hostname"))))
-           (and host
-                (list host (%ssh-setting text "user") (%ssh-setting text "port")))))))
+         (steps (and (pair? parts) (not (eq? (car parts) 'error)) (car parts))))
+    (and steps
+         (null? (cdr steps))
+         (equal? (car (car steps)) "ssh")
+         (let* ((step (car steps))
+                (settings (%ssh-settings options (cadr step) (cadddr step) (caddr step))))
+           (and settings
+                (%ssh-setting settings "hostname")
+                (%ssh-unset? settings "proxyjump")
+                (%ssh-unset? settings "proxycommand")
+                (%ssh-host-known? settings)
+                (list (%ssh-setting settings "hostname")
+                      (%ssh-setting settings "user")
+                      (%ssh-setting settings "port")))))))
 
 ;; For the first question of the ssh of a place, the password that a
-;; source of secrets has for the host, under its full name. A function
-;; of askpass-functions.
+;; source of secrets has for the host, under its full name, where that
+;; question can only be for it. A function of askpass-functions.
 (define (%ssh-stored-password who host user prompt kind before)
   (and (eq? kind 'secret)
        (eqv? before 0)
        (guard (e (#t #f))
-         (let ((facts (%ssh-facts who (filter string? %ssh-options))))
+         (let ((facts (%ssh-password-facts who (filter string? %ssh-options))))
            (and facts
                 (secret-get 'host (car facts) 'user (cadr facts) 'port (caddr facts)))))))
 

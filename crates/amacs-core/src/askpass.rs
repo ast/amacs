@@ -63,6 +63,15 @@ struct Question {
     before: u64,
 }
 
+/// What a variable of a program with a ticket is set to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Setting {
+    /// A text as it stands.
+    Text(String),
+    /// The path of the helper.
+    Helper,
+}
+
 /// Where the helper is and how the editor is told of a question.
 struct Served {
     helper: PathBuf,
@@ -74,7 +83,12 @@ struct Served {
 struct Desk {
     served: Option<Served>,
     tickets: HashMap<String, Ticket>,
+    /// The variables that lead programs to the helper, which Scheme
+    /// sets: see [`set_variables`].
+    variables: Vec<(String, Setting)>,
     pending: Vec<Question>,
+    /// The questions that the programs gave up on before the answer.
+    withdrawn: Vec<u64>,
     /// Who waits for the answer to a question, and its ticket.
     open: HashMap<u64, (String, Sender<Option<String>>)>,
     next: u64,
@@ -97,16 +111,11 @@ pub fn serve(helper: PathBuf, socket: PathBuf, waker: Waker) {
         socket,
         waker,
     });
+    // The ticket of a connection says where it goes and no more. Whose
+    // password its program may be given is for Scheme to work out, from
+    // the name: see runtime/lib/remote.scm.
     amacs_remote::Connections::global().set_asker(Arc::new(|remote, asking| {
-        let last = remote.hops.last();
-        let ticket = ticket(
-            &remote.host(),
-            last.map(|hop| hop.host.clone())
-                .filter(|host| !host.is_empty()),
-            last.and_then(|hop| hop.user.clone()),
-            None,
-            Some(asking),
-        )?;
+        let ticket = ticket(&remote.host(), None, None, None, Some(asking))?;
         let environment = environment(&ticket);
         Some(amacs_remote::Asked {
             environment,
@@ -159,27 +168,40 @@ pub fn ticket(
     Some(name)
 }
 
-/// The variables that a program with a ticket is started with: they lead
-/// `ssh`, `sudo -A` and git to the helper, and the helper to the editor.
-/// `ssh` is told to use the helper even where it has a terminal or no
-/// display.
+/// Sets the variables that lead programs to the helper: which programs
+/// are made to ask through the editor, and how, is not written here.
+/// The editor's Scheme says it (`askpass-variables`), as `SSH_ASKPASS`
+/// for `ssh`.
+pub fn set_variables(variables: Vec<(String, Setting)>) {
+    desk().variables = variables;
+}
+
+/// The variables that a program with a ticket is started with: those
+/// that lead programs to the helper, see [`set_variables`], and the two
+/// that lead the helper to the editor.
 pub fn environment(ticket: &str) -> Vec<(String, String)> {
     let desk = desk();
     let Some(served) = &desk.served else {
         return Vec::new();
     };
     let helper = served.helper.display().to_string();
-    vec![
-        ("SSH_ASKPASS".to_owned(), helper.clone()),
-        ("SSH_ASKPASS_REQUIRE".to_owned(), "force".to_owned()),
-        ("SUDO_ASKPASS".to_owned(), helper.clone()),
-        ("GIT_ASKPASS".to_owned(), helper),
-        (TICKET_VARIABLE.to_owned(), ticket.to_owned()),
-        (
-            SOCKET_VARIABLE.to_owned(),
-            served.socket.display().to_string(),
-        ),
-    ]
+    desk.variables
+        .iter()
+        .map(|(name, setting)| {
+            let value = match setting {
+                Setting::Text(text) => text.clone(),
+                Setting::Helper => helper.clone(),
+            };
+            (name.clone(), value)
+        })
+        .chain([
+            (TICKET_VARIABLE.to_owned(), ticket.to_owned()),
+            (
+                SOCKET_VARIABLE.to_owned(),
+                served.socket.display().to_string(),
+            ),
+        ])
+        .collect()
 }
 
 /// Ends a ticket: its program is done. Returns whether it was known.
@@ -190,10 +212,15 @@ pub fn release(ticket: &str) -> bool {
 /// Brings in a question from the helper of a program: its ticket, the
 /// question in the program's words, and the kind (`confirm` for yes or
 /// no, `none` for words that want no answer, else empty: something to
-/// type that is not shown). The answer comes on what is returned, or
-/// nothing if the user gives none. A ticket that is not known is an
-/// error: the program was not started by the editor to ask.
-pub fn ask(ticket: &str, prompt: &str, kind: &str) -> Result<Receiver<Option<String>>, String> {
+/// type that is not shown). Returns the number of the question and where
+/// the answer comes, or nothing if the user gives none. A ticket that is
+/// not known is an error: the program was not started by the editor to
+/// ask.
+pub fn ask(
+    ticket: &str,
+    prompt: &str,
+    kind: &str,
+) -> Result<(u64, Receiver<Option<String>>), String> {
     let mut desk = desk();
     let Some(known) = desk.tickets.get_mut(ticket) else {
         return Err("this ticket is not known to the editor".to_owned());
@@ -220,7 +247,27 @@ pub fn ask(ticket: &str, prompt: &str, kind: &str) -> Result<Receiver<Option<Str
     if let Some(waker) = waker {
         waker();
     }
-    Ok(answers)
+    Ok((id, answers))
+}
+
+/// Takes a question back: the program that asked is gone, or its helper
+/// is. The user is not asked it any more.
+pub fn withdraw(id: u64) {
+    if !answer(id, None) {
+        return;
+    }
+    let mut desk = desk();
+    // Not put to Scheme yet: then it never is.
+    let before = desk.pending.len();
+    desk.pending.retain(|question| question.id != id);
+    if desk.pending.len() == before {
+        desk.withdrawn.push(id);
+    }
+    let waker = desk.served.as_ref().map(|served| served.waker.clone());
+    drop(desk);
+    if let Some(waker) = waker {
+        waker();
+    }
 }
 
 /// Gives the answer to a question, or says that there is none. Returns
@@ -264,7 +311,16 @@ impl Editor {
     /// its ticket, or else in the frame that a person used last. With
     /// only the frame of a program to ask in, there is no answer.
     pub(crate) fn askpass_poll(&mut self) {
-        let pending = std::mem::take(&mut desk().pending);
+        let (pending, withdrawn) = {
+            let mut desk = desk();
+            (
+                std::mem::take(&mut desk.pending),
+                std::mem::take(&mut desk.withdrawn),
+            )
+        };
+        for id in withdrawn {
+            self.queue_named("%askpass-withdrawn", vec![Value::Int(id as i64)]);
+        }
         for question in pending {
             let facts = {
                 let desk = desk();
@@ -334,11 +390,11 @@ mod tests {
         let ticket = ticket("ssh", Some("nina".into()), None, None, Some(asking)).unwrap();
         assert_eq!(ticket.len(), 32);
         let variables = environment(&ticket);
-        assert!(variables.contains(&("SSH_ASKPASS_REQUIRE".to_owned(), "force".to_owned())));
         assert!(variables.contains(&(TICKET_VARIABLE.to_owned(), ticket.clone())));
+        assert!(variables.contains(&(SOCKET_VARIABLE.to_owned(), "/socket".to_owned())));
 
-        let first = ask(&ticket, "Password:", "").unwrap();
-        let second = ask(&ticket, "Password:", "").unwrap();
+        let (_, first) = ask(&ticket, "Password:", "").unwrap();
+        let (_, second) = ask(&ticket, "Password:", "").unwrap();
         let (one, two) = {
             let desk = desk();
             let mine: Vec<&Question> = desk
@@ -360,6 +416,14 @@ mod tests {
         assert!(answer(two, None));
         assert_eq!(second.recv().unwrap(), None);
         assert_eq!(*told.lock().unwrap(), [true, true, false]);
+
+        // A question that is taken back is answered with nothing.
+        let (third, gone) = ask(&ticket, "Password:", "").unwrap();
+        withdraw(third);
+        assert_eq!(gone.recv().unwrap(), None);
+        assert!(!answer(third, Some("late".into())));
+        assert!(!desk().pending.iter().any(|question| question.id == third));
+        assert_eq!(*told.lock().unwrap(), [true, true, false, true, false]);
 
         assert!(release(&ticket));
         assert!(!release(&ticket));

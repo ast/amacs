@@ -748,6 +748,29 @@ pub const API: &[ApiFn] = api! {
             let part = |index: usize| args[index].as_name().map(str::to_owned);
             Ok(ed.askpass_ticket(string(args, 0)?, part(1), part(2))?.into())
         };
+    "%askpass-set-variables!" (1, Some(1)) "Set the environment variables that lead programs to the helper of the editor: a list of lists of a name and a value, where the value is a string or the symbol helper, which stands for the path of the helper. The two variables that lead the helper to the editor are added by the editor. See askpass-variables." =>
+        |_, args| {
+            let Value::List(items) = &args[0] else {
+                return Err(wrong_type(0, "a list", &args[0]));
+            };
+            let variables = items.iter().map(|item| match item {
+                Value::List(pair) if pair.len() == 2 => match (&pair[0], &pair[1]) {
+                    (Value::Str(name), Value::Str(text)) => Ok((name.clone(), amacs_core::askpass::Setting::Text(text.clone()))),
+                    (Value::Str(name), Value::Sym(hole)) if hole == "helper" => Ok((name.clone(), amacs_core::askpass::Setting::Helper)),
+                    _ => Err(CmdError::msg("a variable is a list of a name and a string or the symbol helper")),
+                },
+                _ => Err(CmdError::msg("a variable is a list of a name and a string or the symbol helper")),
+            }).collect::<CmdResult<Vec<_>>>()?;
+            amacs_core::askpass::set_variables(variables);
+            Ok(Value::Void)
+        };
+    "prompt-open?" (0, Some(0)) "Whether the user is asked something in the current frame: a prompt in the minibuffer, or a question that one key answers, such as y-or-n? asks." =>
+        |ed, _| Ok(ed.prompt_open().into());
+    "%prompt-abandon!" (1, Some(1)) "Close the prompt that a promise stands for, if it is the one that is open, as if the user had left it. Returns whether it was open." =>
+        |ed, args| {
+            let id = u64::try_from(int(args, 0)?).map_err(|_| wrong_type(0, "a promise", &args[0]))?;
+            Ok(ed.abandon_prompt(id).into())
+        };
     "%askpass-variables" (1, Some(1)) "The environment variables that a program with a ticket is started with, as a list of lists of a name and a value: they lead ssh, sudo -A and git to the helper of the editor, and the helper to the editor. See askpass-environment." =>
         |_, args| Ok(Value::List(
             amacs_core::askpass::environment(string(args, 0)?)

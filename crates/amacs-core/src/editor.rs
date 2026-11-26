@@ -560,6 +560,13 @@ impl Editor {
 
     // Input
 
+    /// Whether the user is asked something in the current frame: a
+    /// prompt in the minibuffer, or a question that one key answers.
+    pub fn prompt_open(&self) -> bool {
+        self.key_prompt.is_some()
+            || (self.minibuffer.is_some() && self.prompt_frame == Some(self.current_frame()))
+    }
+
     pub fn handle_event(&mut self, event: InputEvent) {
         // What is typed while a command waits for a program is for what
         // the command does next. Not so while a prompt is open here: the
@@ -567,10 +574,8 @@ impl Editor {
         // for the prompt. The program may be the one that asks, as ssh
         // asks for a password before it gives the file that a command
         // waits for.
-        let prompt_here = self.key_prompt.is_some()
-            || (self.minibuffer.is_some() && self.prompt_frame == Some(self.current_frame()));
         if self.holds_input()
-            && !prompt_here
+            && !self.prompt_open()
             && matches!(event, InputEvent::Key(_) | InputEvent::Paste(_))
         {
             if event == InputEvent::Key(Key::ctrl('g')) {

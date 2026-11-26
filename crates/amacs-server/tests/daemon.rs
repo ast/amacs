@@ -574,6 +574,31 @@ fn what_a_program_asks_is_answered_in_the_frame_of_a_person() {
     }
     person.keys("C-g");
     assert_eq!(answer(&waiting), Answer::None);
+
+    // A helper that goes away, as with an ssh that waited too long,
+    // takes its question off the screen.
+    let waiting = ask(ticket, "Passphrase: ");
+    let start = Instant::now();
+    while !person.echo().starts_with("git push Passphrase:") {
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "{}",
+            person.echo()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        person.sync();
+    }
+    drop(waiting);
+    let start = Instant::now();
+    while person.echo().contains("Passphrase") {
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "{}",
+            person.echo()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        person.sync();
+    }
 }
 
 #[test]
