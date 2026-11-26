@@ -53,6 +53,11 @@
               pkgs.ripgrep
               pkgs.git
               pkgs.openssh
+              # The file manager packs and unpacks with these, besides the
+              # tar, gzip, xz and bzip2 that every build has.
+              pkgs.zstd
+              pkgs.zip
+              pkgs.unzip
             ];
             # The renderer's tests draw text and need a known font.
             AMACS_TEST_FONTS = "${pkgs.jetbrains-mono}/share/fonts";
@@ -108,6 +113,9 @@
             just
             cargo-insta
             ripgrep
+            zstd
+            zip
+            unzip
           ];
         };
       });

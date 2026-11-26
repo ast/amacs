@@ -117,6 +117,7 @@ them:
 | `claude-agent-acp` | Claude Code as a coding agent |
 | Hunspell dictionaries | Spelling |
 | `xdg-open` | Opening what is not text from the file manager |
+| `tar`, `zstd`, `gzip`, `xz`, `bzip2`, `zip`, `unzip` | Compressed files and archives in the file manager |
 
 ### Installing with Nix
 

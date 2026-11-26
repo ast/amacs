@@ -117,7 +117,9 @@ the buffer is not one of its own."
     ("png" . "\xf1c5;") ("jpg" . "\xf1c5;") ("jpeg" . "\xf1c5;")
     ("gif" . "\xf1c5;") ("svg" . "\xf1c5;") ("webp" . "\xf1c5;")
     ("pdf" . "\xf1c1;") ("zip" . "\xf1c6;") ("gz" . "\xf1c6;")
-    ("xz" . "\xf1c6;") ("tar" . "\xf1c6;") ("txt" . "\xf0f6;")
+    ("xz" . "\xf1c6;") ("tar" . "\xf1c6;") ("zst" . "\xf1c6;")
+    ("bz2" . "\xf1c6;") ("tgz" . "\xf1c6;") ("7z" . "\xf1c6;")
+    ("txt" . "\xf0f6;")
     ("log" . "\xf0f6;")))
 
 (define %dired-directory-icon "\xf07b;")
@@ -421,6 +423,8 @@ act on the files. Start it with M-x dired.")
    ;; On another host, finding out what a file is and reading it are one
    ;; errand.
    [(file-remote? path) (%visit-remote path #f #t)]
+   ;; What is in an archive is listed: runtime/lib/archive.scm.
+   [(archive-file? path) (archive-open path)]
    [(not (file-text? path)) (%dired-open-externally (list path))]
    [(file-large? path)
     (when (y-or-n? (string-append (file-name-nondirectory path) " is "
@@ -429,8 +433,8 @@ act on the files. Start it with M-x dired.")
    [else (find-file path)]))
 
 (define-command (dired-find-file)
-  "Visit the file on this line; a directory is shown in the file manager.
-A file that is not text is opened with the program of the
+  "Visit the file on this line; a directory is shown in the file manager,
+and so is what is in an archive. Any other file that is not text is opened with the program of the
 dired-open-program option."
   (let ((row (dired-row-at-point)))
     (if (eq? (dired-row-kind row) 'directory)
@@ -861,6 +865,8 @@ marked files if it is one of them."
                               ("c" "Copy to..." dired-do-copy)
                               ("r" "Move or rename to..." dired-do-rename)
                               ("d" "Delete" dired-do-delete)
+                              ("Z" "Compress or uncompress" dired-do-compress)
+                              ("z" "Pack into an archive..." dired-do-compress-to)
                               ("w" "Copy the name" dired-copy-filename)))))
       ((global-ref (car choice))))))
 

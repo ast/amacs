@@ -111,6 +111,11 @@ the ones that are still not there, the ones that need the core first.
       is on another file system.
 - [ ] The window scrolls when a menu of keys takes rows from it, and does
       not scroll back.
+- [ ] `RET` on one compressed file that is text (`log.gz`) hands it to
+      `xdg-open`: it could show the text. `C-x C-f` on an archive refuses
+      it; only the file manager lists what is in it.
+- [ ] A member of an archive cannot be saved back, and archives on
+      another host are not handled.
 
 ## Git (`runtime/lib/git.scm`)
 

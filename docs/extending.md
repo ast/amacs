@@ -376,6 +376,24 @@ They are moved, or copied if Control is held when the button is let go,
 after a question that the `dired-confirm-drop` option turns off. A file
 let go over a window that shows something else is visited there.
 
+`Z` compresses or uncompresses the marked files, each where it is:
+`runtime/lib/archive.scm` is the code. A compressed file is uncompressed,
+and any other is compressed the way the `archive-compress-extension` option
+says, with zstd unless changed. A directory is packed into a tar archive
+and stays. An archive is unpacked next to itself and stays: what it holds
+goes into the directory if that is one thing whose name is free, and else
+into a new directory with the archive's name. `z` packs the marked files
+into one archive whose name it asks for, and how the name ends says what
+kind: `.tar.zst`, `.tar.gz`, `.tgz`, `.tar.xz`, `.tar.bz2`, `.tar` or `.zip`.
+
+`RET` on an archive lists what is in it. There `RET` shows a member that is
+text in a buffer that cannot be saved back, `m` `u` `U` mark, `C` copies
+members out to a directory, `Z` unpacks the whole archive, `^` goes to the
+directory it is in and `q` leaves. The programs that do the work, `tar`,
+`zip`, `unzip` and the compressors, run on this machine only: files on
+another host are copied here first. For other code: `(archive-file? name)`,
+`(archive-members file)`, `(archive-open file)`.
+
 The first line, which names the directory, leads upward: a press on a part
 of the name shows that directory, and files let go over a part are moved
 there. The button at the side of a mouse that goes back, `<mouse-8>`, shows
