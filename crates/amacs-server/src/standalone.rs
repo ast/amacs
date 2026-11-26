@@ -9,9 +9,7 @@ use amacs_proto::{InputEvent, Key};
 use amacs_tty::Tty;
 use anyhow::{Context, Result, bail};
 
-use crate::{
-    AUTO_SAVE_IDLE, AUTO_SAVE_INTERVAL, Options, save_everything, start_session, wait_time,
-};
+use crate::{AUTO_SAVE_INTERVAL, Options, save_everything, start_session, wait_time, when_idle};
 
 enum Event {
     Input(std::io::Result<InputEvent>),
@@ -58,8 +56,7 @@ pub fn run(options: &Options) -> Result<ExitCode> {
         let mut next = match events.recv_timeout(wait_time(&session)) {
             Ok(event) => Some(event),
             Err(RecvTimeoutError::Timeout) => {
-                if last_input.elapsed() >= AUTO_SAVE_IDLE {
-                    save_everything(&mut session, false);
+                if when_idle(&mut session, last_input.elapsed()) {
                     last_auto_save = Instant::now();
                 }
                 Some(Event::Wake)

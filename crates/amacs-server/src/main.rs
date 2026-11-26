@@ -132,13 +132,39 @@ const AUTO_SAVE_IDLE: Duration = Duration::from_secs(5);
 /// Unsaved changes are auto-saved at least this often while the editor is busy.
 const AUTO_SAVE_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How long the editor must be idle before the undo history that is not
+/// on disk yet is written there. It is short, since that is little to
+/// write: after a power failure, what was typed up to the last pause of
+/// this length is there.
+const UNDO_JOURNAL_IDLE: Duration = Duration::from_secs(1);
+
 /// How long to wait for the next event: until the editor has something due,
-/// but no longer than the idle time after which unsaved changes are saved.
+/// but no longer than the idle time after which unsaved changes are saved,
+/// or the undo history if there is some to write.
 fn wait_time(session: &Session) -> Duration {
+    let idle = if session.editor().undo_journals_due() {
+        UNDO_JOURNAL_IDLE
+    } else {
+        AUTO_SAVE_IDLE
+    };
     let until_due = session
         .next_deadline()
         .map(|due| due.saturating_duration_since(std::time::Instant::now()));
-    until_due.map_or(AUTO_SAVE_IDLE, |wait| wait.min(AUTO_SAVE_IDLE))
+    until_due.map_or(idle, |wait| wait.min(idle))
+}
+
+/// What is done when no event came for a while. `idle` is the time since
+/// the user last did something. Returns whether unsaved changes were
+/// auto-saved.
+fn when_idle(session: &mut Session, idle: Duration) -> bool {
+    if idle >= AUTO_SAVE_IDLE {
+        save_everything(session, false);
+        return true;
+    }
+    if idle >= UNDO_JOURNAL_IDLE {
+        session.editor_mut().write_undo_journals();
+    }
+    false
 }
 
 /// Writes what must survive the process: unsaved changes go to the

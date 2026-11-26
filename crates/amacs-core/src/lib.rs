@@ -36,6 +36,7 @@ mod sexp;
 mod snippet;
 mod spell;
 mod terminal;
+mod undo_journal;
 mod undo_view;
 mod websocket;
 mod window;

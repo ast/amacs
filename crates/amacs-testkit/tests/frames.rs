@@ -199,6 +199,101 @@ fn killing_a_buffer_releases_waiters_and_gone_clients_are_forgotten() {
     assert_eq!(h.editor.take_events(), [EditorEvent::WaiterReleased(2)]);
 }
 
+/// Turns off the undo history on disk, which is what brings unsaved
+/// changes back when it is there: auto-save data is what is left.
+fn without_undo_journal(h: &mut Harness) {
+    h.editor
+        .set_option("persistent-undo", amacs_core::Value::Bool(false))
+        .unwrap();
+}
+
+#[test]
+fn the_undo_history_of_a_file_outlives_the_editor() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    let path = dir.path().join("h.txt");
+    fs::write(&path, "x").unwrap();
+    let editor = |path: &std::path::Path| {
+        let mut h = Harness::new(80, 6);
+        h.editor.set_state_directory(Some(state.clone()));
+        h.editor.find_file(path).unwrap();
+        h.resize(80, 6);
+        h
+    };
+
+    let mut h = editor(&path);
+    assert_eq!(h.echo(), "");
+    h.type_text("ab").keys("C-x C-s");
+    h.keys("C-e RET").type_text("unsaved");
+    h.editor.write_undo_journals();
+    assert_eq!(fs::read_dir(state.join("undo")).unwrap().count(), 1);
+    assert!(!state.join("auto-save").exists());
+
+    // Another editor, as after a power failure: the file as it was saved,
+    // with the history of how it got there.
+    let mut h = editor(&path);
+    assert_eq!(
+        h.echo(),
+        "h.txt has changes that were not saved; use M-x recover-this-file"
+    );
+    assert_eq!(h.buffer_text(), "abx");
+    h.keys("C-/");
+    assert_eq!(h.buffer_text(), "x", "what an earlier editor did is undone");
+    h.keys("C-?");
+    assert_eq!(h.buffer_text(), "abx");
+    h.keys("M-x").type_text("recover-this-file").keys("RET");
+    assert_eq!(h.buffer_text(), "abx\nunsaved");
+    assert_eq!(
+        h.echo(),
+        "Recovered the unsaved changes; save the buffer to keep them"
+    );
+
+    // Saved under another name, the history goes with the text.
+    let copy = dir.path().join("copy.txt");
+    h.keys("C-x C-w")
+        .keys("C-a C-k")
+        .type_text(copy.to_str().unwrap())
+        .keys("RET");
+    assert_eq!(fs::read_to_string(&copy).unwrap(), "abx\nunsaved");
+    h.editor.write_undo_journals();
+    let mut h = editor(&copy);
+    assert_eq!(h.echo(), "", "it was saved: nothing to recover");
+    h.keys("C-/");
+    assert_eq!(h.buffer_text(), "abx\n", "one step, as it was made");
+
+    // Read again from a file that something else changed, the buffer has
+    // no history, and neither has the journal.
+    fs::write(&copy, "other").unwrap();
+    h.keys("M-x").type_text("revert-buffer").keys("RET");
+    if !h.prompt().is_empty() {
+        h.keys("y");
+    }
+    assert_eq!(h.buffer_text(), "other");
+    h.editor.write_undo_journals();
+    let mut h = editor(&copy);
+    h.keys("C-/");
+    assert_eq!(h.echo(), "No further undo information");
+
+    // Changes that the user gave up with the buffer are not offered.
+    let mut h = editor(&copy);
+    h.type_text("given up").keys("C-x k RET y");
+    assert_ne!(h.editor.buffer().name, "copy.txt");
+    let h = editor(&copy);
+    assert_eq!(h.echo(), "");
+    assert_eq!(h.buffer_text(), "other");
+
+    // Without the option, nothing is kept.
+    let plain = dir.path().join("plain.txt");
+    fs::write(&plain, "x").unwrap();
+    let mut h = Harness::new(80, 6);
+    h.editor.set_state_directory(Some(state.clone()));
+    without_undo_journal(&mut h);
+    h.editor.find_file(&plain).unwrap();
+    h.type_text("y");
+    h.editor.write_undo_journals();
+    assert_eq!(fs::read_dir(state.join("undo")).unwrap().count(), 2);
+}
+
 #[test]
 fn auto_save_writes_beside_not_over_the_file_and_recovers() {
     let dir = tempfile::tempdir().unwrap();
@@ -208,6 +303,7 @@ fn auto_save_writes_beside_not_over_the_file_and_recovers() {
 
     let mut h = Harness::new(80, 6);
     h.editor.set_state_directory(Some(state.clone()));
+    without_undo_journal(&mut h);
     h.editor.find_file(&path).unwrap();
     assert_eq!(
         h.editor.auto_save(false),
@@ -230,6 +326,7 @@ fn auto_save_writes_beside_not_over_the_file_and_recovers() {
     // A new editor, as after a crash, notices the data and can recover it.
     let mut h = Harness::new(80, 6);
     h.editor.set_state_directory(Some(state.clone()));
+    without_undo_journal(&mut h);
     h.editor.find_file(&path).unwrap();
     h.keys("C-l");
     assert_eq!(h.buffer_text(), "saved\n");
@@ -260,6 +357,7 @@ fn visiting_a_file_with_auto_save_data_says_so() {
 
     let mut h = Harness::new(80, 6);
     h.editor.set_state_directory(Some(state.clone()));
+    without_undo_journal(&mut h);
     h.editor.find_file(&path).unwrap();
     h.type_text("y");
     h.editor.auto_save(false);
@@ -267,6 +365,7 @@ fn visiting_a_file_with_auto_save_data_says_so() {
     // A new editor, as after a crash.
     let mut fresh = Harness::new(80, 6);
     fresh.editor.set_state_directory(Some(state));
+    without_undo_journal(&mut fresh);
     fresh.editor.find_file(&path).unwrap();
     fresh.resize(80, 6);
     assert_eq!(

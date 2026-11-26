@@ -100,6 +100,14 @@ the ones that are still not there, the ones that need the core first.
       `find-file-literally`). `C-x C-f` refuses such a file; only the file
       manager hands it to `xdg-open`.
 
+- [ ] The undo history grows without a limit, in memory and in its
+      journal on disk (`crates/amacs-core/src/undo_journal.rs`): old
+      branches are never dropped, a journal above 64 MB is not read, and
+      the journals of files that are gone stay in the state directory.
+- [ ] Buffers without a file (`*scratch*`, a new buffer that was never
+      saved) are not auto-saved and have no journal: a crash loses them.
+- [ ] The history of a file on another host is kept here, by its name.
+
 ## File manager (`runtime/lib/dired.scm`)
 
 - [ ] Preview pane.

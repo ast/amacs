@@ -292,7 +292,7 @@ mod tests {
         tree.undo();
         push(&mut tree, "e");
         push(&mut tree, "f");
-        tree.mark_saved();
+        tree.mark_saved(|| 0);
         tree.undo();
         let (lines, x, y) = render(&tree);
         assert_eq!(lines, ["○──○──○──○", "   ├──○", "   └──●──◎",]);

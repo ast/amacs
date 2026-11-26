@@ -13,7 +13,7 @@ use crate::buffer::{Buffer, BufferId};
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
 use crate::file_system::{self, FileSystem};
-use crate::script::{LARGE_FILE_THRESHOLD, Value};
+use crate::script::{LARGE_FILE_THRESHOLD, PERSISTENT_UNDO, Value};
 
 /// Expands a leading `~` and resolves a relative path against `base`,
 /// without touching the file system.
@@ -436,6 +436,61 @@ impl Editor {
         Some(dir.join("auto-save").join(auto_save_name(file)))
     }
 
+    /// Where the undo history of a visited file is kept, if it is: under
+    /// the state directory, unless the `persistent-undo` option is off.
+    fn undo_journal_path(&self, file: &Path) -> Option<PathBuf> {
+        let dir = self.state_directory.as_ref()?;
+        if !matches!(self.option(PERSISTENT_UNDO), Ok(Value::Bool(true))) {
+            return None;
+        }
+        Some(
+            dir.join("undo")
+                .join(crate::undo_journal::journal_name(file)),
+        )
+    }
+
+    /// Whether a buffer has undo history that is not on disk yet.
+    pub fn undo_journals_due(&self) -> bool {
+        self.buffers.values().any(Buffer::undo_journal_due)
+    }
+
+    /// Writes the undo history that is not on disk yet to the journals of
+    /// the buffers' files, and waits until it is there. It is little to
+    /// write, whatever the size of the files: what was done since the last
+    /// time.
+    pub fn write_undo_journals(&mut self) {
+        let mut failure = None;
+        for buffer in self.buffers.values_mut() {
+            if buffer.undo_journal_due()
+                && let Err(error) = buffer.write_undo_journal()
+            {
+                failure = Some(format!("Cannot write the undo history: {error}"));
+            }
+        }
+        if let Some(failure) = failure {
+            self.message(failure);
+        }
+    }
+
+    /// What to tell the user who visits a file that the editor last had
+    /// with changes that were not saved.
+    fn recovery_note(&self, id: BufferId) -> Option<String> {
+        let buffer = &self.buffers[id];
+        if buffer.unsaved_state().is_some() {
+            Some(format!(
+                "{} has changes that were not saved; use M-x recover-this-file",
+                buffer.name
+            ))
+        } else if self.newer_auto_save_of(id).is_some() {
+            Some(format!(
+                "{} has auto-save data; use M-x recover-this-file",
+                buffer.name
+            ))
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn remove_auto_save(&self, file: &Path) {
         if let Some(path) = self.auto_save_path(file) {
             // It usually does not exist.
@@ -450,6 +505,7 @@ impl Editor {
     ///
     /// The visited files themselves are never touched.
     pub fn auto_save(&mut self, force: bool) -> usize {
+        self.write_undo_journals();
         let ids: Vec<BufferId> = self.buffers.keys().collect();
         let mut written = 0;
         let mut failure = None;
@@ -511,9 +567,19 @@ impl Editor {
         current.then_some(path)
     }
 
-    /// Replaces the current buffer's text with its auto-save data. The
-    /// change can be undone, and nothing is written to the visited file.
+    /// Brings back the changes that were not saved when the editor last
+    /// had the current buffer's file: from the undo history that was kept
+    /// on disk, which then has every step of them, or else from the
+    /// auto-save data, as one change. It can be undone, and nothing is
+    /// written to the visited file.
     pub fn recover_this_file(&mut self) -> CmdResult {
+        if let Some(state) = self.buffer().unsaved_state() {
+            if let Some(point) = self.buffer_mut().undo_goto(state)? {
+                self.set_point(point);
+            }
+            self.message("Recovered the unsaved changes; save the buffer to keep them");
+            return Ok(());
+        }
         let path = self
             .newer_auto_save()
             .ok_or_else(|| CmdError::msg("No auto-save data for this buffer"))?;
@@ -748,12 +814,7 @@ impl Editor {
                                 self.remember_place(&path.clone());
                             }
                             let (id, note) = self.adopt(file);
-                            let recover = self.newer_auto_save_of(id).map(|_| {
-                                format!(
-                                    "{} has auto-save data; use M-x recover-this-file",
-                                    self.buffers[id].name
-                                )
-                            });
+                            let recover = self.recovery_note(id);
                             vec![
                                 Value::sym("buffer"),
                                 self.buffers[id].name.as_str().into(),
@@ -961,11 +1022,10 @@ impl Editor {
         if let Some(note) = note {
             self.message(note);
         }
-        if self.buffer().file.is_some() && self.newer_auto_save().is_some() {
-            self.message(format!(
-                "{} has auto-save data; use M-x recover-this-file",
-                self.buffer().name
-            ));
+        if self.buffer().file.is_some()
+            && let Some(note) = self.recovery_note(self.window().buffer)
+        {
+            self.message(note);
         }
         Ok(())
     }
@@ -1051,6 +1111,10 @@ impl Editor {
             |n| n.to_string_lossy().into_owned(),
         );
         let mut buffer = Buffer::with_text(name, text);
+        // Text that is not what the file holds has no history of the file.
+        if !lossy && let Some(journal) = self.undo_journal_path(&path) {
+            buffer.keep_undo_journal(journal);
+        }
         buffer.disk_mtime = modified;
         self.history.visit(&path);
         self.note_project(&path);
@@ -1163,7 +1227,16 @@ impl Editor {
         }
         self.remove_auto_save(&path);
         let point = self.point();
+        let journal = self.undo_journal_path(&path);
         let buffer = &mut self.buffers[id];
+        // A buffer that gets a file, or another one, gets the journal of
+        // that file: before the state is marked as saved, which the
+        // journal has to hear of.
+        if let Some(journal) = journal
+            && !buffer.read_only
+        {
+            buffer.keep_undo_journal(journal);
+        }
         let current = tick.is_none_or(|tick| tick == buffer.tick());
         if tick.is_none() {
             // What a formatter or a hook changed just now is part of what

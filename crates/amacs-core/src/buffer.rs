@@ -12,6 +12,7 @@ use crate::error::{CmdError, CmdResult};
 use crate::faces::Severity;
 use crate::lsp::{Document, TextChange, lsp_position};
 use crate::script::{FUNDAMENTAL_MODE, Value};
+use crate::undo_journal::{self, UndoJournal};
 
 new_key_type! {
     pub struct BufferId;
@@ -113,6 +114,12 @@ pub struct Buffer {
     text: Text,
     markers: MarkerSet,
     undo: UndoTree,
+    /// Where the undo history is written, for a buffer whose history is
+    /// kept on disk.
+    undo_journal: Option<UndoJournal>,
+    /// The state that the text was in when the editor last had this file
+    /// and stopped without saving it: what `recover-this-file` goes to.
+    unsaved_state: Option<usize>,
     /// Edits made by the command that is currently running.
     pending: Option<Transaction>,
     /// Point when the running command started, for the undo record.
@@ -171,6 +178,8 @@ impl Buffer {
             text,
             markers,
             undo: UndoTree::new(),
+            undo_journal: None,
+            unsaved_state: None,
             pending: None,
             undo_point: None,
             amalgamated: 0,
@@ -211,7 +220,8 @@ impl Buffer {
     }
 
     pub fn mark_saved(&mut self) {
-        self.undo.mark_saved();
+        let text = &self.text;
+        self.undo.mark_saved(|| text.content_hash());
     }
 
     /// Makes the buffer count as modified even with no edits, for text that
@@ -406,7 +416,13 @@ impl Buffer {
             document.resend = true;
         }
         self.set_diagnostics(Vec::new());
-        self.undo = UndoTree::new();
+        // A history that is kept on disk starts anew there too.
+        self.undo = if self.undo.is_logged() {
+            UndoTree::logged(self.text.content_hash())
+        } else {
+            UndoTree::new()
+        };
+        self.unsaved_state = None;
         self.pending = None;
         self.text_faces.clear();
         self.spans.clear();
@@ -672,10 +688,8 @@ impl Buffer {
         txn.point_after = point;
         if amalgamate
             && self.amalgamated < AMALGAMATION_LIMIT
-            && let Some(last) = self.undo.amendable()
+            && self.undo.amend(&mut txn.edits, point)
         {
-            last.edits.append(&mut txn.edits);
-            last.point_after = point;
             self.amalgamated += 1;
             return;
         }
@@ -721,6 +735,65 @@ impl Buffer {
     /// The history of the text.
     pub fn undo_tree(&self) -> &UndoTree {
         &self.undo
+    }
+
+    /// Keeps the undo history on disk from now on, in the journal at
+    /// `path`. A buffer that was just read from its file, with no history
+    /// yet, takes the history that the journal has of that file, if it is
+    /// of the text as it is on disk now.
+    pub(crate) fn keep_undo_journal(&mut self, path: PathBuf) {
+        if let Some(journal) = &mut self.undo_journal {
+            journal.move_to(path);
+            return;
+        }
+        if !self.undo.is_empty() || self.is_modified() {
+            // The history so far is written as it is.
+            self.undo.start_log();
+            self.undo_journal = Some(UndoJournal::new(path));
+            return;
+        }
+        let hash = self.text.content_hash();
+        let read = UndoJournal::open(path.clone(), undo_journal::READ_LIMIT)
+            .and_then(|(journal, records)| Some((journal, UndoTree::from_records(records)?)))
+            .filter(|(_, tree)| tree.saved_hash() == Some(hash));
+        match read {
+            Some((journal, mut tree)) => {
+                self.unsaved_state = tree.rewind_to_saved();
+                self.undo = tree;
+                self.undo_journal = Some(journal);
+            }
+            None => {
+                self.undo = UndoTree::logged(hash);
+                self.undo_journal = Some(UndoJournal::new(path));
+            }
+        }
+    }
+
+    /// Says in the history that the text is as it is on disk, for a buffer
+    /// that is done with while it has changes: they were given up, and are
+    /// not to be offered when the file is next visited. The history no
+    /// longer fits the text after this.
+    pub(crate) fn give_up_changes(&mut self) {
+        self.undo.rewind_to_saved();
+    }
+
+    /// Whether the undo history has changes that are not on disk yet.
+    pub(crate) fn undo_journal_due(&self) -> bool {
+        self.undo_journal.is_some() && self.undo.has_log()
+    }
+
+    /// Writes the changes to the undo history that are not on disk yet.
+    pub(crate) fn write_undo_journal(&mut self) -> std::io::Result<()> {
+        match &mut self.undo_journal {
+            Some(journal) => journal.write(&mut self.undo),
+            None => Ok(()),
+        }
+    }
+
+    /// The state with the changes that were not saved when the editor last
+    /// had this file, if the history that was read from disk has one.
+    pub(crate) fn unsaved_state(&self) -> Option<usize> {
+        self.unsaved_state
     }
 
     /// Takes the text to any state of its history, undoing and redoing as

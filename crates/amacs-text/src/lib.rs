@@ -9,4 +9,4 @@ mod undo;
 
 pub use marker::{MarkerId, MarkerSet};
 pub use text::Text;
-pub use undo::{Edit, Transaction, UndoTree};
+pub use undo::{Edit, Record, Transaction, UndoTree};

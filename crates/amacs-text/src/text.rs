@@ -135,6 +135,21 @@ impl Text {
         self.rope.byte_slice(range).chunks()
     }
 
+    /// A number that two texts share if they are the same, and almost
+    /// never otherwise: to tell whether a text is the one that something
+    /// was written down about. It is the same from one run of the editor
+    /// to the next, and guards against chance, not against intent.
+    pub fn content_hash(&self) -> u64 {
+        // FNV-1a.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for chunk in self.rope.chunks() {
+            for byte in chunk.bytes() {
+                hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        hash
+    }
+
     /// Chars before `pos`, nearest first.
     pub fn chars_before(&self, pos: usize) -> impl Iterator<Item = char> + '_ {
         self.rope.chars_at(pos).reversed()
@@ -184,6 +199,19 @@ mod tests {
         assert_eq!(text.line_end(1), 5);
         assert_eq!(text.line_of(2), 0);
         assert_eq!(text.line_of(3), 1);
+    }
+
+    #[test]
+    fn the_hash_is_of_the_content_however_it_is_stored() {
+        let whole = Text::from("hällo\nworld".repeat(2000).as_str());
+        let mut built = Text::new();
+        for _ in 0..2000 {
+            let end = built.len();
+            built.insert(end, "hällo\nworld");
+        }
+        assert_eq!(whole.content_hash(), built.content_hash());
+        assert_ne!(whole.content_hash(), Text::from("hällo").content_hash());
+        assert_eq!(Text::new().content_hash(), 0xcbf2_9ce4_8422_2325);
     }
 
     #[test]

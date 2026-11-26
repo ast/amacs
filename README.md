@@ -18,7 +18,7 @@ Editing:
 
 - Emacs keys: key sequences, prefix arguments, `ESC` as Meta
 - The kill ring, the region, rectangles and keyboard macros
-- Undo that keeps every change, shown as a tree
+- Undo that keeps every change, shown as a tree, and outlives the editor
 - Windows that split, and many buffers
 - A minibuffer that lists the candidates and narrows the list as you type
 - Jumping to a place on screen by a label
@@ -107,17 +107,17 @@ quits, `M-x` runs a command by name, `M-:` evaluates a Scheme expression.
 Some features run other programs; the rest of the editor works without
 them:
 
-| Program | For |
-|---|---|
-| `rg` (ripgrep) | Listing and searching the files of a project |
-| `git` | The git views and the marks in the gutter |
-| `wl-copy`, `wl-paste` | The system clipboard |
-| `direnv` | The environment of a project's language servers and formatters |
-| Language servers and formatters | See "Language servers" |
-| `claude-agent-acp` | Claude Code as a coding agent |
-| Hunspell dictionaries | Spelling |
-| `xdg-open` | Opening what is not text from the file manager |
-| `tar`, `zstd`, `gzip`, `xz`, `bzip2`, `zip`, `unzip` | Compressed files and archives in the file manager |
+| Program                                              | For                                                            |
+| ---------------------------------------------------- | -------------------------------------------------------------- |
+| `rg` (ripgrep)                                       | Listing and searching the files of a project                   |
+| `git`                                                | The git views and the marks in the gutter                      |
+| `wl-copy`, `wl-paste`                                | The system clipboard                                           |
+| `direnv`                                             | The environment of a project's language servers and formatters |
+| Language servers and formatters                      | See "Language servers"                                         |
+| `claude-agent-acp`                                   | Claude Code as a coding agent                                  |
+| Hunspell dictionaries                                | Spelling                                                       |
+| `xdg-open`                                           | Opening what is not text from the file manager                 |
+| `tar`, `zstd`, `gzip`, `xz`, `bzip2`, `zip`, `unzip` | Compressed files and archives in the file manager              |
 
 ### Installing with Nix
 
@@ -1016,6 +1016,16 @@ Modified buffers that visit files are auto-saved to
 seconds while busy, and when the server is asked to stop or crashes. Visiting
 a file that has auto-save data says so; `M-x recover-this-file` restores it.
 The visited file itself is only ever written by saving.
+
+The undo history of a file is kept on disk too, in
+`$XDG_STATE_HOME/amacs/undo`: each step is added to the journal of the file
+after one idle second, which is little to write whatever the size of the
+file. A file that is visited again has its history back, as long as nothing
+else has changed the file meanwhile. After a crash or a power failure the
+history has what was typed up to the last such pause, and
+`M-x recover-this-file` goes to it, with every step still there to undo. The
+journal holds text that was deleted; the `persistent-undo` option turns it
+off.
 
 ## The Wayland window
 

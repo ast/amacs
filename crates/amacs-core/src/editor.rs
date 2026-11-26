@@ -1303,8 +1303,16 @@ impl Editor {
         for window in showing {
             self.set_window_buffer(window, replacement);
         }
-        if let Some(buffer) = self.buffers.remove(id) {
-            for token in buffer.waiters {
+        if let Some(mut buffer) = self.buffers.remove(id) {
+            // The history stays on disk for the next visit, without the
+            // changes that the user gave up by this.
+            if buffer.is_modified() {
+                buffer.give_up_changes();
+            }
+            if let Err(error) = buffer.write_undo_journal() {
+                self.message(format!("Cannot write the undo history: {error}"));
+            }
+            for token in std::mem::take(&mut buffer.waiters) {
                 self.emit(EditorEvent::WaiterReleased(token));
             }
             // The user chose to discard the buffer, so its auto-save data

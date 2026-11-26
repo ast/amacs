@@ -594,13 +594,106 @@ fn a_termination_signal_auto_saves_unsaved_work() {
     let mut client = Client::attach(&server, 70, 6, &[&file], false);
     assert_eq!(
         client.echo(),
-        "work.txt has auto-save data; use M-x recover-this-file"
+        "work.txt has changes that were not saved; use M-x recover-this-file"
     );
     client
         .keys("M-x")
         .type_text("recover-this-file")
         .keys("RET");
     assert_eq!(client.screen.row(1), "unsaved");
+}
+
+/// The journal of the one file whose undo history the server keeps.
+fn undo_journal(server: &Server) -> Option<PathBuf> {
+    let entries = fs::read_dir(server.dir.path().join("state/amacs/undo")).ok()?;
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        // A journal is written under a temporary name first, which starts
+        // with a dot.
+        .find(|path| !path.file_name().unwrap().to_string_lossy().starts_with('.'))
+}
+
+/// Waits until the journal has been written to since `since`: that takes
+/// an idle second.
+fn wait_for_undo_journal(server: &Server, since: std::time::SystemTime) {
+    let start = Instant::now();
+    let written = || {
+        undo_journal(server)
+            .and_then(|path| fs::metadata(path).ok()?.modified().ok())
+            .is_some_and(|modified| modified >= since)
+    };
+    while !written() {
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the undo history was not written"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn what_was_typed_a_second_ago_survives_a_power_failure_with_its_history() {
+    let mut server = Server::start();
+    let file = server.file("work.txt", "saved\n");
+    let mut client = Client::attach(&server, 70, 6, &[&file], false);
+    client.keys("M->").type_text("one").keys("RET");
+    client.type_text("two");
+    let typed = std::time::SystemTime::now();
+    wait_for_undo_journal(&server, typed);
+    assert!(
+        !server.dir.path().join("state/amacs/auto-save").exists(),
+        "this is sooner than auto-save"
+    );
+
+    // Killed outright, the server writes nothing more.
+    server.crash_and_restart();
+    let mut client = Client::attach(&server, 70, 6, &[&file], false);
+    assert_eq!(
+        client.echo(),
+        "work.txt has changes that were not saved; use M-x recover-this-file"
+    );
+    assert_eq!(client.screen.row(1), "", "the file is as it was saved");
+    client
+        .keys("M-x")
+        .type_text("recover-this-file")
+        .keys("RET");
+    assert_eq!(
+        client.echo(),
+        "Recovered the unsaved changes; save the buffer to keep them"
+    );
+    assert_eq!(client.screen.row(1), "one");
+    assert_eq!(client.screen.row(2), "two");
+    // Each step that was typed is there to undo, not one change for all.
+    client.keys("C-/");
+    assert_eq!(client.screen.row(1), "one");
+    assert_eq!(client.screen.row(2), "");
+    client.keys("C-?");
+    assert_eq!(client.screen.row(2), "two");
+
+    // Saved, the history is of the file as it is now, and is there after
+    // the server was stopped and started in the ordinary way too.
+    client.keys("C-x C-s");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "saved\none\ntwo");
+    wait_for_undo_journal(&server, std::time::SystemTime::now());
+    server.crash_and_restart();
+    let mut client = Client::attach(&server, 70, 6, &[&file], false);
+    assert_eq!(client.echo(), "", "nothing is left to recover");
+    assert_eq!(client.screen.row(2), "two");
+    client.keys("C-/");
+    assert_eq!(client.screen.row(1), "one");
+    assert_eq!(client.screen.row(2), "");
+
+    // A file that something else changed has no history any more.
+    drop(client);
+    fs::write(&file, "changed elsewhere\n").unwrap();
+    wait_for_undo_journal(&server, std::time::SystemTime::now());
+    server.crash_and_restart();
+    let mut client = Client::attach(&server, 70, 6, &[&file], false);
+    assert_eq!(client.screen.row(0), "changed elsewhere");
+    client.keys("C-/");
+    assert_eq!(client.screen.row(0), "changed elsewhere");
+    assert_eq!(client.echo(), "No further undo information");
 }
 
 #[test]
@@ -639,7 +732,7 @@ fn work_survives_the_server_being_killed() {
     let mut client = Client::attach(&server, 70, 6, &[&file], false);
     assert_eq!(
         client.echo(),
-        "work.txt has auto-save data; use M-x recover-this-file"
+        "work.txt has changes that were not saved; use M-x recover-this-file"
     );
     client
         .keys("M-x")

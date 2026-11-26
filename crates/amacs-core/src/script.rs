@@ -193,6 +193,7 @@ pub(crate) struct ScriptState {
 pub const FUNDAMENTAL_MODE: &str = "fundamental-mode";
 const TAB_WIDTH: &str = "tab-width";
 pub(crate) const LARGE_FILE_THRESHOLD: &str = "large-file-threshold";
+pub(crate) const PERSISTENT_UNDO: &str = "persistent-undo";
 const FONT_FAMILY: &str = "font-family";
 const FONT_SIZE: &str = "font-size";
 const SUBPIXEL_ORDER: &str = "subpixel-order";
@@ -283,6 +284,11 @@ impl ScriptState {
                 "project-root-markers",
                 Value::List(vec![Value::str(".git"), Value::str(".projectile")]),
                 "Names of the files and directories that mark the root of a project. The nearest one above a file decides.",
+            ),
+            (
+                PERSISTENT_UNDO,
+                Value::Bool(true),
+                "Whether the undo history of a file is kept on disk, in the state directory: it is there again when the file is next visited, and has what was not saved before a crash. It holds text that was deleted.",
             ),
             (
                 "auto-revert",

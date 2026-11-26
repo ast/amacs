@@ -24,9 +24,7 @@ use amacs_proto::{
 use amacs_script::{InterruptHandle, Session};
 use anyhow::{Context, Result, bail};
 
-use crate::{
-    AUTO_SAVE_IDLE, AUTO_SAVE_INTERVAL, Options, save_everything, start_session, wait_time,
-};
+use crate::{AUTO_SAVE_INTERVAL, Options, save_everything, start_session, wait_time, when_idle};
 
 /// The base frame is never shown, so its size only matters to code that
 /// asks for it.
@@ -218,8 +216,7 @@ pub fn run(options: &Options) -> Result<ExitCode> {
         let first = match events.recv_timeout(wait_time(&server.session)) {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => {
-                if last_message.elapsed() >= AUTO_SAVE_IDLE {
-                    save_everything(&mut server.session, false);
+                if when_idle(&mut server.session, last_message.elapsed()) {
                     last_auto_save = Instant::now();
                 }
                 Event::Wake
