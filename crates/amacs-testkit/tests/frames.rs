@@ -295,6 +295,52 @@ fn the_undo_history_of_a_file_outlives_the_editor() {
 }
 
 #[test]
+fn a_secret_buffer_goes_to_no_file_of_the_editors() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    let path = dir.path().join("secret.txt");
+    fs::write(&path, "x").unwrap();
+    let secret = |h: &mut Harness| {
+        h.editor
+            .set_local_option("buffer-secret", amacs_core::Value::Bool(true))
+            .unwrap();
+    };
+
+    let mut h = Harness::new(80, 6);
+    h.editor.set_state_directory(Some(state.clone()));
+    h.editor.find_file(&path).unwrap();
+    // It had a journal from being read; made secret, that ends.
+    h.editor.write_undo_journals();
+    let journal = fs::read_dir(state.join("undo")).unwrap().next().unwrap();
+    let journal = journal.unwrap().path();
+    let before = fs::read(&journal).unwrap();
+    secret(&mut h);
+    h.type_text("hunter2");
+    assert_eq!(h.editor.auto_save(true), 0);
+    assert!(!state.join("auto-save").exists());
+    assert_eq!(fs::read(&journal).unwrap(), before);
+    // Saving does not start one again.
+    h.keys("C-x C-s");
+    h.type_text("more");
+    h.editor.auto_save(true);
+    assert_eq!(fs::read(&journal).unwrap(), before);
+    assert!(!state.join("auto-save").exists());
+    // Its text is not given to a program.
+    h.keys("C-x h M-|");
+    assert_eq!(
+        h.echo(),
+        "This buffer is secret: its text is not given to programs"
+    );
+
+    // Another buffer is as before.
+    let plain = dir.path().join("plain.txt");
+    fs::write(&plain, "x").unwrap();
+    h.editor.find_file(&plain).unwrap();
+    h.type_text("y");
+    assert_eq!(h.editor.auto_save(true), 1);
+}
+
+#[test]
 fn auto_save_writes_beside_not_over_the_file_and_recovers() {
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state");

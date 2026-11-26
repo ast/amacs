@@ -325,6 +325,10 @@ impl Editor {
         if crate::file_system::is_remote(&file) {
             return Ok(());
         }
+        // A server is another program, and gets all of the text.
+        if self.is_secret(id) {
+            return Ok(());
+        }
         let Some(config) = self.lsp_config_for(language.name).cloned() else {
             return Ok(());
         };

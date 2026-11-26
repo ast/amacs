@@ -516,6 +516,26 @@ pub const API: &[ApiFn] = api! {
             ed.start_process(string(args, 0)?, &arguments)?;
             Ok(Value::Void)
         };
+    "%set-file-handler-suffixes!" (1, Some(1)) "Say which files Scheme reads and writes: a list of the ends of their names. Visiting, saving and reading again such a file is handed to %visit-handled, %save-handled and %revert-handled." =>
+        |ed, args| {
+            ed.set_file_handler_suffixes(strings(args, 0)?);
+            Ok(Value::Void)
+        };
+    "%adopt-text!" (3, Some(3)) "Make a buffer visit a file with a text that a file handler made of the file: the file's name, the text, and whether the text is a secret. A buffer that visits the file already gets the text, as after reading the file again. The buffer is not shown. Returns its name." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            let id = ed.adopt_text(&path, string(args, 1)?, boolean(args, 2));
+            Ok(ed.buffer_by_id(id).map(|buffer| buffer.name.as_str()).into())
+        };
+    "%mark-written!" (2, Some(2)) "Note that a file handler wrote the current buffer to a file: the file's name, and the tick that the buffer had when its text was taken. The buffer counts as saved if its text has not changed since." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            let tick = u64::try_from(int(args, 1)?)
+                .map_err(|_| CmdError::msg("a tick is not negative"))?;
+            let id = ed.window().buffer;
+            ed.mark_written(id, &path, tick);
+            Ok(Value::Void)
+        };
     "%write-buffer" (1, Some(1)) "Write the current buffer to a file and make that its file, without running before-save-hook." =>
         |ed, args| {
             let path = expand_path(string(args, 0)?, ed.working_directory());
@@ -566,6 +586,10 @@ pub const API: &[ApiFn] = api! {
             ed.kill_new(string(args, 0)?.to_owned());
             Ok(Value::Void)
         };
+    "clipboard-set!" (1, Some(1)) "Put a secret, such as a password, on the system clipboard and not on the kill ring, for the user to paste somewhere. Programs that keep what was on the clipboard are asked not to keep it. Returns whether there is a clipboard. (clipboard-clear!) takes it off again." =>
+        |ed, args| Ok(ed.set_clipboard_secret(string(args, 0)?).into());
+    "clipboard-clear!" (0, Some(0)) "Take what clipboard-set! put on the clipboard off it, if the clipboard still holds it, and off the kill ring if it was yanked in the editor. Returns whether the clipboard was cleared." =>
+        |ed, _| Ok(ed.clear_clipboard_secret().into());
     "current-kill" (0, Some(0)) "The newest kill ring entry, or #f." =>
         |ed, _| Ok(ed.current_kill().into());
 
@@ -699,6 +723,8 @@ pub const API: &[ApiFn] = api! {
             let id = ed.read_string_promise(string(args, 0)?, string(args, 1)?, completion)?;
             Ok(Value::Int(id as i64))
         };
+    "%read-secret" (1, Some(1)) "Start reading a secret, such as a password: the prompt. What is typed is drawn as stars, is in no history, and no hook sees it. Returns a promise." =>
+        |ed, args| Ok(Value::Int(ed.read_secret_promise(string(args, 0)?)? as i64));
     "%completing-read" (3, Some(3)) "Start choosing among candidates: prompt, candidates, category. A candidate is a string or a list of a string and its annotation. Returns a promise." =>
         |ed, args| {
             let Value::List(items) = &args[1] else {
@@ -1360,7 +1386,19 @@ pub const API: &[ApiFn] = api! {
                 .map_err(|_| CmdError::msg("the time to wait cannot be negative"))?;
             Ok(Value::Int(ed.timer_promise(milliseconds) as i64))
         };
-    "%run-process" (3, Some(3)) "Start a program: its name, its arguments as a list of strings, and the text for its standard input. Returns a promise for a list of the exit status, what it wrote to standard output and what it wrote to standard error." =>
+    "random-bytes" (1, Some(1)) "A list of that many numbers from 0 to 255, from the random numbers of the operating system, which are fit for passwords and keys: those of `random` are not." =>
+        |_, args| {
+            let count = usize::try_from(int(args, 0)?)
+                .ok()
+                .filter(|count| *count <= 1 << 16)
+                .ok_or_else(|| CmdError::msg("the number of bytes must be from 0 to 65536"))?;
+            let mut bytes = vec![0u8; count];
+            std::fs::File::open("/dev/urandom")
+                .and_then(|mut source| std::io::Read::read_exact(&mut source, &mut bytes))
+                .map_err(|error| CmdError::msg(format!("Cannot read random numbers: {error}")))?;
+            Ok(Value::List(bytes.into_iter().map(|byte| Value::Int(i64::from(byte))).collect()))
+        };
+    "%run-process" (3, Some(4)) "Start a program: its name, its arguments as a list of strings, the text for its standard input, and optionally environment variables to set, as a list of lists of a name and a value. Returns a promise for a list of the exit status, what it wrote to standard output and what it wrote to standard error." =>
         |ed, args| {
             let Value::List(given) = &args[1] else {
                 return Err(wrong_type(1, "a list of strings", &args[1]));
@@ -1372,7 +1410,26 @@ pub const API: &[ApiFn] = api! {
                     other => Err(wrong_type(1, "a list of strings", other)),
                 })
                 .collect::<CmdResult<Vec<String>>>()?;
-            let id = ed.process_promise(string(args, 0)?, &arguments, string(args, 2)?.to_owned());
+            let variables = match args.get(3) {
+                None => Vec::new(),
+                Some(Value::List(pairs)) => pairs
+                    .iter()
+                    .map(|pair| match pair {
+                        Value::List(parts) if parts.len() == 2 => match (&parts[0], &parts[1]) {
+                            (Value::Str(name), Value::Str(value)) => Ok((name.clone(), value.clone())),
+                            _ => Err(wrong_type(3, "a list of lists of two strings", pair)),
+                        },
+                        other => Err(wrong_type(3, "a list of lists of two strings", other)),
+                    })
+                    .collect::<CmdResult<Vec<_>>>()?,
+                Some(other) => return Err(wrong_type(3, "a list of lists of two strings", other)),
+            };
+            let id = ed.process_promise(
+                string(args, 0)?,
+                &arguments,
+                string(args, 2)?.to_owned(),
+                &variables,
+            );
             Ok(Value::Int(id as i64))
         };
 

@@ -131,6 +131,7 @@ goes on working meanwhile. Each of these returns when the thing is there:
 |---|---|
 | `(read-string "Prompt: ")`, `(completing-read "Prompt: " candidates)`, `(y-or-n? "Question? ")` | Ask in the minibuffer |
 | `(read-key "Prompt: ")`, `(read-char "Prompt: ")` | The next key, as `"a"`, `"C-x"`, `"RET"` |
+| `(read-passwd "Password: ")` | A secret: shown as stars, in no history, seen by no hook |
 | `(sleep-for 200)` | Milliseconds |
 | `(run-process "git" '("status" "--short"))` | A list of exit status, standard output, standard error |
 | `(process-lines "git" "branch")` | The lines a program wrote; an error if it failed |
@@ -367,6 +368,37 @@ its size, and `(file-size name)` gives the bytes. What the editor should
 not read, another program can show: `(start-process "xdg-open" (list
 name))` starts a program and leaves it to itself, where `run-process`
 waits for it to end.
+
+A file whose bytes are not its text, as one that is encrypted or
+compressed, is read and written by a handler, by the end of its name:
+
+```scheme
+(define-file-handler ".gz"
+  (lambda (path) (cadr (run-process "gzip" (list "-dc" path))))
+  (lambda (path text) (run-process "sh" (list "-c" "gzip -c > \"$1\"" "sh" path) text)))
+```
+
+The first procedure gets the name and returns the text, the second gets the
+name and the text and writes the file, and both may wait for a program.
+Visiting, saving and `revert-buffer` then work as for any file, and the
+mode is the one that the name asks for without the suffix. With a fourth
+argument that is not `#f` the text is a secret.
+
+## Secrets
+
+A buffer whose `buffer-secret` option is set, with `(set-local!
+'buffer-secret #t)` or by a file handler, holds a secret: it is not
+auto-saved, has no undo history on disk, is in no list of files that were
+visited, and its text is not given to language servers, formatters,
+spelling or `M-|`. `(read-passwd prompt)` asks for one without showing it.
+`(clipboard-set! text)` puts one on the system clipboard and not on the kill
+ring, with the hint to clipboard managers not to keep it, and
+`(clipboard-clear!)` takes it off again if it is still there;
+`(run-after milliseconds thunk)` does that later, and `(cancel-timer!
+timer)` stops what it returned. `(random-bytes n)` gives numbers that are
+fit for passwords, which those of `random` are not. `run-process` takes
+environment variables as a fourth argument, a list of lists of a name and a
+value, for programs such as `gpg` that are told where to look that way.
 
 ## The file manager
 

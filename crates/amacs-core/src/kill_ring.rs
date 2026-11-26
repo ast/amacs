@@ -50,6 +50,13 @@ impl KillRing {
         }
     }
 
+    /// Removes every entry that is this text, as when a secret that was
+    /// yanked from the clipboard is to be forgotten.
+    pub fn forget(&mut self, text: &str) {
+        self.entries.retain(|entry| entry != text);
+        self.yank_index = 0;
+    }
+
     /// All entries, newest first.
     pub fn entries(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().map(String::as_str)

@@ -30,8 +30,11 @@ C-M-$ all of them in turn.")
 (define (spell-in-text)
   "Checks the spelling of the whole text of the current buffer. On the
 hook of text-mode."
-  (unless %spell-personal-loaded (spell-load-personal-words))
-  (enable-mode! 'spell-mode))
+  ;; The words of a secret are not for the list of the user's own words,
+  ;; which is a file.
+  (unless (option 'buffer-secret)
+    (unless %spell-personal-loaded (spell-load-personal-words))
+    (enable-mode! 'spell-mode)))
 
 (define (spell-in-code)
   "Checks the spelling of the comments and strings of the current buffer.

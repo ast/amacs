@@ -131,6 +131,11 @@ impl Editor {
     /// Formats the current buffer with its formatter. Returns whether the
     /// text changed.
     pub fn format_buffer(&mut self) -> CmdResult<bool> {
+        if self.is_secret(self.window().buffer) {
+            return Err(CmdError::msg(
+                "This buffer is secret: its text is not given to programs",
+            ));
+        }
         let formatter = self
             .buffer_formatter()?
             .ok_or_else(|| CmdError::msg("No formatter is set for this buffer"))?;
@@ -204,8 +209,11 @@ impl Editor {
         if !matches!(self.option("format-on-save"), Ok(value) if value != Value::Bool(false)) {
             return None;
         }
-        // Formatters are programs, which are not run on other hosts yet.
-        if crate::file_system::is_remote(self.working_directory()) {
+        // Formatters are programs, which are not run on other hosts yet,
+        // and are not given what is secret.
+        if crate::file_system::is_remote(self.working_directory())
+            || self.is_secret(self.window().buffer)
+        {
             return None;
         }
         match self.buffer_formatter() {

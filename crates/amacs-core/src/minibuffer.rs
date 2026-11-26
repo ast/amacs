@@ -67,6 +67,9 @@ pub(crate) struct MinibufferState {
     /// list takes rows from the windows, which scrolls them to keep point
     /// in view; they go back when the prompt closes.
     window_starts: Vec<(WindowId, crate::buffer::BufferId, usize)>,
+    /// What is typed is a secret, such as a password: it is not drawn,
+    /// not kept in a history and not given to hooks.
+    pub secret: bool,
 }
 
 impl Editor {
@@ -115,6 +118,7 @@ impl Editor {
             hint: None,
             previewed: None,
             window_starts,
+            secret: false,
         });
         self.prompt_frame = Some(self.current_frame);
         let window = self.minibuffer_window();
@@ -154,6 +158,17 @@ impl Editor {
         })?;
         if let Some(state) = &mut self.minibuffer {
             state.promise = Some(id);
+        }
+        Ok(id)
+    }
+
+    /// Starts reading a secret, such as a password, for Scheme code: what
+    /// is typed is drawn as stars, is in no history, and no hook sees it.
+    /// Returns the promise that is resolved with it.
+    pub fn read_secret_promise(&mut self, prompt: impl Into<String>) -> CmdResult<u64> {
+        let id = self.read_string_promise(prompt, "", Completion::None)?;
+        if let Some(state) = &mut self.minibuffer {
+            state.secret = true;
         }
         Ok(id)
     }
@@ -354,7 +369,7 @@ impl Editor {
             session.tick(0);
         }
         state.synced_tick = Some(tick);
-        if changed {
+        if changed && !state.secret {
             // Scheme may have something to say about the input, or to
             // offer for it: it answers with a hint or with candidates.
             let kind = state.history.clone();
@@ -412,6 +427,12 @@ impl Editor {
 
     fn leave_minibuffer(&mut self) -> Option<MinibufferState> {
         let state = self.minibuffer.take()?;
+        if state.secret {
+            // What was typed is not left in the buffer of the minibuffer,
+            // nor in its undo history.
+            let buffer = self.frame().minibuffer_buffer;
+            self.buffers[buffer].reset(Text::new());
+        }
         self.prompt_frame = None;
         for (id, buffer, start) in &state.window_starts {
             if let Some(window) = self.windows.get(*id)
@@ -440,7 +461,9 @@ impl Editor {
             Accepted::Candidate(candidate) => candidate.text.clone(),
             Accepted::Input(input) => input.clone(),
         };
-        self.history.add(&state.history, entry);
+        if !state.secret {
+            self.history.add(&state.history, entry);
+        }
         (state.on_accept)(self, accepted)
     }
 

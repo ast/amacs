@@ -260,7 +260,13 @@ impl Editor {
     /// output, and what it wrote to standard error. The status is `#f` if
     /// the program could not be run or was stopped by a signal. The program
     /// runs in the working directory with the environment of its project.
-    pub fn process_promise(&mut self, program: &str, args: &[String], input: String) -> u64 {
+    pub fn process_promise(
+        &mut self,
+        program: &str,
+        args: &[String],
+        input: String,
+        variables: &[(String, String)],
+    ) -> u64 {
         let id = self.new_promise();
         self.await_program(id);
         let directory = match self.local_directory() {
@@ -291,6 +297,10 @@ impl Editor {
                 Some(value) => command.env(name, value),
                 None => command.env_remove(name),
             };
+        }
+        // What the caller asks for comes over what the project has.
+        for (name, value) in variables {
+            command.env(name, value);
         }
         command
             .stdin(Stdio::piped())

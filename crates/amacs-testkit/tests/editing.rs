@@ -585,6 +585,45 @@ impl amacs_core::Clipboard for FakeClipboard {
 }
 
 #[test]
+fn a_secret_goes_to_the_clipboard_and_not_to_the_kill_ring() {
+    let clipboard = FakeClipboard::default();
+    let mut h = harness();
+    assert!(!h.editor.set_clipboard_secret("x"), "there is no clipboard");
+    h.editor.set_clipboard(Box::new(clipboard.clone()));
+
+    h.type_text("word").keys("M-DEL");
+    assert!(h.editor.set_clipboard_secret("hunter2"));
+    assert_eq!(clipboard.0.borrow().as_deref(), Some("hunter2"));
+    // The end of a command does not put the newest kill back over it.
+    h.keys("C-f");
+    assert_eq!(clipboard.0.borrow().as_deref(), Some("hunter2"));
+    // Cleared, the clipboard holds nothing and the kill ring is as it was.
+    assert!(h.editor.clear_clipboard_secret());
+    assert_eq!(clipboard.0.borrow().as_deref(), Some(""));
+    h.keys("C-y");
+    assert_eq!(h.buffer_text(), "word");
+
+    // Yanked in the editor meanwhile, it is on the kill ring until it is
+    // cleared.
+    h.editor.set_clipboard_secret("hunter2");
+    h.keys("C-y");
+    assert_eq!(h.buffer_text(), "wordhunter2");
+    assert!(h.editor.clear_clipboard_secret());
+    h.keys("C-y");
+    assert_eq!(h.buffer_text(), "wordhunter2word");
+
+    // What another program put on the clipboard meanwhile is left there.
+    h.editor.set_clipboard_secret("hunter2");
+    *clipboard.0.borrow_mut() = Some("theirs".to_owned());
+    assert!(!h.editor.clear_clipboard_secret());
+    assert_eq!(clipboard.0.borrow().as_deref(), Some("theirs"));
+    assert!(
+        !h.editor.clear_clipboard_secret(),
+        "nothing is left to clear"
+    );
+}
+
+#[test]
 fn kills_go_to_the_clipboard_and_foreign_text_can_be_yanked() {
     let clipboard = FakeClipboard::default();
     let mut h = harness();

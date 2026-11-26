@@ -13,7 +13,7 @@ use crate::buffer::{Buffer, BufferId};
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
 use crate::file_system::{self, FileSystem};
-use crate::script::{LARGE_FILE_THRESHOLD, PERSISTENT_UNDO, Value};
+use crate::script::{BUFFER_SECRET, LARGE_FILE_THRESHOLD, PERSISTENT_UNDO, Value};
 
 /// Expands a leading `~` and resolves a relative path against `base`,
 /// without touching the file system.
@@ -438,9 +438,21 @@ impl Editor {
 
     /// Where the undo history of a visited file is kept, if it is: under
     /// the state directory, unless the `persistent-undo` option is off.
-    fn undo_journal_path(&self, file: &Path) -> Option<PathBuf> {
+    ///
+    /// `buffer` is the buffer whose history it is, if there is one yet:
+    /// its own value of the option holds, and a secret buffer has no
+    /// history on disk. A file that is being read has no buffer yet, and
+    /// the value that holds everywhere is taken.
+    fn undo_journal_path(&self, file: &Path, buffer: Option<BufferId>) -> Option<PathBuf> {
         let dir = self.state_directory.as_ref()?;
-        if !matches!(self.option(PERSISTENT_UNDO), Ok(Value::Bool(true))) {
+        let wanted = match buffer {
+            Some(id) => {
+                !self.is_secret(id)
+                    && self.option_for(id, PERSISTENT_UNDO) == Some(Value::Bool(true))
+            }
+            None => self.global_option(PERSISTENT_UNDO) == Some(Value::Bool(true)),
+        };
+        if !wanted {
             return None;
         }
         Some(
@@ -460,7 +472,15 @@ impl Editor {
     /// time.
     pub fn write_undo_journals(&mut self) {
         let mut failure = None;
-        for buffer in self.buffers.values_mut() {
+        let ids: Vec<BufferId> = self.buffers.keys().collect();
+        for id in ids {
+            // A buffer that was made secret after it got a journal: the
+            // journal ends here, with nothing more written to it.
+            if self.is_secret(id) {
+                self.buffers[id].drop_undo_journal();
+                continue;
+            }
+            let buffer = &mut self.buffers[id];
             if buffer.undo_journal_due()
                 && let Err(error) = buffer.write_undo_journal()
             {
@@ -510,6 +530,10 @@ impl Editor {
         let mut written = 0;
         let mut failure = None;
         for id in ids {
+            // The text of a secret buffer goes to no file of the editor's.
+            if self.is_secret(id) {
+                continue;
+            }
             let buffer = &self.buffers[id];
             let Some(path) = buffer
                 .file
@@ -603,6 +627,14 @@ impl Editor {
             .ok_or_else(|| CmdError::msg("This buffer does not visit a file"))?;
         if file_system::is_remote(&file) {
             self.reread(id, file, None);
+            return Ok(());
+        }
+        if self.file_is_handled(&file) {
+            // The time is noted now, so that the file is not seen as
+            // changed again before its handler has read it.
+            self.buffers[id].disk_mtime = modified_time(&file);
+            let name = self.buffers[id].name.as_str().into();
+            self.queue_named("%revert-handled", vec![name]);
             return Ok(());
         }
         let (text, lossy) = read_text(&file).map_err(|error| {
@@ -813,7 +845,7 @@ impl Editor {
                             if let Fetched::File { path, .. } = &file {
                                 self.remember_place(&path.clone());
                             }
-                            let (id, note) = self.adopt(file);
+                            let (id, note) = self.adopt(file, false);
                             let recover = self.recovery_note(id);
                             vec![
                                 Value::sym("buffer"),
@@ -1017,6 +1049,19 @@ impl Editor {
             );
             return Ok(());
         }
+        // A file whose bytes are not its text is read by its handler.
+        if self.file_is_handled(path) {
+            let path = file_system::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+            if let Some(id) = self.buffer_visiting(&path) {
+                self.switch_to_buffer(id);
+            } else {
+                self.queue_named(
+                    "%visit-handled",
+                    vec![Value::Str(path.display().to_string())],
+                );
+            }
+            return Ok(());
+        }
         let (id, note) = self.visit_file(path, anyway)?;
         self.switch_to_buffer(id);
         if let Some(note) = note {
@@ -1085,14 +1130,14 @@ impl Editor {
                 abbreviate_path(&path),
                 format_size(size)
             ))),
-            file @ Fetched::File { .. } => Ok(self.adopt(file)),
+            file @ Fetched::File { .. } => Ok(self.adopt(file, false)),
         }
     }
 
     /// Makes a buffer of a file that was read, unless one visits it
     /// already, without showing it. Also returns something to tell the
     /// user about the file, if there is anything.
-    fn adopt(&mut self, file: Fetched) -> (BufferId, Option<&'static str>) {
+    fn adopt(&mut self, file: Fetched, secret: bool) -> (BufferId, Option<&'static str>) {
         let Fetched::File {
             path,
             text,
@@ -1111,13 +1156,22 @@ impl Editor {
             |n| n.to_string_lossy().into_owned(),
         );
         let mut buffer = Buffer::with_text(name, text);
-        // Text that is not what the file holds has no history of the file.
-        if !lossy && let Some(journal) = self.undo_journal_path(&path) {
-            buffer.keep_undo_journal(journal);
+        if secret {
+            // A secret is marked as one before anything can look at it,
+            // and its name is in no list of files that were visited.
+            buffer
+                .locals
+                .insert(BUFFER_SECRET.to_owned(), Value::Bool(true));
+        } else {
+            // Text that is not what the file holds has no history of the
+            // file.
+            if !lossy && let Some(journal) = self.undo_journal_path(&path, None) {
+                buffer.keep_undo_journal(journal);
+            }
+            self.history.visit(&path);
+            self.note_project(&path);
         }
         buffer.disk_mtime = modified;
-        self.history.visit(&path);
-        self.note_project(&path);
         buffer.file = Some(path);
         buffer.read_only = lossy;
         buffer.needs_file_hook = true;
@@ -1130,6 +1184,52 @@ impl Editor {
             None
         };
         (id, note)
+    }
+
+    /// Whether Scheme reads and writes a file, by the end of its name: see
+    /// `define-file-handler`. A file on another host is not one of them.
+    pub(crate) fn file_is_handled(&self, path: &Path) -> bool {
+        if !self.has_script_host() || file_system::is_remote(path) {
+            return false;
+        }
+        let name = path.to_string_lossy();
+        self.file_handler_suffixes
+            .iter()
+            .any(|suffix| name.ends_with(suffix.as_str()))
+    }
+
+    /// Sets the ends of the names of the files that Scheme reads and
+    /// writes.
+    pub fn set_file_handler_suffixes(&mut self, suffixes: Vec<String>) {
+        self.file_handler_suffixes = suffixes;
+    }
+
+    /// Makes a buffer that visits `path` hold `text`, which a file handler
+    /// made of the file: a new buffer, or the one that visits the file,
+    /// which is then as after reading its file again. With `secret`, a new
+    /// buffer is a secret one from the start. Returns the buffer.
+    pub fn adopt_text(&mut self, path: &Path, text: &str, secret: bool) -> BufferId {
+        let modified = modified_time(path);
+        if let Some(id) = self.buffer_visiting(path) {
+            self.reverted(id, Text::from(text), false, modified);
+            return id;
+        }
+        let file = Fetched::File {
+            path: path.to_owned(),
+            text: Text::from(text),
+            lossy: false,
+            is_new: modified.is_none(),
+            modified,
+        };
+        self.adopt(file, secret).0
+    }
+
+    /// Notes that a file handler wrote a buffer to `path`, as it was when
+    /// its text had the tick `tick`: what [`Editor::write_buffer_now`]
+    /// does after it has written.
+    pub fn mark_written(&mut self, id: BufferId, path: &Path, tick: u64) {
+        let modified = modified_time(path);
+        self.written(id, path.to_owned(), modified, Some(tick), None);
     }
 
     fn buffer_visiting(&self, path: &Path) -> Option<BufferId> {
@@ -1157,6 +1257,12 @@ impl Editor {
             return Err(CmdError::msg(
                 "Files on other hosts are not written without Scheme",
             ));
+        }
+        if self.file_is_handled(path) {
+            let name = self.buffer().name.as_str().into();
+            let path = path.display().to_string().into();
+            self.queue_named("%save-handled", vec![name, path, kill.into()]);
+            return Ok(());
         }
         if (remote || self.hook_active("before-save-hook")) && self.has_script_host() {
             let name = self.buffer().name.as_str().into();
@@ -1227,7 +1333,7 @@ impl Editor {
         }
         self.remove_auto_save(&path);
         let point = self.point();
-        let journal = self.undo_journal_path(&path);
+        let journal = self.undo_journal_path(&path, Some(id));
         let buffer = &mut self.buffers[id];
         // A buffer that gets a file, or another one, gets the journal of
         // that file: before the state is marked as saved, which the
@@ -1313,7 +1419,7 @@ mod tests {
         };
 
         let mut ed = Editor::new(80, 10);
-        let (id, _) = ed.adopt(fetch(&name, false, None).unwrap());
+        let (id, _) = ed.adopt(fetch(&name, false, None).unwrap(), false);
         let known = ed.buffers[id].disk_mtime;
         assert!(known.is_some());
 

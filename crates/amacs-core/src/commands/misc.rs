@@ -716,6 +716,11 @@ pub fn shell_command(ed: &mut Editor) -> CmdResult {
 /// replaces the region.
 pub fn shell_command_on_region(ed: &mut Editor) -> CmdResult {
     ed.forbid_in_minibuffer()?;
+    if ed.is_secret(ed.window().buffer) {
+        return Err(CmdError::msg(
+            "This buffer is secret: its text is not given to programs",
+        ));
+    }
     let region = ed.region()?;
     let replace = ed.raw_prefix().is_some();
     ed.read_string(

@@ -194,6 +194,7 @@ pub const FUNDAMENTAL_MODE: &str = "fundamental-mode";
 const TAB_WIDTH: &str = "tab-width";
 pub(crate) const LARGE_FILE_THRESHOLD: &str = "large-file-threshold";
 pub(crate) const PERSISTENT_UNDO: &str = "persistent-undo";
+pub(crate) const BUFFER_SECRET: &str = "buffer-secret";
 const FONT_FAMILY: &str = "font-family";
 const FONT_SIZE: &str = "font-size";
 const SUBPIXEL_ORDER: &str = "subpixel-order";
@@ -289,6 +290,11 @@ impl ScriptState {
                 PERSISTENT_UNDO,
                 Value::Bool(true),
                 "Whether the undo history of a file is kept on disk, in the state directory: it is there again when the file is next visited, and has what was not saved before a crash. It holds text that was deleted.",
+            ),
+            (
+                BUFFER_SECRET,
+                Value::Bool(false),
+                "Whether the text of the buffer is a secret, such as a password: set for one buffer with set-local!. A secret buffer is not auto-saved, has no undo history on disk, and is not given to language servers, formatters or other programs.",
             ),
             (
                 "auto-revert",
@@ -689,9 +695,28 @@ impl Editor {
             .ok_or_else(|| CmdError::msg(format!("Unknown option: {name}")))
     }
 
+    /// The value of an option that holds where no buffer has its own.
+    pub(crate) fn global_option(&self, name: &str) -> Option<Value> {
+        let def = self.script.options.get(name)?;
+        Some(
+            self.script
+                .option_values
+                .get(name)
+                .unwrap_or(&def.default)
+                .clone(),
+        )
+    }
+
     /// The value of an option in a given buffer.
     pub(crate) fn option_for(&self, buffer: BufferId, name: &str) -> Option<Value> {
         self.option_in(buffer, name)
+    }
+
+    /// Whether the text of a buffer is a secret: the `buffer-secret`
+    /// option. What takes text out of the editor, or to its own files,
+    /// asks this first.
+    pub fn is_secret(&self, buffer: BufferId) -> bool {
+        self.option_in(buffer, BUFFER_SECRET) == Some(Value::Bool(true))
     }
 
     fn option_in(&self, buffer: BufferId, name: &str) -> Option<Value> {

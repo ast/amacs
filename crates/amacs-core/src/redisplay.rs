@@ -513,10 +513,11 @@ impl Editor {
             .chars()
             .for_each(|c| add(c, faces::MINIBUFFER_PROMPT));
         let prompt_len = counter.chars().count() + state.prompt.chars().count();
+        // A secret is drawn as a star for each char of it.
         buffer
             .text()
             .chars_from(0)
-            .for_each(|c| add(c, faces::DEFAULT));
+            .for_each(|c| add(if state.secret { '*' } else { c }, faces::DEFAULT));
         if let Some(hint) = &self.minibuffer_hint {
             hint.chars().for_each(|c| add(c, faces::DEFAULT));
         }

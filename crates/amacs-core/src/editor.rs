@@ -121,6 +121,16 @@ pub trait Clipboard {
     fn set(&mut self, text: &str);
     /// The clipboard's text, or `None` if it has none or cannot be read.
     fn get(&mut self) -> Option<String>;
+    /// Puts a secret, such as a password, on the clipboard, with the hint
+    /// to programs that keep what was on it that this is not to be kept,
+    /// if the clipboard can give one.
+    fn set_secret(&mut self, text: &str) {
+        self.set(text);
+    }
+    /// Makes the clipboard hold nothing.
+    fn clear(&mut self) {
+        self.set("");
+    }
 }
 
 /// Something the editor did that its host has to act on.
@@ -223,6 +233,12 @@ pub struct Editor {
     clipboard: Option<Box<dyn Clipboard>>,
     /// The kill ring head when it and the clipboard last agreed.
     clipboard_synced: Option<String>,
+    /// The secret that the editor put on the clipboard, until it is
+    /// cleared from there.
+    clipboard_secret: Option<String>,
+    /// The ends of the names of the files that Scheme reads and writes:
+    /// their bytes are not their text. See `define-file-handler`.
+    pub(crate) file_handler_suffixes: Vec<String>,
     /// Set by vertical motion commands to keep the goal column.
     pub(crate) keep_goal: bool,
     exit: bool,
@@ -289,6 +305,8 @@ impl Editor {
             key_hint_due: None,
             clipboard: None,
             clipboard_synced: None,
+            clipboard_secret: None,
+            file_handler_suffixes: Vec::new(),
             keep_goal: false,
             exit: false,
             next_serial: 1,
@@ -1141,6 +1159,40 @@ impl Editor {
             self.kill_ring.push(text.clone());
         }
         self.clipboard_synced = Some(text);
+    }
+
+    /// Puts a secret, such as a password, on the clipboard and not on the
+    /// kill ring. Returns whether there is a clipboard to put it on.
+    pub fn set_clipboard_secret(&mut self, text: &str) -> bool {
+        let Some(clipboard) = &mut self.clipboard else {
+            return false;
+        };
+        clipboard.set_secret(text);
+        // The two agree, as far as kills are concerned: the secret is not
+        // overwritten by the newest kill at the end of the command.
+        self.clipboard_synced = self.kill_ring.head().map(str::to_owned);
+        self.clipboard_secret = Some(text.to_owned());
+        true
+    }
+
+    /// Takes the secret that [`Editor::set_clipboard_secret`] put on the
+    /// clipboard off it, if it is still what the clipboard holds, and off
+    /// the kill ring, where a yank in the editor has put it. Returns
+    /// whether the clipboard was cleared.
+    pub fn clear_clipboard_secret(&mut self) -> bool {
+        let Some(secret) = self.clipboard_secret.take() else {
+            return false;
+        };
+        self.kill_ring.forget(&secret);
+        let Some(clipboard) = &mut self.clipboard else {
+            return false;
+        };
+        if clipboard.get().as_deref() != Some(secret.as_str()) {
+            return false;
+        }
+        clipboard.clear();
+        self.clipboard_synced = self.kill_ring.head().map(str::to_owned);
+        true
     }
 
     /// Puts text on the kill ring as a new entry.

@@ -777,6 +777,14 @@ impl Buffer {
         self.undo.rewind_to_saved();
     }
 
+    /// Stops keeping the undo history on disk. What is in the journal
+    /// stays there.
+    pub(crate) fn drop_undo_journal(&mut self) {
+        if self.undo_journal.take().is_some() {
+            self.undo.take_log();
+        }
+    }
+
     /// Whether the undo history has changes that are not on disk yet.
     pub(crate) fn undo_journal_due(&self) -> bool {
         self.undo_journal.is_some() && self.undo.has_log()

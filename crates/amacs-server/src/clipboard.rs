@@ -15,7 +15,11 @@ const TEXT: &str = "text/plain;charset=utf-8";
 /// A clipboard owner that does not answer must not hang the editor.
 const PASTE_TIMEOUT: Duration = Duration::from_millis(500);
 
-pub struct WaylandClipboard;
+pub struct WaylandClipboard {
+    /// Whether `wl-copy` knows `--sensitive`: versions before it was added
+    /// copy nothing when they are given it.
+    sensitive: bool,
+}
 
 impl WaylandClipboard {
     /// The clipboard, if there is a compositor and the programs are installed.
@@ -30,7 +34,16 @@ impl WaylandClipboard {
                 .status()
                 .is_ok()
         };
-        (found("wl-copy") && found("wl-paste")).then_some(Self)
+        let sensitive = Command::new("wl-copy")
+            .arg("--help")
+            .stdin(Stdio::null())
+            .output()
+            .is_ok_and(|output| {
+                let mut help = output.stdout;
+                help.extend(output.stderr);
+                String::from_utf8_lossy(&help).contains("--sensitive")
+            });
+        (found("wl-copy") && found("wl-paste")).then_some(Self { sensitive })
     }
 }
 
@@ -64,29 +77,56 @@ fn paste(args: &[&str]) -> Option<String> {
     }
 }
 
+/// Gives text to `wl-copy`, with more arguments.
+fn copy(text: &str, more: &[&str]) {
+    let Ok(mut child) = Command::new("wl-copy")
+        .args(["--type", TEXT])
+        .args(more)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    // wl-copy reads the text and then stays around to serve it, so it is
+    // fed and reaped from a thread of its own.
+    let text = text.to_owned();
+    std::thread::spawn(move || {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
+    });
+}
+
 impl Clipboard for WaylandClipboard {
     fn set(&mut self, text: &str) {
-        let Ok(mut child) = Command::new("wl-copy")
-            .args(["--type", TEXT])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        else {
-            return;
-        };
-        // wl-copy reads the text and then stays around to serve it, so it is
-        // fed and reaped from a thread of its own.
-        let text = text.to_owned();
-        std::thread::spawn(move || {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(text.as_bytes());
-            }
-            let _ = child.wait();
-        });
+        copy(text, &[]);
     }
 
     fn get(&mut self) -> Option<String> {
         paste(&["--no-newline", "--type", TEXT]).or_else(|| paste(&["--no-newline"]))
+    }
+
+    fn set_secret(&mut self, text: &str) {
+        // Programs that keep a history of the clipboard leave this out.
+        copy(
+            text,
+            if self.sensitive {
+                &["--sensitive"]
+            } else {
+                &[]
+            },
+        );
+    }
+
+    fn clear(&mut self) {
+        let _ = Command::new("wl-copy")
+            .arg("--clear")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 }

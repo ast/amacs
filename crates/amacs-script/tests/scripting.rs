@@ -219,6 +219,149 @@ fn eval_buffer_defines_commands_from_the_buffer() {
 }
 
 #[test]
+fn a_file_whose_bytes_are_not_its_text_is_read_and_written_by_a_handler() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("notes.md.rev");
+    std::fs::write(&path, "olleh").unwrap();
+    let mut h = Harness::new(70, 8);
+    // A handler that keeps the text backwards on disk, and waits as one
+    // that runs a program does.
+    h.eval(
+        "(define (backwards text) (list->string (reverse (string->list text))))
+         (define-file-handler \".rev\"
+           (lambda (path) (sleep-for 5) (backwards (read-file path)))
+           (lambda (path text) (sleep-for 5) (write-file path (backwards text))))",
+    );
+    h.keys("C-x C-f C-a C-k")
+        .type_text(path.to_str().unwrap())
+        .keys("RET");
+    h.wait_until(|h| h.mode_line().contains("notes.md.rev"));
+    assert_eq!(h.text(), "hello");
+    assert!(
+        h.mode_line().contains("(Markdown"),
+        "the mode of the name without the suffix: {}",
+        h.mode_line()
+    );
+    assert_eq!(h.eval("(buffer-modified?)"), "#f");
+    assert_eq!(
+        h.eval("(buffer-file-name)"),
+        format!("{:?}", path.display().to_string())
+    );
+
+    h.keys("M->").type_text(" there");
+    assert_eq!(h.eval("(buffer-modified?)"), "#t");
+    h.keys("C-x C-s");
+    h.wait_until(|h| h.echo().starts_with("Wrote "));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "ereht olleh");
+    assert_eq!(h.eval("(buffer-modified?)"), "#f");
+
+    // Read again when something else changed the file.
+    std::fs::write(&path, "wen").unwrap();
+    h.keys("M-x").type_text("revert-buffer").keys("RET");
+    h.wait_until(|h| h.text() == "new");
+    assert_eq!(h.eval("(buffer-modified?)"), "#f");
+
+    // From Scheme, the file is there when find-file returns; a file that
+    // does not exist yet is a new one, and a secret is one from the start.
+    let secret = dir.path().join("key.sec");
+    h.eval(
+        "(define-file-handler \".sec\"
+           (lambda (path) (read-file path))
+           (lambda (path text) (write-file path text))
+           #t)",
+    );
+    h.eval(&format!("(find-file {:?})", secret.display().to_string()));
+    h.wait_until(|h| h.mode_line().contains("key.sec"));
+    assert_eq!(h.echo(), "(New file)");
+    assert_eq!(h.eval("(option 'buffer-secret)"), "#t");
+    h.type_text("s3cret").keys("C-x C-s");
+    h.wait_until(|h| h.echo().starts_with("Wrote "));
+    assert_eq!(std::fs::read_to_string(&secret).unwrap(), "s3cret");
+    // A file that a buffer visits is shown, not read again.
+    std::fs::write(&path, "desu ton").unwrap();
+    h.eval(&format!("(find-file {:?})", path.display().to_string()));
+    assert!(h.mode_line().contains("notes.md.rev"), "{}", h.mode_line());
+    assert_eq!(h.text(), "new");
+    assert_eq!(h.eval("(option 'buffer-secret)"), "#f");
+}
+
+#[test]
+fn a_program_is_given_variables_and_the_system_gives_random_bytes() {
+    let mut h = Harness::new(70, 8);
+    h.eval("(define out #f)");
+    h.eval(
+        "(run-later (lambda ()
+           (set! out (run-process \"sh\" '(\"-c\" \"printf %s \\\"$AMACS_TEST_ONE-$AMACS_TEST_TWO\\\"; cat\")
+                                  \"in\"
+                                  '((\"AMACS_TEST_ONE\" \"a b\") (\"AMACS_TEST_TWO\" \"c\"))))))",
+    );
+    h.wait_until(|h| h.eval("out") != "#f");
+    assert_eq!(h.eval("out"), "(0 \"a b-cin\" \"\")");
+
+    assert_eq!(h.eval("(length (random-bytes 32))"), "32");
+    assert_eq!(
+        h.eval("(every (lambda (byte) (<= 0 byte 255)) (random-bytes 64))"),
+        "#t"
+    );
+    assert_ne!(h.eval("(random-bytes 16)"), h.eval("(random-bytes 16)"));
+    assert_eq!(h.eval("(random-bytes 0)"), "()");
+}
+
+#[test]
+fn a_procedure_runs_after_a_time_unless_its_timer_is_cancelled() {
+    let mut h = Harness::new(70, 8);
+    h.eval(
+        "(define ran '())
+         (define kept (run-after 30 (lambda () (set! ran (cons 'kept ran)))))
+         (define stopped (run-after 30 (lambda () (set! ran (cons 'stopped ran)))))
+         (cancel-timer! stopped)",
+    );
+    assert_eq!(h.eval("ran"), "()", "the editor went on meanwhile");
+    h.type_text("typed while waiting");
+    assert_eq!(h.text(), "typed while waiting");
+    h.wait_until(|h| h.eval("ran") == "(kept)");
+    std::thread::sleep(Duration::from_millis(60));
+    assert_eq!(h.eval("ran"), "(kept)");
+    h.eval("(cancel-timer! kept)");
+}
+
+#[test]
+fn a_secret_is_read_without_showing_or_keeping_it() {
+    let mut h = Harness::new(70, 8);
+    h.eval(
+        "(define seen '())
+         (add-hook! 'prompt-change-hook
+                    (lambda (kind input) (set! seen (cons input seen))))
+         (define got #f)
+         (define-command (ask-secret) \"Ask for a secret.\"
+           (set! got (read-passwd \"Password: \")))
+         (define-command (ask-word) \"Ask for a word.\"
+           (set! got (read-string \"Word: \")))",
+    );
+    h.keys("M-x").type_text("ask-secret").keys("RET");
+    h.type_text("hunter2");
+    assert_eq!(h.prompt(), "Password: *******");
+    assert!(!h.screen.text().contains("hunter2"));
+    h.keys("RET");
+    assert_eq!(h.eval("got"), "\"hunter2\"");
+    assert_eq!(h.eval("(member \"hunter2\" seen)"), "#f", "no hook saw it");
+
+    // It is in no history: the last thing typed at a prompt is not it.
+    h.keys("M-x").type_text("ask-word").keys("RET");
+    h.keys("M-p");
+    assert!(!h.prompt().contains("hunter2"), "{}", h.prompt());
+    h.keys("C-g");
+
+    // Given up, it is not left in the minibuffer either.
+    h.keys("M-x").type_text("ask-secret").keys("RET");
+    h.type_text("other").keys("C-g");
+    h.keys("M-x").type_text("ask-word").keys("RET");
+    assert_eq!(h.prompt(), "Word:");
+    h.keys("C-/");
+    assert_eq!(h.prompt(), "Word:", "nor in what can be undone");
+}
+
+#[test]
 fn runaway_scheme_code_can_be_interrupted() {
     let mut h = Harness::new(70, 8);
     h.eval("(define (spin) (spin))");

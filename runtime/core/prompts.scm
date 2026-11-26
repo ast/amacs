@@ -11,6 +11,12 @@ is shown as `display` would show it."
 the text the line starts with."
   (await (%read-string prompt (if (null? initial) "" (car initial)) 'none)))
 
+(define (read-passwd prompt)
+  "Reads a secret, such as a password, in the minibuffer and returns it.
+What is typed is shown as stars. It is not kept in a history, and no hook
+sees it."
+  (await (%read-secret prompt)))
+
 (define (read-file-name prompt . initial)
   "Reads a file name, with completion. The input starts as the optional
 argument, or else as the working directory. As in Emacs, // and /~ in what

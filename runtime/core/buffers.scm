@@ -108,9 +108,87 @@ unless the second argument is given and not #f. A file on another host,
 named as tramp names it, /ssh:user@host:/path, is read while the editor
 goes on working, and is there when this returns."
   (let ((anyway (and (pair? anyway) (car anyway))))
-    (if (file-remote? name)
-        (%visit-remote (expand-file-name name) anyway #f)
-        (%find-file name anyway))))
+    (cond
+     [(file-remote? name) (%visit-remote (expand-file-name name) anyway #f)]
+     [(file-handler name) (%visit-handled (expand-file-name name))]
+     [else (%find-file name anyway)])))
+
+;;; Files whose bytes are not their text
+
+;; Lists of the end of a name, the procedure that reads, the one that
+;; writes, and whether the text is a secret.
+(define %file-handlers '())
+
+(define (define-file-handler suffix visit save . secret?)
+  "Makes procedures read and write the files whose names end in a suffix,
+such as \".gpg\": files whose bytes are not their text. `visit` is called
+with the name of a file and returns its text, and `save` is called with the
+name and the text and writes the file; both may wait for a program. Such a
+file is visited, saved and read again as any other. With a fourth argument
+that is not #f, the text is a secret: the buffer has the buffer-secret
+option set from the start. A file on another host is not handled."
+  (set! %file-handlers
+        (cons (list suffix visit save (and (pair? secret?) (car secret?) #t))
+              (filter (lambda (handler) (not (equal? (car handler) suffix)))
+                      %file-handlers)))
+  (%set-file-handler-suffixes! (map car %file-handlers)))
+
+(define (file-handler name)
+  "The handler of a file, by its name: a list of the suffix, the procedure
+that reads, the one that writes, and whether the text is a secret. #f for
+a file that the editor reads itself."
+  (and (not (file-remote? name))
+       (find (lambda (handler) (string-suffix? (car handler) name))
+             %file-handlers)))
+
+;; The editor comes here to visit a file that has a handler. A file that
+;; is not there yet gives an empty buffer, as any new file does. The mode
+;; is the one that the name asks for without the handler's suffix.
+(define (%visit-handled path)
+  (let ((visiting (find (lambda (buffer) (equal? (buffer-file-name buffer) path))
+                        (buffer-list))))
+    (if visiting
+        (switch-to-buffer visiting)
+        (let* ((handler (file-handler path))
+               (new? (not (file-exists? path)))
+               (text (if new? "" ((cadr handler) path)))
+               (buffer (%adopt-text! path text (list-ref handler 3))))
+          (switch-to-buffer buffer)
+          (when (eq? (major-mode) 'fundamental-mode)
+            (let ((mode (%auto-mode-for
+                         (substring path 0 (- (string-length path)
+                                              (string-length (car handler)))))))
+              (when mode (call-command mode))))
+          (when new? (message "(New file)"))))))
+
+;; The editor comes here to save a buffer to a file that has a handler.
+;; The text is taken while the buffer is current, and written while the
+;; editor goes on working.
+(define (%save-handled buffer path kill?)
+  (let* ((handler (file-handler path))
+         (problem #f)
+         (taken (%call-in-buffer
+                 buffer
+                 (lambda ()
+                   (set! problem
+                         (guard (e (#t (if (error-object? e)
+                                           (error-object->string e)
+                                           (write->string e))))
+                           (run-hooks 'before-save-hook)
+                           #f))
+                   (cons (buffer-tick) (buffer-string))))))
+    ((caddr handler) path (cdr taken))
+    (%call-in-buffer buffer (lambda () (%mark-written! path (car taken))))
+    (when problem
+      (message "Saved, but before-save-hook failed: " problem))
+    (when kill? (kill-buffer buffer))))
+
+;; The editor comes here to read a file that has a handler again.
+(define (%revert-handled buffer)
+  (let* ((path (%call-in-buffer buffer buffer-file-name))
+         (handler (and path (file-handler path))))
+    (when handler
+      (%adopt-text! path ((cadr handler) path) (list-ref handler 3)))))
 
 ;; Does work on files in the background and waits for it: see
 ;; %start-file-job. Returns what the work gives, or nothing.
@@ -163,14 +241,17 @@ name already."
   "Waits, while the editor goes on working."
   (await (%timer milliseconds)))
 
-(define (run-process program arguments . input)
+(define (run-process program arguments . more)
   "Runs a program with a list of arguments, in the working directory and
 with the environment of the project, and waits for it while the editor
-goes on working. The optional argument is text for its standard input.
-Returns a list of the exit status, what it wrote to standard output and
-what it wrote to standard error. The status is #f if the program could not
-be run."
-  (await (%run-process program arguments (if (null? input) "" (car input)))))
+goes on working. The first optional argument is text for its standard
+input. The second is environment variables to set for it, as a list of
+lists of a name and a value. Returns a list of the exit status, what it
+wrote to standard output and what it wrote to standard error. The status
+is #f if the program could not be run."
+  (await (%run-process program arguments
+                       (if (null? more) "" (car more))
+                       (if (or (null? more) (null? (cdr more))) '() (cadr more)))))
 
 (define (process-lines program . arguments)
   "Runs a program with arguments and returns the lines it wrote. It is an

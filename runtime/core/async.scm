@@ -25,6 +25,24 @@ to do on the way out is done."
       (set! %later (cdr %later))
       (thunk))))
 
+(define (run-after milliseconds thunk)
+  "Runs a procedure of no arguments after a number of milliseconds, while
+the editor goes on working. Returns a timer, which (cancel-timer! timer)
+stops if the time has not come yet."
+  (let ((timer (vector #t)))
+    (run-later
+     (lambda ()
+       (await (%timer milliseconds))
+       (when (vector-ref timer 0)
+         (vector-set! timer 0 #f)
+         (thunk))))
+    timer))
+
+(define (cancel-timer! timer)
+  "Stops a timer that run-after made, so that its procedure is not run.
+Does nothing if it has run already."
+  (vector-set! timer 0 #f))
+
 (define (run-later thunk)
   "Runs a procedure of no arguments once the running code has returned to
 the editor: after the command, hook or evaluation that called this is
