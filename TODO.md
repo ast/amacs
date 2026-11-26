@@ -201,7 +201,7 @@ doing any work:
 `PLAN.md` lays out the next three: processes and a terminal (M11), a coding
 agent over the Agent Client Protocol (M12) and remote files (M14). M11 is
 in but for a later pass, M12 is at its last step of five, and M14 has
-three of its six steps.
+three of its six steps and part of the fifth.
 
 - [x] Terminal emulator (M11): a shell or program on a pseudo-terminal in
       a buffer (`C-c v`), with scrollback, colours, point following the
@@ -226,10 +226,14 @@ three of its six steps.
       client, one place for file access in the core (`file_system.rs`),
       and visiting, saving, reverting and completing files under
       `/ssh:host:`, in the background, with keys or an agent; `dired`
-      there, with copying and moving between hosts. Left: programs and
-      the terminal on the host, passwords, sudo and several hops,
-      containers, git and language servers, docs. `ssh` itself is still
-      to be tried by hand: `C-x C-f //ssh:host:/etc/hostname`.
+      there, with copying and moving between hosts; `sudo`, several
+      hops and containers where nothing is asked, as methods that Scheme
+      defines (`define-remote-method`), with a prompt that offers each
+      next step of a name and says it in words, and `sudo-edit`. Left:
+      programs and the terminal on the host, passwords, git and language
+      servers. Still to be tried by hand, since no test can:
+      `C-x C-f //sudo::/etc/hosts`, `/ssh:host|sudo::/etc/hosts` and
+      `/ssh:a|ssh:b:/etc/hostname`.
 - [ ] Org.
 - [ ] age encryption.
 

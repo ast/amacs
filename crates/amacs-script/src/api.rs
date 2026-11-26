@@ -954,6 +954,125 @@ pub const API: &[ApiFn] = api! {
             let path = expand_path(string(args, 0)?, ed.working_directory());
             Ok(file_system::split(&path).map(|(host, _)| host).into())
         };
+    "%define-remote-method" (8, Some(8)) "Put a way to reach a place into the table of methods, in place of one of the same name: its name, the command that enters the place, the whole command when it is the last step and has its own way to SFTP (or #f), how a step is written that the next one reaches through (or #f), whether what runs in the place is handed over as one line for a shell, whether a step may leave the host out, whom to be when a step names nobody (or #f), and whether the place has the files of the place before it. See define-remote-method." =>
+        |_, args| {
+            fn pieces(value: &Value) -> CmdResult<Vec<amacs_remote::Piece>> {
+                use amacs_remote::Piece;
+                let Value::List(parts) = value else {
+                    return Err(CmdError::msg("a command is a list of strings, symbols and lists"));
+                };
+                parts.iter().map(|part| Ok(match part {
+                    Value::Str(text) => Piece::Text(text.clone()),
+                    Value::Sym(name) => match name.as_str() {
+                        "host" => Piece::Host,
+                        "user" => Piece::User,
+                        "port" => Piece::Port,
+                        "jumps" => Piece::Jumps,
+                        other => return Err(CmdError::msg(format!("{other} is not a part of a command: host, user, port or jumps"))),
+                    },
+                    group @ Value::List(_) => Piece::Group(pieces(group)?),
+                    _ => return Err(CmdError::msg("a command is a list of strings, symbols and lists")),
+                })).collect()
+            }
+            let optional = |index: usize| match &args[index] {
+                Value::Bool(false) => Ok(None),
+                value => pieces(value).map(Some),
+            };
+            amacs_remote::define_method(amacs_remote::MethodDef {
+                name: string(args, 0)?.to_owned(),
+                command: pieces(&args[1])?,
+                sftp: optional(2)?,
+                jump: optional(3)?,
+                line: boolean(args, 4),
+                host_optional: boolean(args, 5),
+                user: args[6].as_name().map(str::to_owned),
+                stays: boolean(args, 7),
+            });
+            Ok(Value::Void)
+        };
+    "remote-method-names" (0, Some(0)) "The names of the ways to reach a place that file names can use, such as \"ssh\" and \"sudo\", in the order that they were defined. See define-remote-method." =>
+        |_, _| Ok(Value::List(amacs_remote::method_names().into_iter().map(Value::from).collect()));
+    "file-remote-steps" (1, Some(1)) "The name of a file on another host, taken apart: a list of its steps and its path there. Each step is a list of the method, the user or #f, the host (which may be empty) and the port or #f. For a name that starts as a remote one and is not whole, a list of the symbol error, a word for what is wrong (incomplete, unknown-method, no-host, bad-host or bad-port) and the text that is wrong. #f for the name of a file of this machine." =>
+        |_, args| {
+            use amacs_remote::{Location, ParseError};
+            Ok(match Location::parse(string(args, 0)?) {
+                Ok(Location::Local(_)) => Value::Bool(false),
+                Ok(Location::Remote(remote)) => {
+                    let steps = remote.hops.iter().map(|hop| Value::List(vec![
+                        hop.method.as_str().into(),
+                        hop.user.clone().into(),
+                        hop.host.as_str().into(),
+                        hop.port.map(i64::from).map_or(Value::Bool(false), Value::Int),
+                    ])).collect();
+                    Value::List(vec![Value::List(steps), remote.path.display().to_string().into()])
+                }
+                Err(error) => {
+                    let (kind, text) = match &error {
+                        ParseError::Incomplete => ("incomplete", String::new()),
+                        ParseError::UnknownMethod(name) => ("unknown-method", name.clone()),
+                        ParseError::NoHost(method) => ("no-host", method.clone()),
+                        ParseError::BadHost(host) => ("bad-host", host.clone()),
+                        ParseError::BadPort(port) => ("bad-port", port.clone()),
+                    };
+                    Value::List(vec![Value::sym("error"), Value::sym(kind), text.into()])
+                }
+            })
+        };
+    "remote-command" (1, Some(1)) "The command that the editor runs to reach the files of a place, as a list of the program and its arguments: for \"/ssh:evo:\" that is ssh with -s and what the method says. Its pipes speak SFTP. Nothing is run by this." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            let remote = file_system::remote(&path)
+                .map_err(|error| CmdError::msg(error.to_string()))?
+                .ok_or_else(|| CmdError::msg(format!("{} is a file of this machine", path.display())))?;
+            let line = amacs_remote::command_line(&remote.hops).map_err(|error| CmdError::msg(error.to_string()))?;
+            Ok(Value::List(line.into_iter().map(Value::from).collect()))
+        };
+    "ssh-hosts" (0, Some(0)) "The hosts that the user's ssh knows by name: those that ~/.ssh/config and the files it includes name outright, then those of ~/.ssh/known_hosts. For each a list of its name, then what the configuration says of it, each a string or #f: the address behind the name, the user, the port and the host that it is reached through; and last whether it is only in known_hosts." =>
+        |_, _| Ok(Value::List(amacs_remote::ssh_hosts().into_iter().map(|host| Value::List(vec![
+            host.name.into(),
+            host.host_name.into(),
+            host.user.into(),
+            host.port.into(),
+            host.jump.into(),
+            host.only_known.into(),
+        ])).collect()));
+    "set-prompt-hint!" (2, Some(2)) "Give the open prompt a line to show under its input: what the input means, or what to type next. The first argument is the input that the line is about, and the line shows while that is the input; the second is the line, or #f for none. For functions of prompt-change-hook." =>
+        |ed, args| {
+            ed.set_prompt_hint(string(args, 0)?, args[1].as_name().map(str::to_owned));
+            Ok(Value::Void)
+        };
+    "set-prompt-offers!" (2, Some(5)) "Give the open prompt for a file name candidates for the last part of its input, besides the entries of the directory. The arguments: the input that they are for (nothing happens if the input is another by now); a name for what is offered, which stays the same while the candidates do, or #f to offer nothing; the text that narrows them; the candidates, each a list of its text, a few words about it and whether it is only the start of a name, which RET then goes on from; and whether the entries of the directory are left out. For functions of prompt-change-hook." =>
+        |ed, args| {
+            let input = string(args, 0)?;
+            let offers = match args.get(1).and_then(Value::as_name) {
+                None => None,
+                Some(stage) => {
+                    let Some(Value::List(listed)) = args.get(3) else {
+                        return Err(CmdError::msg("the candidates are a list"));
+                    };
+                    let candidates = listed.iter().map(|offer| match offer {
+                        Value::List(parts) if !parts.is_empty() => Ok(amacs_core::Candidate {
+                            text: parts[0].as_name().unwrap_or_default().to_owned(),
+                            annotation: parts.get(1).and_then(Value::as_name).unwrap_or_default().to_owned(),
+                            value: None,
+                            continues: parts.get(2).is_some_and(|more| *more != Value::Bool(false)),
+                        }),
+                        _ => Err(CmdError::msg("a candidate is a list of its text, its words and whether it goes on")),
+                    }).collect::<CmdResult<Vec<_>>>()?;
+                    Some(amacs_core::Offers {
+                        stage: stage.to_owned(),
+                        pattern: args.get(2).and_then(Value::as_name).unwrap_or_default().to_owned(),
+                        candidates,
+                        only: args.get(4).is_some_and(|only| *only != Value::Bool(false)),
+                        input: input.to_owned(),
+                    })
+                }
+            };
+            ed.set_prompt_offers(input, offers);
+            Ok(Value::Void)
+        };
+    "remote-places" (0, Some(0)) "The places on other hosts whose files were reached before, the latest first, each as the start of the names of its files: \"/ssh:evo|sudo::\". They are kept from one run of the editor to the next, and offered first where the name of a file is typed." =>
+        |ed, _| Ok(Value::List(ed.remote_places().into_iter().map(Value::from).collect()));
     "file-local-name" (1, Some(1)) "A file name as its own host knows it: \"/etc/hosts\" for \"/ssh:evo:/etc/hosts\", and the name itself for a file of this machine." =>
         |_, args| {
             let name = string(args, 0)?;

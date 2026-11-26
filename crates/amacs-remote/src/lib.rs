@@ -10,11 +10,17 @@
 //! such program for each host.
 
 mod connections;
+mod hosts;
 mod location;
 mod metadata;
+mod methods;
 mod sftp;
 
-pub use connections::{Connections, ssh_hosts};
-pub use location::{Hop, Location, Method, ParseError, Remote};
+pub use connections::Connections;
+pub use hosts::{SshHost, ssh_hosts, ssh_hosts_in};
+pub use location::{Hop, Location, ParseError, Remote};
 pub use metadata::{DirEntry, FileType, Metadata};
+pub use methods::{
+    MethodDef, Piece, command_line, define_fixtures, define_method, method, method_names,
+};
 pub use sftp::{FileReader, Sftp, sftp_server, with_patience};

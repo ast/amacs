@@ -69,6 +69,7 @@ pub fn list_diagnostics(ed: &mut Editor) -> CmdResult {
                 ),
                 annotation: diagnostic.source.clone(),
                 value: Some(range.start.to_string()),
+                continues: false,
             };
             (range.start, candidate)
         })

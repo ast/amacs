@@ -261,7 +261,30 @@ names with completion.
 All of these take the name of a file on another host as tramp writes it,
 `/ssh:user@host:/path`. `(file-remote? name)` says whether a name is one,
 `(file-remote-prefix name)` is the part that names the host, `/ssh:user@host:`,
-and `(file-local-name name)` the path there. What takes long on another
+and `(file-local-name name)` the path there. `(file-as-root name)` is the
+name under which root reads the same file, through `sudo` on its host, and
+`(file-remote-description name)` says a name in plain words, "Host evo.
+Then user root. Path: /etc/nixos", or what to type if it is not whole.
+Hints such as these are written in Simplified Technical English.
+`(remote-places)` lists the hosts used before, the latest first, and
+`(remote-hosts)` those that have a connection.
+
+The methods that a remote name can use are a table that Scheme fills:
+`(define-remote-method name 'command ... 'here ... )` defines one, and its
+documentation lists the keys. `runtime/lib/remote.scm` defines `ssh`,
+`sudo`, `podman` and `docker` with it. `(remote-method-names)` lists them,
+`(file-remote-steps name)` takes a name apart into its steps, and
+`(remote-command name)` is the command that the editor would run for a
+name, which is the way to check a new method.
+
+A prompt tells Scheme when its input changes: the functions of
+`prompt-change-hook` are called with the kind of the prompt (`"file"`,
+`"directory"`, `"string"`, ...) and the input. One of them can answer with
+`(set-prompt-hint! input "A sentence.")`, which shows a row under the
+input, and, for a prompt for file names, with `(set-prompt-offers! input
+stage pattern candidates only?)`, which adds candidates for the last part
+of the name. The offers for remote names (`remote-name-offers`) are made
+this way and can be advised or replaced. What takes long on another
 host (listing, copying, moving, deleting) waits as `run-process` does,
 while the editor goes on working.
 

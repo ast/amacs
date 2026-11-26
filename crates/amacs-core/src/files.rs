@@ -221,19 +221,26 @@ impl From<Listed> for Value {
 /// What a directory holds, in order of name. A link counts as what it
 /// leads to.
 pub fn list_directory(directory: &Path) -> io::Result<Vec<Listed>> {
+    let listed = file_system::read_dir(directory)?;
+    // What a link leads to says what it is, if it leads anywhere;
+    // nothing else needs a second look. The links are asked about
+    // together, which on another host is one wait and not one each.
+    let links: Vec<std::ffi::OsString> = listed
+        .iter()
+        .filter(|entry| entry.metadata.is_none_or(|own| own.is_symlink()))
+        .map(|entry| entry.name.clone())
+        .collect();
+    let mut looked = file_system::links(directory, &links)?.into_iter();
     let mut entries = Vec::new();
-    for entry in file_system::read_dir(directory)? {
-        let path = directory.join(&entry.name);
+    for entry in listed {
         let own = entry.metadata;
         let is_link = own.is_some_and(|own| own.is_symlink());
-        let link = is_link
-            .then(|| file_system::read_link(&path).ok())
-            .flatten();
-        // What a link leads to says what it is, if it leads anywhere;
-        // nothing else needs a second look.
-        let followed = match own {
-            Some(own) if !is_link => Some(own),
-            _ => file_system::metadata(&path).ok().or(own),
+        let (link, followed) = match own {
+            Some(own) if !is_link => (None, Some(own)),
+            _ => {
+                let (target, followed) = looked.next().unwrap_or((None, None));
+                (target.filter(|_| is_link), followed.or(own))
+            }
         };
         let (is_dir, size, changed, runs) = followed.map_or((false, 0, 0, false), |meta| {
             let changed = meta
@@ -597,7 +604,15 @@ impl Editor {
         }
         let unasked = known.is_some();
         self.in_background(move || {
-            let now = file_system::metadata(&file).map(|meta| meta.modified);
+            // Nobody asked: a host that was left meanwhile is not
+            // called again to find out.
+            let looked = if unasked && file_system::is_remote(&file) {
+                file_system::metadata_if_connected(&file)
+                    .unwrap_or_else(|| Err(io::ErrorKind::NotConnected.into()))
+            } else {
+                file_system::metadata(&file)
+            };
+            let now = looked.map(|meta| meta.modified);
             let changed = match (&now, known) {
                 (_, None) => true,
                 (Ok(now), Some(known)) => now.is_some() && *now != known,
@@ -692,6 +707,14 @@ impl Editor {
         promise
     }
 
+    /// Notes the host of a file that was reached, so that it is offered
+    /// where the name of the next one is typed.
+    fn remember_place(&mut self, path: &Path) {
+        if let Some((host, _)) = file_system::split(path) {
+            self.history.add("remote-places", host);
+        }
+    }
+
     /// Takes in what the threads in the background have finished.
     pub(crate) fn file_jobs_poll(&mut self) {
         while let Ok(done) = self.file_jobs.done.try_recv() {
@@ -700,6 +723,7 @@ impl Editor {
                     let result = match outcome {
                         Ok(Outcome::Nothing) => vec![true.into()],
                         Ok(Outcome::Name(path)) => {
+                            self.remember_place(&path);
                             vec![true.into(), path.display().to_string().into()]
                         }
                         Ok(Outcome::Entries(entries)) => vec![
@@ -720,6 +744,9 @@ impl Editor {
                             format!("{} is {}", abbreviate_path(&path), format_size(size)).into(),
                         ],
                         Ok(file @ Fetched::File { .. }) => {
+                            if let Fetched::File { path, .. } = &file {
+                                self.remember_place(&path.clone());
+                            }
                             let (id, note) = self.adopt(file);
                             let recover = self.newer_auto_save_of(id).map(|_| {
                                 format!(

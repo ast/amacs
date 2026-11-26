@@ -53,6 +53,27 @@ the answer is one JSON object: `ok`, and then `value` and `output`, or
 - **Features are tested the way they are used.** Keys in, screen out, against
   the real runtime; see `crates/amacs-script/tests`.
 
+## Files on other hosts
+
+A file on another host has a name, and everything that takes the name of
+a file takes it: `open_file`, `(find-file ...)`, `(read-file ...)`,
+`(directory-entries ...)`, `(copy-file from to)`. The names are tramp's:
+`/ssh:evo:/etc/hosts`, `/ssh:me@evo#2222:notes.txt` (from the home
+directory), `/sudo::/etc/shadow` (this machine, as root),
+`/ssh:evo|sudo::/etc/nixos` (root on evo), `/ssh:gate|ssh:evo:/srv`
+(through another host). To be sure of one before using it,
+`(file-remote-description name)` says it back in words, "Host evo. Then
+user root. Path: /etc/nixos", or says what a name that is not whole still needs, and
+is `#f` for a local name. `(file-as-root name)` builds the name for root,
+`(remote-method-names)` lists the methods that a step can start with, and
+`(remote-command name)` shows the command that would be run for a name
+without running it.
+`(remote-places)` lists the hosts that the user has worked on, the latest
+first, and `(remote-hosts)` those connected now, with why not for those
+that failed. Nothing can be asked of the user on the way to a host yet, so
+a host that wants a password is an error that says so. Programs are not
+run on other hosts yet: `run-process` in a remote buffer is refused.
+
 ## Working on the editor itself
 
 `CLAUDE.md` says how: write features in Scheme, try them in the running

@@ -550,6 +550,10 @@ impl Editor {
             .filter(|_| prompting)
             .and_then(|state| state.session.as_ref());
         let Some(session) = session else {
+            // A prompt without candidates may still have a hint.
+            if let Some(hint) = self.prompt_hint() {
+                return vec![DisplayLine::plain(fit(hint, width), faces::ANNOTATION)];
+            }
             return self
                 .frame()
                 .hint
@@ -567,9 +571,15 @@ impl Editor {
             .max()
             .unwrap_or(0);
         let column = (longest + 2).min(width / 2);
-        visible
-            .iter()
-            .map(|(index, candidate)| {
+        // What the prompt says about its input comes before what can
+        // follow it.
+        let hint = self.prompt_hint().map(|hint| {
+            let mut line = DisplayLine::default();
+            line.push(fit(hint, width), faces::ANNOTATION);
+            line
+        });
+        hint.into_iter()
+            .chain(visible.iter().map(|(index, candidate)| {
                 let selected = session.selected() == Some(*index);
                 let face = if selected {
                     faces::CURRENT_CANDIDATE
@@ -598,7 +608,7 @@ impl Editor {
                     );
                 }
                 line
-            })
+            }))
             .collect()
     }
 }

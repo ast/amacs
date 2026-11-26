@@ -185,6 +185,7 @@ impl Editor {
                 text: format!("{shown}:{}: {line}", location.line + 1),
                 annotation: String::new(),
                 value: Some(index.to_string()),
+                continues: false,
             });
         }
         let completion = Completion::Items {
@@ -432,6 +433,7 @@ impl Editor {
                 text: action["title"].as_str().unwrap_or("(untitled)").to_owned(),
                 annotation: action["kind"].as_str().unwrap_or("").to_owned(),
                 value: Some(index.to_string()),
+                continues: false,
             })
             .collect();
         let completion = Completion::Items {
@@ -528,6 +530,7 @@ impl Editor {
                 text: name.clone(),
                 annotation: (*kind).to_owned(),
                 value: Some(pos.to_string()),
+                continues: false,
             })
             .collect();
         let completion = Completion::Items {

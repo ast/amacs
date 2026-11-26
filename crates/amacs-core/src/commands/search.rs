@@ -33,6 +33,7 @@ pub fn search_lines(ed: &mut Editor) -> CmdResult {
             text: content,
             annotation: (line + 1).to_string(),
             value: Some(line.to_string()),
+            continues: false,
         });
     }
     if candidates.is_empty() {
@@ -154,6 +155,7 @@ pub fn switch_to_buffer(ed: &mut Editor) -> CmdResult {
         text: abbreviate_path(file),
         annotation: "recent file".to_owned(),
         value: Some(format!("\0{}", file.display())),
+        continues: false,
     }));
 
     let completion = Completion::Items {
@@ -193,6 +195,7 @@ pub fn yank_pop(ed: &mut Editor) -> CmdResult {
             text: text.to_owned(),
             annotation: String::new(),
             value: Some(index.to_string()),
+            continues: false,
         })
         .collect();
     if candidates.is_empty() {

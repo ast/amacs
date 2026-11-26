@@ -166,6 +166,7 @@ version = "0.1.0"
 dependencies = [
  "amacs-core",
  "amacs-proto",
+ "amacs-remote",
  "amacs-scheme",
  "amacs-testkit",
  "jiff",

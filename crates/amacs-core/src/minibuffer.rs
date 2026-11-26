@@ -61,6 +61,8 @@ pub(crate) struct MinibufferState {
     synced_tick: Option<u64>,
     /// The candidate last passed to `on_select`.
     previewed: Option<Candidate>,
+    /// A line to show under the input, and the input that it is about.
+    hint: Option<(String, String)>,
     /// Where each window started when the prompt opened. The candidate
     /// list takes rows from the windows, which scrolls them to keep point
     /// in view; they go back when the prompt closes.
@@ -110,6 +112,7 @@ impl Editor {
             history,
             history_index: None,
             synced_tick: None,
+            hint: None,
             previewed: None,
             window_starts,
         });
@@ -242,14 +245,70 @@ impl Editor {
         }
     }
 
+    /// The places on other hosts that were used before, the latest first,
+    /// each as the start of the names of its files: `/ssh:evo|sudo::`.
+    pub fn remote_places(&self) -> Vec<String> {
+        let places = self.history.entries("remote-places");
+        places.iter().rev().cloned().collect()
+    }
+
+    /// What the open prompt has been given to say about its input as it
+    /// is now: see [`Editor::set_prompt_hint`]. `None` in a frame that
+    /// the prompt is not in.
+    pub(crate) fn prompt_hint(&self) -> Option<&str> {
+        let state = self.minibuffer.as_ref()?;
+        if self.prompt_frame != Some(self.current_frame) {
+            return None;
+        }
+        let (input, hint) = state.hint.as_ref()?;
+        (*input == self.minibuffer_input()).then_some(hint.as_str())
+    }
+
+    /// Gives the open prompt a line to show under its input: what the
+    /// input means, or what it still needs. It shows while the input is
+    /// `input`, which is the input that it was worked out for; `None`
+    /// takes it away.
+    pub fn set_prompt_hint(&mut self, input: &str, hint: Option<String>) {
+        if let Some(state) = &mut self.minibuffer {
+            state.hint = hint.map(|hint| (input.to_owned(), hint));
+            self.relayout();
+        }
+    }
+
+    /// Gives the open prompt, if it is one for file names and its input
+    /// is still `offers.input`, candidates for the last part of the
+    /// input: see [`Session::set_offers`]. `None` takes them away.
+    pub fn set_prompt_offers(&mut self, input: &str, offers: Option<crate::completion::Offers>) {
+        if self.minibuffer.is_none() || self.minibuffer_input() != input {
+            return;
+        }
+        let changed = self
+            .session_mut()
+            .is_some_and(|session| session.set_offers(offers));
+        if changed {
+            let now = Instant::now();
+            if let Some(session) = self.session_mut() {
+                session.update(input, now);
+            }
+        }
+    }
+
     /// Rows of the echo area in the current frame: one, plus the candidate
-    /// list while a prompt with candidates is open there, or the lines of a
-    /// key hint.
+    /// list while a prompt with candidates is open there and a row for
+    /// what the prompt was given to say about its input, or the lines of
+    /// a key hint.
     pub fn echo_rows(&self) -> u16 {
         let available = self.frame().size.1.saturating_sub(3);
         let prompting = self.prompt_frame == Some(self.current_frame);
         let extra = match &self.minibuffer {
-            Some(state) if prompting && state.session.is_some() => VISIBLE_CANDIDATES,
+            Some(state) if prompting => {
+                let candidates = if state.session.is_some() {
+                    VISIBLE_CANDIDATES
+                } else {
+                    0
+                };
+                candidates + usize::from(self.prompt_hint().is_some())
+            }
             _ => self.frame().hint.len(),
         };
         1 + (extra as u16).min(available)
@@ -277,14 +336,21 @@ impl Editor {
         let Some(state) = &mut self.minibuffer else {
             return;
         };
+        let changed = state.synced_tick != Some(tick);
         if let Some(session) = &mut state.session {
-            if state.synced_tick != Some(tick) {
+            if changed {
                 session.update(&input, now);
             }
             session.poll(now);
             session.tick(0);
         }
         state.synced_tick = Some(tick);
+        if changed {
+            // Scheme may have something to say about the input, or to
+            // offer for it: it answers with a hint or with candidates.
+            let kind = state.history.clone();
+            self.run_hook("prompt-change-hook", vec![kind.into(), input.into()]);
+        }
         self.preview_selection();
     }
 
@@ -418,7 +484,8 @@ pub fn exit_minibuffer(ed: &mut Editor) -> CmdResult {
         }
         return ed.set_minibuffer_input(candidate.value());
     }
-    if category == "file" && candidate.text.ends_with('/') {
+    // A directory is gone into, and so is the start of a remote name.
+    if category == "file" && (candidate.text.ends_with('/') || candidate.continues) {
         return ed.set_minibuffer_input(candidate.value());
     }
     ed.accept(Accepted::Candidate(candidate))

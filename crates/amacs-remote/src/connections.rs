@@ -8,8 +8,9 @@ use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::location::{Hop, Method, Remote};
-use crate::sftp::{Sftp, patience, sftp_server};
+use crate::location::{Hop, Remote};
+use crate::methods::command_line;
+use crate::sftp::{Sftp, patience};
 
 /// A host that could not be reached is not tried again for this long:
 /// what asks, asks often.
@@ -92,7 +93,7 @@ impl Connections {
                     std::thread::Builder::new()
                         .name("sftp-connect".to_owned())
                         .spawn(move || {
-                            let made = program(&hops).and_then(Sftp::spawn);
+                            let made = program(&hops).and_then(start).map_err(explained);
                             let mut state =
                                 host.state.lock().unwrap_or_else(PoisonError::into_inner);
                             *state = match made {
@@ -107,6 +108,18 @@ impl Connections {
                         })?;
                 }
             }
+        }
+    }
+
+    /// The connection to the host of a file if there is one that works,
+    /// as far as is known without asking the host. None is made.
+    pub fn connected(&self, remote: &Remote) -> Option<Arc<Sftp>> {
+        let hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
+        let host = hosts.get(&remote.host())?;
+        let state = host.state.lock().unwrap_or_else(PoisonError::into_inner);
+        match &*state {
+            State::Ready(sftp) if !sftp.is_lost() => Some(Arc::clone(sftp)),
+            _ => None,
         }
     }
 
@@ -151,92 +164,41 @@ impl Connections {
     }
 }
 
-/// The program whose pipes speak SFTP with the far end of some hops.
+/// The program whose pipes speak SFTP with the far end of some hops:
+/// see [`crate::methods`].
 fn program(hops: &[Hop]) -> io::Result<Command> {
-    match hops {
-        [hop] if hop.method == Method::Ssh => Ok(ssh(hop)),
-        [hop] if hop.method == Method::Test => {
-            let server = sftp_server().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, "this machine has no sftp-server")
-            })?;
-            Ok(Command::new(server))
-        }
-        _ => Err(io::Error::new(
+    let line = command_line(hops)?;
+    let mut command = Command::new(&line[0]);
+    command.args(&line[1..]);
+    Ok(command)
+}
+
+/// Starts the program that reaches a place. A program that is not on
+/// this machine is said as that: the error for it is else the one for a
+/// file that is not there, which a new file is.
+fn start(command: Command) -> io::Result<Sftp> {
+    let name = command.get_program().to_string_lossy().into_owned();
+    Sftp::spawn(command).map_err(|error| match error.kind() {
+        io::ErrorKind::NotFound => io::Error::new(
             io::ErrorKind::Unsupported,
-            "only /ssh:host: is reached so far: sudo, containers and several hops come later",
-        )),
-    }
+            format!("the program {name} was not found on this machine"),
+        ),
+        _ => error,
+    })
 }
 
-/// The user's own `ssh`, asked for the SFTP subsystem of a host. It
-/// authenticates as it always does, with the user's configuration, agent
-/// and jump hosts, and shares one connection per host with every other
-/// `ssh` that this editor starts, which stays for ten minutes after its
-/// last use.
-fn ssh(hop: &Hop) -> Command {
-    let mut command = Command::new("ssh");
-    // Nobody is there to answer a question yet, so none is asked.
-    command.args(["-o", "BatchMode=yes"]);
-    // A host that is not there, or no longer there, is given up on by
-    // `ssh` itself.
-    command.args(["-o", "ConnectTimeout=10"]);
-    command.args([
-        "-o",
-        "ServerAliveInterval=10",
-        "-o",
-        "ServerAliveCountMax=3",
-    ]);
-    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
-        let directory = std::path::Path::new(&runtime).join("amacs");
-        if std::fs::create_dir_all(&directory).is_ok() {
-            command.args(["-o", "ControlMaster=auto", "-o", "ControlPersist=600"]);
-            command.arg("-o");
-            command.arg(format!("ControlPath={}/ssh-%C", directory.display()));
-        }
+/// Says in the editor's words what a program that was to reach a host
+/// said in its own, where that helps.
+fn explained(error: io::Error) -> io::Error {
+    let said = error.to_string();
+    if said.contains("a password is required") || said.contains("a terminal is required") {
+        return io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "sudo needs a password on that host. The editor cannot give a password now. \
+             Use a host where sudo needs no password, or run sudo in a terminal first.",
+        );
     }
-    if let Some(user) = &hop.user {
-        command.args(["-l", user]);
-    }
-    if let Some(port) = hop.port {
-        command.args(["-p", &port.to_string()]);
-    }
-    command.args(["-s", "--", &hop.host, "sftp"]);
-    command
-}
-
-/// The hosts that the user's `ssh` knows by name: those that
-/// `~/.ssh/config` names outright, without patterns, in the order of the
-/// file.
-pub fn ssh_hosts() -> Vec<String> {
-    std::env::var_os("HOME")
-        .and_then(|home| {
-            std::fs::read_to_string(std::path::Path::new(&home).join(".ssh/config")).ok()
-        })
-        .map_or_else(Vec::new, |config| hosts_in(&config))
-}
-
-fn hosts_in(config: &str) -> Vec<String> {
-    let mut hosts: Vec<String> = Vec::new();
-    for line in config.lines() {
-        // `Host a b`, or `Host=a b`, in any case.
-        let mut words = line
-            .split(|c: char| c.is_whitespace() || c == '=')
-            .filter(|word| !word.is_empty());
-        if !words
-            .next()
-            .is_some_and(|key| key.eq_ignore_ascii_case("host"))
-        {
-            continue;
-        }
-        for name in words {
-            let name = name.trim_matches('"');
-            let plain = !name.is_empty() && !name.contains(['*', '?', '!', ',']);
-            if plain && !hosts.iter().any(|host| host == name) {
-                hosts.push(name.to_owned());
-            }
-        }
-    }
-    hosts
+    error
 }
 
 #[cfg(test)]
@@ -251,47 +213,25 @@ mod tests {
         }
     }
 
-    fn arguments(command: &Command) -> Vec<String> {
-        command
-            .get_args()
-            .map(|argument| argument.to_string_lossy().into_owned())
-            .collect()
-    }
-
     #[test]
-    fn ssh_is_asked_for_the_sftp_subsystem() {
-        let command = program(&remote("/ssh:albin@evo#2222:/etc").hops).unwrap();
-        assert_eq!(command.get_program(), "ssh");
-        let arguments = arguments(&command);
-        assert!(arguments.ends_with(
-            &["-l", "albin", "-p", "2222", "-s", "--", "evo", "sftp"].map(str::to_owned)
-        ));
-        assert!(arguments.contains(&"BatchMode=yes".to_owned()));
-
-        let command = program(&remote("/ssh:evo:/etc").hops).unwrap();
-        assert!(arguments_end(&command, &["-s", "--", "evo", "sftp"]));
-    }
-
-    fn arguments_end(command: &Command, end: &[&str]) -> bool {
-        let end: Vec<String> = end.iter().map(|part| (*part).to_owned()).collect();
-        let arguments = arguments(command);
-        arguments.ends_with(&end) && !arguments.contains(&"-l".to_owned())
-    }
-
-    #[test]
-    fn hosts_are_read_from_the_configuration_of_ssh() {
-        let config = "# mine\nHost evo\n  HostName evo.example.org\n\nhost  pi  nas \"quoted\"\n\
-                      Host *.example.org !bad *\n  User albin\nHost=equals\nHostName not-a-host\nHost evo\n";
-        assert_eq!(hosts_in(config), ["evo", "pi", "nas", "quoted", "equals"]);
-        assert_eq!(hosts_in(""), [] as [&str; 0]);
-    }
-
-    #[test]
-    fn what_is_not_reached_yet_says_so() {
-        for name in ["/sudo::/etc", "/ssh:a|ssh:b:/etc", "/podman:box:/etc"] {
-            let error = program(&remote(name).hops).unwrap_err();
-            assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{name}");
-        }
+    fn what_a_program_said_is_said_in_plain_words() {
+        let asked = explained(io::Error::other("sudo: a password is required"));
+        assert_eq!(asked.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            asked
+                .to_string()
+                .starts_with("sudo needs a password on that host.")
+        );
+        assert_eq!(
+            explained(io::Error::other("no route")).to_string(),
+            "no route"
+        );
+        assert_eq!(
+            program(&remote("/ssh:evo:/etc").hops)
+                .unwrap()
+                .get_program(),
+            "ssh"
+        );
     }
 
     #[test]
@@ -322,9 +262,9 @@ mod tests {
     #[test]
     fn a_host_that_cannot_be_reached_says_why_to_all_who_ask() {
         let connections = Connections::default();
-        let nowhere = remote("/sudo::/etc");
+        let nowhere = remote("/ssh:evo|sudo:pi:/etc");
         let error = connections.sftp(&nowhere).err().unwrap();
-        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         // Soon after, the same answer without another try.
         let again = connections.sftp(&nowhere).err().unwrap();
         assert_eq!(again.to_string(), error.to_string());

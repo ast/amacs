@@ -78,7 +78,10 @@ const FSYNC: &str = "fsync@openssh.com";
 const PIECE: usize = 32 * 1024;
 /// How many pieces of a file are asked for or sent before the answers are
 /// read.
-const PIECES_AT_ONCE: usize = 8;
+const PIECES_AT_ONCE: usize = 32;
+/// How many small questions, about one file each, are sent before the
+/// answers are read.
+const QUESTIONS_AT_ONCE: usize = 64;
 /// No answer is this long; a length above it is not SFTP.
 const LONGEST_PACKET: usize = 1 << 20;
 
@@ -371,6 +374,26 @@ fn status(kind: u8, body: &[u8]) -> io::Result<Option<io::Error>> {
     Reply(body).status()
 }
 
+/// The answer to a question about what a file is.
+fn read_attrs(kind: u8, body: &[u8]) -> io::Result<Metadata> {
+    match kind {
+        ATTRS => Ok(Reply(body).attrs()?.metadata()),
+        _ => Err(refusal(kind, body)),
+    }
+}
+
+/// The answer to a question that is answered with one name.
+fn read_name(kind: u8, body: &[u8]) -> io::Result<PathBuf> {
+    if kind != NAME {
+        return Err(refusal(kind, body));
+    }
+    let mut reply = Reply(body);
+    if reply.u32()? != 1 {
+        return Err(malformed("one name was asked for"));
+    }
+    Ok(PathBuf::from(OsString::from_vec(reply.bytes()?.to_owned())))
+}
+
 /// A connection to the files of a host.
 ///
 /// Paths are those of the host. One that is not absolute is taken from
@@ -609,25 +632,70 @@ impl Sftp {
         }
     }
 
-    fn attrs(&self, kind: u8, path: &Path) -> io::Result<Attrs> {
+    fn attrs(&self, kind: u8, path: &Path) -> io::Result<Metadata> {
         let (kind, body) = self.request(|id| Packet::new(kind, id).path(path))?;
-        match kind {
-            ATTRS => Reply(&body).attrs(),
-            _ => Err(refusal(kind, &body)),
-        }
+        read_attrs(kind, &body)
     }
 
     /// A request that is answered with one name.
     fn name(&self, kind: u8, path: &Path) -> io::Result<PathBuf> {
         let (kind, body) = self.request(|id| Packet::new(kind, id).path(path))?;
-        if kind != NAME {
-            return Err(refusal(kind, &body));
+        read_name(kind, &body)
+    }
+
+    /// Asks the same of many paths, a batch of them at a time and not one
+    /// by one: the answers come in the order of the paths. An error is
+    /// that of the connection; what the host refuses for one path is the
+    /// answer for that path.
+    fn many<T>(
+        &self,
+        paths: &[PathBuf],
+        kind: u8,
+        read: impl Fn(u8, &[u8]) -> io::Result<T>,
+    ) -> io::Result<Vec<io::Result<T>>> {
+        let mut answers = Vec::with_capacity(paths.len());
+        for batch in paths.chunks(QUESTIONS_AT_ONCE) {
+            let ids: Vec<u32> = batch.iter().map(|_| self.next_id()).collect();
+            let requests: Vec<u8> = ids
+                .iter()
+                .zip(batch)
+                .flat_map(|(id, path)| Packet::new(kind, *id).path(path).finish())
+                .collect();
+            let replies = self.exchange(&ids, requests)?;
+            if replies.len() != batch.len() {
+                return Err(malformed("an answer is missing"));
+            }
+            answers.extend(replies.iter().map(|(kind, body)| read(*kind, body)));
         }
-        let mut reply = Reply(&body);
-        if reply.u32()? != 1 {
-            return Err(malformed("one name was asked for"));
-        }
-        Ok(PathBuf::from(OsString::from_vec(reply.bytes()?.to_owned())))
+        Ok(answers)
+    }
+
+    /// What each of some files is, following links: see [`Sftp::many`].
+    pub fn metadata_many(&self, paths: &[PathBuf]) -> io::Result<Vec<io::Result<Metadata>>> {
+        self.many(paths, STAT, read_attrs)
+    }
+
+    /// What each of some names is, of a link the link itself.
+    pub fn symlink_metadata_many(
+        &self,
+        paths: &[PathBuf],
+    ) -> io::Result<Vec<io::Result<Metadata>>> {
+        self.many(paths, LSTAT, read_attrs)
+    }
+
+    /// Where each of some links points.
+    pub fn read_link_many(&self, paths: &[PathBuf]) -> io::Result<Vec<io::Result<PathBuf>>> {
+        self.many(paths, READLINK, read_name)
+    }
+
+    /// Deletes some files or links. The first that could not be deleted
+    /// is the error, after all have been tried.
+    pub fn remove_files(&self, paths: &[PathBuf]) -> io::Result<()> {
+        let done = self.many(paths, REMOVE, |kind, body| match status(kind, body)? {
+            Some(error) => Err(error),
+            None => Ok(()),
+        })?;
+        done.into_iter().collect()
     }
 
     fn extended(&self, name: &str, build: impl FnOnce(Packet) -> Packet) -> io::Result<()> {
@@ -636,12 +704,12 @@ impl Sftp {
 
     /// What a file is, following links.
     pub fn metadata(&self, path: &Path) -> io::Result<Metadata> {
-        Ok(self.attrs(STAT, path)?.metadata())
+        self.attrs(STAT, path)
     }
 
     /// What a name is: of a link, the link itself.
     pub fn symlink_metadata(&self, path: &Path) -> io::Result<Metadata> {
-        Ok(self.attrs(LSTAT, path)?.metadata())
+        self.attrs(LSTAT, path)
     }
 
     /// Where a link points.
@@ -762,6 +830,55 @@ impl Sftp {
         result
     }
 
+    /// Makes a file that is not there yet, with what `content` writes,
+    /// the permissions `mode` and, if given, the time `modified`: for a
+    /// copy. The file is whole under its name or not there, since the
+    /// bytes go to a file beside it that is renamed. Unlike
+    /// [`Sftp::write_atomically`], nothing is asked about the name first
+    /// and the host is not told to put the bytes on its disk at once,
+    /// which saving a buffer needs and a copy does not.
+    pub fn write_new(
+        &self,
+        path: &Path,
+        mode: u32,
+        modified: Option<SystemTime>,
+        content: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let name = path
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
+        let moment = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |since| since.subsec_nanos());
+        let mut temp_name = OsString::from(".#");
+        temp_name.push(name);
+        temp_name.push(format!(".{}-{moment:08x}.tmp", std::process::id()));
+        let temp = path.with_file_name(temp_name);
+
+        let result = (|| {
+            let flags = OPEN_WRITE | OPEN_CREATE | OPEN_EXCLUSIVE;
+            // Its owner can write to it until it is whole, whatever the
+            // mode is to be.
+            let handle = self.open_with(|id| {
+                Packet::new(OPEN, id)
+                    .path(&temp)
+                    .u32(flags)
+                    .attrs(Some(0o600))
+            })?;
+            let mut writer = FileWriter::new(handle);
+            content(&mut writer)?;
+            writer.finish(false)?;
+            // The mode given on opening is cut down by the umask there,
+            // and writing has set the time.
+            self.set_attributes(&temp, Some(mode), modified)?;
+            self.rename(&temp, path)
+        })();
+        if result.is_err() {
+            let _ = self.remove_file(&temp);
+        }
+        result
+    }
+
     /// Gives a file or directory another name, in place of whatever file
     /// has that name already.
     pub fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
@@ -835,15 +952,27 @@ impl Sftp {
     /// Deletes a directory and everything in it. Links in it are deleted,
     /// not followed.
     pub fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
-        for entry in self.read_dir(path)? {
-            let inner = path.join(&entry.name);
-            // Asked of the name itself, whatever the listing said: what a
-            // link to a directory leads to is not to be emptied.
-            if self.symlink_metadata(&inner)?.is_dir() {
-                self.remove_dir_all(&inner)?;
+        let inner: Vec<PathBuf> = self
+            .read_dir(path)?
+            .iter()
+            .map(|entry| path.join(&entry.name))
+            .collect();
+        // Asked of the names themselves, whatever the listing said: what
+        // a link to a directory leads to is not to be emptied. All are
+        // asked about at once, and what is no directory goes at once.
+        let mut files = Vec::new();
+        let mut directories = Vec::new();
+        let metas = self.symlink_metadata_many(&inner)?;
+        for (inner, meta) in inner.into_iter().zip(metas) {
+            if meta?.is_dir() {
+                directories.push(inner);
             } else {
-                self.remove_file(&inner)?;
+                files.push(inner);
             }
+        }
+        self.remove_files(&files)?;
+        for directory in directories {
+            self.remove_dir_all(&directory)?;
         }
         self.remove_dir(path)
     }

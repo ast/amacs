@@ -479,6 +479,21 @@ lists that home directory. At a prompt that already holds a name, typing
 first. `TAB` completes `/ssh:` to the hosts of `~/.ssh/config` and then
 the names on the host.
 
+A name can go on from a host. `/sudo::/etc/hosts` is a file of this
+machine as root, `/ssh:evo|sudo::/etc/nixos` one on `evo` as root there,
+`/ssh:evo|sudo:postgres@:` the home directory of another user, and
+`/ssh:gate|ssh:evo:/etc` a host that is reached through another. None of
+this has to be remembered. The prompt offers what can come next at each
+point, with a few words beside it: after `/` the ways to a place and the
+places used before, after `/ssh:` the hosts that `ssh` knows, each with
+what `~/.ssh/config` says of it and whether it is connected, and after a
+host its top and home directories, `|sudo::` "Become root on that host."
+and `|ssh:` "Connect from that host to a different host." `RET` takes one
+and goes on from it. Above them a row says the name in plain words, "Host
+evo. Then user root. Path: /etc/nixos", or what to type next. `M-x sudo-edit` skips all of
+it for the usual case: it visits the file of the current buffer again as
+root, on whatever host it is, with point where it was.
+
 Such a file is a file like any other: it is edited, saved with `C-x C-s`,
 and read again when it changes there, and `C-x C-j` lists its directory.
 In the file manager, `C`, `R`, `D` and `+` work on the host, and with a
@@ -489,13 +504,38 @@ line, and says so within seconds when a host does not answer.
 
 Nothing is installed on the host. The editor runs `ssh` itself and talks
 SFTP to it, so what `ssh host` needs to work in a terminal is all that is
-needed: the user's `~/.ssh/config`, keys, agent and jump hosts apply, and
-one connection per host is kept and shared (`ControlMaster`). For now the
-host must be one that `ssh` reaches without asking anything: with a key
-or an agent, and a host key that is known already. Not there yet either:
-`/sudo:` and containers, and programs on the host, so a remote buffer has
-no `M-!`, terminal, git, formatter or language server. `(remote-hosts)`
-lists the connections and `(remote-disconnect "/ssh:evo:")` ends one.
+needed: the user's `~/.ssh/config`, keys, agent and jump hosts apply.
+That configuration is read first and wins. Where it sets up control
+connections (`ControlMaster`, `ControlPath`), the editor uses the same
+ones as the terminal does, so a host that a terminal is logged in to
+opens at once, and the other way round. Where it does not, the editor
+keeps one connection per host of its own, for ten minutes after its last
+use. Compression and the like are the configuration's to set. Hosts that
+are gone through are treated the same. For now the
+host must be one that `ssh` reaches without asking anything, with a key
+or an agent and a host key that is known already, and `sudo` must ask no
+password there: because it never does, or because it was used in a
+terminal a moment ago. Not there yet either: programs on the host, so a
+remote buffer has no `M-!`, terminal, git, formatter or language server.
+
+The methods are not built in. `ssh`, `sudo`, `podman` and `docker` are
+each a few lines of `runtime/lib/remote.scm`: a command line with holes
+for the host, the user and the port, and the sentences that the prompt
+shows. `/podman:name:/path` and `/docker:name:/path` reach a container
+that has the `sftp-server` program in it. Another method is defined the
+same way in the init file; this one is `doas`:
+
+    (define-remote-method "doas"
+      'command '("doas" "-n" "-u" user "--")
+      'host 'optional 'user "root" 'stays #t
+      'here "Become a different user on this machine with doas."
+      'there "Become a different user on that host with doas."
+      'usage "Type doas:: for root.")
+
+What the prompt offers is Scheme too (`remote-name-offers`), and so is
+the row that says a name in words: any prompt can be given such a row,
+by a function on `prompt-change-hook` that calls `set-prompt-hint!`. `(remote-hosts)` lists the connections and
+`(remote-disconnect "/ssh:evo:")` ends one.
 
 **Git**: `C-x g` shows the status of the repository of the current buffer,
 in sections that `TAB` folds. `s` and `u` stage and unstage the file or hunk

@@ -88,7 +88,24 @@
 ;;; A file on another host is named as tramp names it and needs nothing set
 ;;; here: C-x C-f /ssh:host:/path visits it and C-x d /ssh:host: lists its
 ;;; home directory, over the ssh of ~/.ssh/config. At a prompt that holds
-;;; a name already, //ssh: starts anew.
+;;; a name already, //ssh: starts anew, and the prompt offers what can come
+;;; next: hosts, and after a host |sudo:: for root there.
+;;;
+;;; ssh reads ~/.ssh/config first, and what is set there holds: control
+;;; connections (the editor then shares them with the terminal),
+;;; compression, keep-alive. The editor adds only what is not set.
+
+;; The file of this buffer again as root, on whatever host it is.
+;; (global-set-key "C-c r" 'sudo-edit)
+
+;; A method of your own is a command line with holes for the host, the user
+;; and the port. (describe 'define-remote-method) lists the keys.
+;; (define-remote-method "doas"
+;;   'command '("doas" "-n" "-u" user "--")
+;;   'host 'optional 'user "root" 'stays #t
+;;   'here "Become a different user on this machine with doas."
+;;   'there "Become a different user on that host with doas."
+;;   'usage "Type doas:: for root.")
 
 ;; In the file manager, b and one of these keys goes to a directory. One
 ;; on another host is as good as any; put your own hosts here.

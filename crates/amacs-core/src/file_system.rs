@@ -81,6 +81,33 @@ pub trait FileSystem {
     /// Makes a link at `link` that points to `target`, taken as written.
     fn symlink(&self, target: &Path, link: &Path) -> io::Result<()>;
 
+    /// Makes a file that is not there yet, with what `content` writes,
+    /// permissions and, if given, the time it was last changed: for a
+    /// copy. It is whole under its name or not there.
+    fn write_new(
+        &self,
+        path: &Path,
+        mode: u32,
+        modified: Option<SystemTime>,
+        content: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.write_atomically(path, content)?;
+        self.set_attributes(path, Some(mode), modified)
+    }
+
+    /// What each of some files is, following links. Other hosts are
+    /// asked about all of them at once; an error is then that of the
+    /// connection, and what is wrong with one file is its answer.
+    fn metadata_many(&self, paths: &[PathBuf]) -> io::Result<Vec<io::Result<Metadata>>> {
+        Ok(paths.iter().map(|path| self.metadata(path)).collect())
+    }
+
+    /// Where each of some links points, asked like
+    /// [`FileSystem::metadata_many`].
+    fn read_link_many(&self, paths: &[PathBuf]) -> io::Result<Vec<io::Result<PathBuf>>> {
+        Ok(paths.iter().map(|path| self.read_link(path)).collect())
+    }
+
     /// Gives a file permissions, the time it was last changed, or both.
     /// A link is followed.
     fn set_attributes(
@@ -267,6 +294,24 @@ impl FileSystem for Sftp {
         Sftp::symlink(self, target, link)
     }
 
+    fn write_new(
+        &self,
+        path: &Path,
+        mode: u32,
+        modified: Option<SystemTime>,
+        content: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>,
+    ) -> io::Result<()> {
+        Sftp::write_new(self, path, mode, modified, content)
+    }
+
+    fn metadata_many(&self, paths: &[PathBuf]) -> io::Result<Vec<io::Result<Metadata>>> {
+        Sftp::metadata_many(self, paths)
+    }
+
+    fn read_link_many(&self, paths: &[PathBuf]) -> io::Result<Vec<io::Result<PathBuf>>> {
+        Sftp::read_link_many(self, paths)
+    }
+
     fn set_attributes(
         &self,
         path: &Path,
@@ -321,6 +366,15 @@ pub fn is_remote(path: &Path) -> bool {
 /// connection to, as far as is known without asking the host.
 pub fn is_connected(path: &Path) -> bool {
     matches!(remote(path), Ok(Some(remote)) if Connections::global().is_connected(&remote))
+}
+
+/// What a file on another host is, asked over the connection that there
+/// is: `None` if there is none, and none is made for this. For what
+/// looks at files by itself, which must not call a host that was left.
+pub fn metadata_if_connected(path: &Path) -> Option<io::Result<Metadata>> {
+    let remote = remote(path).ok()??;
+    let sftp = Connections::global().connected(&remote)?;
+    Some(sftp.metadata(remote.host_path()))
 }
 
 /// The hosts that files have been asked of, each as the start of the
@@ -484,6 +538,28 @@ pub fn set_attributes(
     })
 }
 
+/// What the links of a directory lead to: for each name, in order, where
+/// the link points and what is there, or `None` for what cannot be
+/// found out. A host is asked about all of them at once.
+pub fn links(
+    directory: &Path,
+    names: &[std::ffi::OsString],
+) -> io::Result<Vec<(Option<PathBuf>, Option<Metadata>)>> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    on(directory, |files, directory| {
+        let paths: Vec<PathBuf> = names.iter().map(|name| directory.join(name)).collect();
+        let targets = files.read_link_many(&paths)?;
+        let followed = files.metadata_many(&paths)?;
+        Ok(targets
+            .into_iter()
+            .zip(followed)
+            .map(|(target, meta)| (target.ok(), meta.ok()))
+            .collect())
+    })
+}
+
 /// A name taken apart: the start that names the host, such as
 /// `/ssh:evo:`, and the path there as it is written. `None` for a local
 /// name, and for one that starts as a remote one and is not whole.
@@ -519,26 +595,39 @@ pub fn copy(from: &Path, to: &Path) -> io::Result<()> {
             "a directory is not copied into itself",
         ));
     }
-    copy_tree(from, to)
+    copy_tree(from, to, None)
 }
 
-fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
-    let meta = symlink_metadata(from)?;
+/// Copies what [`copy`] has found may be copied. `known` is what the
+/// source is, of a link the link itself, where the listing of its
+/// directory has said so already.
+fn copy_tree(from: &Path, to: &Path, known: Option<Metadata>) -> io::Result<()> {
+    let meta = match known {
+        Some(meta) => meta,
+        None => symlink_metadata(from)?,
+    };
     if meta.is_symlink() {
         symlink(&read_link(from)?, to)
     } else if meta.is_dir() {
         mkdir(to)?;
         for entry in read_dir(from)? {
-            copy_tree(&from.join(&entry.name), &to.join(&entry.name))?;
+            copy_tree(
+                &from.join(&entry.name),
+                &to.join(&entry.name),
+                entry.metadata,
+            )?;
         }
         // Last, so that a directory that may not be written to can be
         // filled, and its time is not that of the filling.
         set_attributes(to, Some(meta.mode), meta.modified)
     } else if meta.is_file() {
         read_with(from, |reader| {
-            write_atomically(to, |out| io::copy(reader, out).map(drop))
-        })?;
-        set_attributes(to, Some(meta.mode), meta.modified)
+            on(to, |files, to| {
+                files.write_new(to, meta.mode, meta.modified, &mut |out| {
+                    io::copy(reader, out).map(drop)
+                })
+            })
+        })
     } else {
         Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -687,6 +776,31 @@ mod tests {
         assert_eq!(meta.permissions().mode() & 0o7777, 0o600);
         assert_eq!(meta.modified().unwrap(), then);
 
+        // Many at once, each answered for itself.
+        let asked = [at("a/b"), at("none"), at("link"), at("file")];
+        let looked = files.metadata_many(&asked).unwrap();
+        assert!(looked[0].as_ref().unwrap().is_dir());
+        assert_eq!(
+            looked[1].as_ref().unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(looked[2].as_ref().unwrap().is_file());
+        let targets = files.read_link_many(&asked).unwrap();
+        assert_eq!(targets[2].as_ref().unwrap(), Path::new("file"));
+        assert!(targets[0].is_err() && targets[1].is_err() && targets[3].is_err());
+
+        // A new file, with its mode and time.
+        files
+            .write_new(&at("new"), 0o640, Some(then), &mut |out| {
+                out.write_all(b"new")
+            })
+            .unwrap();
+        let meta = fs::metadata(at("new")).unwrap();
+        assert_eq!(fs::read(at("new")).unwrap(), b"new");
+        assert_eq!(meta.permissions().mode() & 0o7777, 0o640);
+        assert_eq!(meta.modified().unwrap(), then);
+        fs::remove_file(at("new")).unwrap();
+
         // Renaming, also onto a name that is taken.
         files.rename(&at("a/b/file"), &at("moved")).unwrap();
         files.rename(&at("moved"), &at("file")).unwrap();
@@ -708,6 +822,8 @@ mod tests {
 
     #[test]
     fn names_of_remote_files_reach_their_host() {
+        // The methods are Scheme's to define; these stand in for them.
+        amacs_remote::define_fixtures();
         let dir = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         let there = |name: &str| PathBuf::from(format!("/sftp-test::{}/{name}", root.display()));
@@ -747,12 +863,18 @@ mod tests {
 
         let half = metadata(Path::new("/ssh:half")).unwrap_err();
         assert_eq!(half.kind(), io::ErrorKind::InvalidInput);
-        let unreached = metadata(Path::new("/sudo::/etc")).unwrap_err();
-        assert_eq!(unreached.kind(), io::ErrorKind::Unsupported);
+        let unreached = metadata(Path::new("/ssh:evo|sudo:pi:/etc")).unwrap_err();
+        assert_eq!(unreached.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            unreached.to_string(),
+            "sudo is for the host before it, not for pi: write sudo::"
+        );
     }
 
     #[test]
     fn files_are_copied_and_moved_between_here_and_there() {
+        // The methods are Scheme's to define; these stand in for them.
+        amacs_remote::define_fixtures();
         let dir = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         let here = |name: &str| root.join(name);

@@ -39,6 +39,9 @@ pub struct Candidate {
     pub annotation: String,
     /// What accepting the candidate yields, when that is not the text.
     pub value: Option<String>,
+    /// It is not an answer yet but the start of one, as the host in the
+    /// name of a remote file is: taking it goes on from it.
+    pub continues: bool,
 }
 
 impl Candidate {
@@ -53,7 +56,7 @@ impl Candidate {
         Self {
             text: text.into(),
             annotation: annotation.into(),
-            value: None,
+            ..Self::default()
         }
     }
 
@@ -90,6 +93,23 @@ pub enum Completion {
     Grep { directory: PathBuf },
 }
 
+/// Candidates that a prompt for file names was given from outside, for
+/// the last part of a name: the hosts after `/ssh:`, say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Offers {
+    /// A name for what is offered. While it stays the same from one
+    /// input to the next, so do the candidates.
+    pub stage: String,
+    /// The text that narrows them, in place of the last part of the
+    /// input as typed.
+    pub pattern: String,
+    pub candidates: Vec<Candidate>,
+    /// The entries of the directory are not listed with them.
+    pub only: bool,
+    /// The input that they were worked out for.
+    pub input: String,
+}
+
 /// Where a session's candidates come from.
 enum Source {
     Static,
@@ -100,6 +120,9 @@ enum Source {
         base: PathBuf,
         /// Whether files that are not directories are left out.
         only_directories: bool,
+        /// What is offered besides, or in place of, the entries of the
+        /// directory: see [`Session::set_offers`].
+        offers: Option<Offers>,
     },
     Grep(Search),
 }
@@ -157,16 +180,27 @@ fn list_directory(dir: &Path) -> Vec<Candidate> {
     let Ok(entries) = file_system::read_dir(dir) else {
         return Vec::new();
     };
+    // A link to a directory counts, and only a link needs another look
+    // to tell. All of them are looked at together.
+    let links: Vec<std::ffi::OsString> = entries
+        .iter()
+        .filter(|entry| entry.metadata.is_none_or(|meta| meta.is_symlink()))
+        .map(|entry| entry.name.clone())
+        .collect();
+    let mut looked = file_system::links(dir, &links)
+        .unwrap_or_default()
+        .into_iter();
     let mut names: Vec<(bool, String)> = entries
         .into_iter()
         .filter_map(|entry| {
-            let name = entry.name.into_string().ok()?;
-            // A link to a directory counts, and only a link needs another
-            // look to tell.
             let is_dir = match entry.metadata {
                 Some(meta) if !meta.is_symlink() => meta.is_dir(),
-                _ => file_system::is_dir(&dir.join(&name)),
+                _ => looked
+                    .next()
+                    .and_then(|(_, followed)| followed)
+                    .is_some_and(|meta| meta.is_dir()),
             };
+            let name = entry.name.into_string().ok()?;
             Some((!is_dir, if is_dir { format!("{name}/") } else { name }))
         })
         .collect();
@@ -219,6 +253,7 @@ impl Session {
                     listed: None,
                     base: base.to_owned(),
                     only_directories,
+                    offers: None,
                 };
                 let category = if only_directories {
                     "directory"
@@ -256,6 +291,24 @@ impl Session {
         })
     }
 
+    /// Gives a session for file names candidates for the last part of
+    /// its input, besides or in place of the entries of the directory,
+    /// or takes them away with `None`. They hold while the directory part
+    /// of the input stays what it was for `offers.input`. Returns whether
+    /// anything changed, in which case [`Session::update`] is due.
+    pub fn set_offers(&mut self, given: Option<Offers>) -> bool {
+        let Source::Files { offers, .. } = &mut self.source else {
+            return false;
+        };
+        if *offers == given {
+            return false;
+        }
+        *offers = given;
+        // The pattern may be another for the same input.
+        self.pattern = None;
+        true
+    }
+
     /// Narrows to a new input. Called whenever the minibuffer text changes.
     pub fn update(&mut self, input: &str, now: Instant) {
         let pattern = match &mut self.source {
@@ -264,28 +317,36 @@ impl Session {
                 listed,
                 base,
                 only_directories,
+                offers,
             } => {
                 let (dir, name) = split_path(input);
                 let directory = crate::files::expand_typed_path(dir, base);
-                // At the root, what starts as the name of a host is
-                // completed to the hosts that `ssh` knows by name.
-                let hosts = directory == Path::new("/") && name.starts_with("ssh:");
-                let key = if hosts {
-                    format!("{dir}ssh:")
-                } else {
-                    dir.to_owned()
+                // What was offered for another directory is not for
+                // this one.
+                if offers
+                    .as_ref()
+                    .is_some_and(|offers| split_path(&offers.input).0 != dir)
+                {
+                    *offers = None;
+                }
+                let key = match offers {
+                    Some(offers) => format!("{dir}\0{}", offers.stage),
+                    None => dir.to_owned(),
+                };
+                let pattern = match offers {
+                    Some(offers) if offers.input == input => offers.pattern.clone(),
+                    _ => name.to_owned(),
                 };
                 if listed.as_deref() != Some(key.as_str()) {
                     *listed = Some(key);
                     self.matcher.restart(true);
                     let injector = self.matcher.injector();
-                    if hosts {
-                        for host in amacs_remote::ssh_hosts() {
-                            inject(&injector, Candidate::new(format!("ssh:{host}:")));
-                        }
+                    let only_offers = offers.as_ref().is_some_and(|offers| offers.only);
+                    for candidate in offers.iter().flat_map(|offers| &offers.candidates) {
+                        inject(&injector, candidate.clone());
                     }
                     let only_directories = *only_directories;
-                    let remote = file_system::is_remote(&directory);
+                    let far = file_system::is_remote(&directory);
                     let list = move || {
                         for candidate in list_directory(&directory) {
                             if !only_directories || candidate.text.ends_with('/') {
@@ -293,7 +354,8 @@ impl Session {
                             }
                         }
                     };
-                    if remote {
+                    if only_offers {
+                    } else if far {
                         // A directory on another host is listed when the
                         // host has answered, which the prompt does not
                         // wait for. Names that come after another
@@ -309,7 +371,7 @@ impl Session {
                     // The matcher still holds the pattern for the old directory.
                     self.pattern = None;
                 }
-                literal_pattern(name)
+                literal_pattern(&pattern)
             }
             Source::Grep(search) => {
                 // The input is the query, not a filter on its results.
@@ -536,6 +598,7 @@ fn start_search(
                 text: format!("{path}:{line}: {}", matched.trim()),
                 annotation: String::new(),
                 value: Some(search_value(&directory.join(path), line)),
+                continues: false,
             };
             inject(&injector, candidate);
             found += 1;

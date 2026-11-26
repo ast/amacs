@@ -469,8 +469,72 @@ harness. ssh and sudo themselves are tried by hand on `evo`.
    parts. The prompts of Scheme for file names did not start anew at
    `//`; they do.
 4. Locations for `run-process`, `make-process`, `M-!`, the terminal.
-5. Askpass, `read-passwd`, `pass.scm`; sudo and multi-hop.
+5. Askpass, `read-passwd`, `pass.scm`; sudo and multi-hop. Of this,
+   sudo and several hops are in since 2026-11-26, where nothing is
+   asked: `/ssh:a|ssh:b:` is `ssh -J`, `/sudo::` is `sudo -n` on the
+   `sftp-server` of this machine, and `/ssh:host|sudo::` asks the host,
+   in one line of `sh`, where its `sftp-server` is (the configuration of
+   its `sshd` says, which is what finds it on NixOS) and runs it under
+   `sudo -n`. sudo is the last step or none, and a password that is
+   wanted is said as such. With it came what makes the names easy: at
+   each point of the first part of a name the prompt offers what can
+   come next, with a sentence beside it (the methods and the places used
+   before, the hosts of `~/.ssh/config`, its `Include`s followed, and of
+   `known_hosts`, and after a host its directories and the steps that
+   can follow), and a row above says the name in plain words or what to
+   type. Places used are kept with the histories (`remote-places`).
+
+   The split, after a second pass on the same day: the methods are a
+   table (`methods.rs` in `amacs-remote`) that Scheme fills with
+   `define-remote-method`. A method is a command line with holes for
+   host, user and port, and a few facts: whether what runs in the place
+   is handed over as words or as one line for a shell, whether it has
+   its own SFTP (`ssh -s`), how a step is written that the next one
+   reaches through (`ssh -J`), whether the host may be left out, and
+   whether the place has the files of the one before it. Rust reads the
+   names, builds one command from the steps, last step inwards, and
+   runs it. `ssh`, `sudo`, `podman` and `docker` are defined in
+   `runtime/lib/remote.scm`, where the offers (`remote-name-offers`),
+   the words (`file-remote-description`), `sudo-edit` and
+   `file-as-root` are too. The prompt has no knowledge of remote names:
+   it runs `prompt-change-hook` when its input changes, and takes a hint
+   (`set-prompt-hint!`) and candidates (`set-prompt-offers!`) from
+   whoever answers. Hints are in Simplified Technical English.
+
+   Not tried against a real `sudo`, a real chain or a container: the
+   tests check the command lines, and that the line for a place finds
+   an `sftp-server` on this machine. Rust's own tests run without
+   Scheme and so define stand-ins for the methods
+   (`amacs_remote::define_fixtures`). Left of this step: askpass,
+   `read-passwd`, `pass.scm`.
 6. README, `docs/extending.md`, `docs/ai.md`; then git and LSP.
+
+### How `ssh` is used, after a pass on 2026-11-26
+
+The editor's values for `ssh` were options on the command line, which win
+over `~/.ssh/config`, so it never shared a control connection with a
+terminal, and the `ssh` that `-J` starts did not get them at all. They
+are now a file, `$XDG_RUNTIME_DIR/amacs/ssh_config`, written by
+`remote.scm` and given with `-F`: it includes the user's configuration
+first, then sets the editor's values under `Host *`, then includes the
+system's. `ssh` takes the first value it sees, so the user's control
+connections, keep-alive and compression hold and the editor's fill what
+is left; `-F` is handed on to the `ssh` for a jump host. Only
+`BatchMode=yes` stays on the command line.
+
+Fewer waits for a host: the links of a directory are asked about
+together (`metadata_many`, `read_link_many`: two waits for a listing or
+a completion, not two per link), a tree is deleted a directory at a time
+(one question about all entries, one request for all files), a copied
+file is written with `write_new` (no questions about a target that is
+known to be absent, no `fsync`; four waits and the data, where it was
+nine), `copy_tree` uses what the listing said of each entry, and 32
+pieces of a file are under way at once, not 8.
+
+Not measured: no host but this machine was at hand, so the counts are
+from reading the code. Still one at a time: the files of a tree that is
+copied, one after the other, and the directories of a tree that is
+deleted. Nothing that a host said is remembered between questions.
 
 ### Left over from the steps that are done
 
@@ -538,6 +602,18 @@ From step 3:
   protocol's; a server that is not OpenSSH's would make it backwards.
 - A listing of another host is not read again by itself when files
   change there.
+
+From the names and the methods:
+
+- The offers come one turn after the key, since the core cannot call
+  Scheme and wait: it runs the hook and Scheme answers. Nothing shows of
+  it, but a slow function on `prompt-change-hook` would.
+- The options of `ssh` are fixed when `remote.scm` is loaded; to change
+  them, `ssh` is defined again.
+- Containers are not offered by name after `podman:` and `docker:`:
+  listing them runs a program, which the hook cannot wait for.
+- A container without `sftp-server` in it is an error that says so;
+  there is no other way in.
 
 ## Dependencies added
 

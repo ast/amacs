@@ -14,42 +14,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-/// A way to get from one place to the next.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Method {
-    /// Another host, through the user's `ssh`.
-    Ssh,
-    /// Another user on the same host, root unless one is named.
-    Sudo,
-    /// A container of that name on the host.
-    Podman,
-    /// This machine through its own `sftp-server`, as the user that the
-    /// editor runs as: what the tests of remote files visit.
-    Test,
-}
-
-impl Method {
-    const ALL: [Self; 4] = [Self::Ssh, Self::Sudo, Self::Podman, Self::Test];
-
-    /// The name that file names carry.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Ssh => "ssh",
-            Self::Sudo => "sudo",
-            Self::Podman => "podman",
-            Self::Test => "sftp-test",
-        }
-    }
-
-    fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|method| method.name() == name)
-    }
-}
-
 /// One step on the way to a file: a method and whom to be where.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Hop {
-    pub method: Method,
+    /// The name of the way to get there: see [`crate::methods`].
+    pub method: String,
     /// Whom to be there; `None` leaves it to the method.
     pub user: Option<String>,
     /// The host, or the container's name. Empty for the host that the hop
@@ -61,7 +30,7 @@ pub struct Hop {
 
 impl fmt::Display for Hop {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:", self.method.name())?;
+        write!(f, "{}:", self.method)?;
         if let Some(user) = &self.user {
             write!(f, "{user}@")?;
         }
@@ -125,7 +94,7 @@ pub enum ParseError {
     /// A hop after the first names a method that does not exist.
     UnknownMethod(String),
     /// A method that needs a host has none: `/ssh::/path`.
-    NoHost(Method),
+    NoHost(String),
     /// The host cannot be one: it holds a slash, or brackets do not close.
     BadHost(String),
     /// What follows `#` is not a port number.
@@ -139,7 +108,7 @@ impl fmt::Display for ParseError {
                 f.write_str("the remote file name has no path: a colon ends the host")
             }
             Self::UnknownMethod(name) => write!(f, "{name} is not a way to reach a host"),
-            Self::NoHost(method) => write!(f, "{} needs a host", method.name()),
+            Self::NoHost(method) => write!(f, "{method} needs a host"),
             Self::BadHost(host) => write!(f, "{host} cannot name a host"),
             Self::BadPort(port) => write!(f, "{port} is not a port number"),
         }
@@ -163,19 +132,19 @@ impl Location {
         let Some((first, mut rest)) = rest.split_once(':') else {
             return local();
         };
-        let Some(mut method) = Method::from_name(first) else {
+        let Some(mut method) = crate::methods::method(first) else {
             return local();
         };
         let mut hops = Vec::new();
         loop {
             let (end, last) = hop_end(rest)?;
-            hops.push(parse_hop(method, &rest[..end])?);
+            hops.push(parse_hop(&method, &rest[..end])?);
             rest = &rest[end + 1..];
             if last {
                 break;
             }
             let (name, after) = rest.split_once(':').ok_or(ParseError::Incomplete)?;
-            method = Method::from_name(name)
+            method = crate::methods::method(name)
                 .ok_or_else(|| ParseError::UnknownMethod(name.to_owned()))?;
             rest = after;
         }
@@ -227,7 +196,7 @@ fn hop_end(text: &str) -> Result<(usize, bool), ParseError> {
 }
 
 /// Reads `user@host#port`, each part of which may be missing.
-fn parse_hop(method: Method, text: &str) -> Result<Hop, ParseError> {
+fn parse_hop(method: &crate::methods::MethodDef, text: &str) -> Result<Hop, ParseError> {
     let (user, rest) = match text.rsplit_once('@') {
         Some((user, rest)) => (Some(user), rest),
         None => (None, text),
@@ -247,8 +216,8 @@ fn parse_hop(method: Method, text: &str) -> Result<Hop, ParseError> {
             None => (rest, None),
         }
     };
-    if host.is_empty() && !matches!(method, Method::Sudo | Method::Test) {
-        return Err(ParseError::NoHost(method));
+    if host.is_empty() && !method.host_optional {
+        return Err(ParseError::NoHost(method.name.clone()));
     }
     // What starts with a dash would be read as an option by the program
     // that is handed it.
@@ -262,7 +231,7 @@ fn parse_hop(method: Method, text: &str) -> Result<Hop, ParseError> {
         })
         .transpose()?;
     Ok(Hop {
-        method,
+        method: method.name.clone(),
         user: user.filter(|user| !user.is_empty()).map(str::to_owned),
         host: host.to_owned(),
         port,
@@ -307,9 +276,9 @@ mod tests {
         }
     }
 
-    fn hop(method: Method, user: Option<&str>, host: &str, port: Option<u16>) -> Hop {
+    fn hop(method: &str, user: Option<&str>, host: &str, port: Option<u16>) -> Hop {
         Hop {
-            method,
+            method: method.to_owned(),
             user: user.map(str::to_owned),
             host: host.to_owned(),
             port,
@@ -342,25 +311,22 @@ mod tests {
     #[test]
     fn a_host_with_user_and_port() {
         let file = remote("/ssh:albin@evo#2222:/home/albin/notes.org");
-        assert_eq!(
-            file.hops,
-            [hop(Method::Ssh, Some("albin"), "evo", Some(2222))]
-        );
+        assert_eq!(file.hops, [hop("ssh", Some("albin"), "evo", Some(2222))]);
         assert_eq!(file.path, Path::new("/home/albin/notes.org"));
         assert_eq!(file.host(), "/ssh:albin@evo#2222:");
 
         let file = remote("/ssh:evo:/etc");
-        assert_eq!(file.hops, [hop(Method::Ssh, None, "evo", None)]);
+        assert_eq!(file.hops, [hop("ssh", None, "evo", None)]);
     }
 
     #[test]
     fn sudo_needs_no_host() {
         let file = remote("/sudo::/etc/nixos/configuration.nix");
-        assert_eq!(file.hops, [hop(Method::Sudo, None, "", None)]);
+        assert_eq!(file.hops, [hop("sudo", None, "", None)]);
         assert_eq!(file.path, Path::new("/etc/nixos/configuration.nix"));
 
         let file = remote("/sudo:postgres@:/var/lib");
-        assert_eq!(file.hops, [hop(Method::Sudo, Some("postgres"), "", None)]);
+        assert_eq!(file.hops, [hop("sudo", Some("postgres"), "", None)]);
     }
 
     #[test]
@@ -369,9 +335,9 @@ mod tests {
         assert_eq!(
             file.hops,
             [
-                hop(Method::Ssh, None, "jump", None),
-                hop(Method::Ssh, Some("albin"), "inner", None),
-                hop(Method::Sudo, None, "", None),
+                hop("ssh", None, "jump", None),
+                hop("ssh", Some("albin"), "inner", None),
+                hop("sudo", None, "", None),
             ]
         );
         assert_eq!(file.path, Path::new("/root/.profile"));
@@ -380,13 +346,10 @@ mod tests {
     #[test]
     fn containers_and_addresses() {
         let file = remote("/podman:builder:/src/main.rs");
-        assert_eq!(file.hops, [hop(Method::Podman, None, "builder", None)]);
+        assert_eq!(file.hops, [hop("podman", None, "builder", None)]);
 
         let file = remote("/ssh:root@[fe80::1]#22:/var/log");
-        assert_eq!(
-            file.hops,
-            [hop(Method::Ssh, Some("root"), "fe80::1", Some(22))]
-        );
+        assert_eq!(file.hops, [hop("ssh", Some("root"), "fe80::1", Some(22))]);
         assert_eq!(file.path, Path::new("/var/log"));
     }
 
@@ -448,8 +411,11 @@ mod tests {
         assert_eq!(error("/ssh:evo"), ParseError::Incomplete);
         assert_eq!(error("/ssh:evo|sudo"), ParseError::Incomplete);
         assert_eq!(error("/ssh:evo|sudo:"), ParseError::Incomplete);
-        assert_eq!(error("/ssh::/etc"), ParseError::NoHost(Method::Ssh));
-        assert_eq!(error("/podman::/etc"), ParseError::NoHost(Method::Podman));
+        assert_eq!(error("/ssh::/etc"), ParseError::NoHost("ssh".to_owned()));
+        assert_eq!(
+            error("/podman::/etc"),
+            ParseError::NoHost("podman".to_owned())
+        );
         assert_eq!(
             error("/ssh:evo|telnet:old:/etc"),
             ParseError::UnknownMethod("telnet".to_owned())

@@ -381,3 +381,114 @@ fn a_host_that_does_not_answer_is_not_waited_for() {
     assert_eq!(sftp.read(&dir.path().join("file")).unwrap(), b"later");
     assert!(!sftp.is_lost());
 }
+
+#[test]
+fn many_files_are_asked_about_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let sftp = connect();
+    let root = dir.path();
+    fs::write(root.join("file"), "twelve bytes").unwrap();
+    fs::create_dir(root.join("sub")).unwrap();
+    symlink("file", root.join("link")).unwrap();
+    symlink("sub", root.join("to-sub")).unwrap();
+    symlink("nowhere", root.join("dangling")).unwrap();
+    // More than one batch, in an order that shows if answers are mixed up.
+    let mut paths = Vec::new();
+    for round in 0..40 {
+        for name in ["file", "sub", "link", "to-sub", "dangling", "none"] {
+            let _ = round;
+            paths.push(root.join(name));
+        }
+    }
+
+    let followed = sftp.metadata_many(&paths).unwrap();
+    let own = sftp.symlink_metadata_many(&paths).unwrap();
+    let targets = sftp.read_link_many(&paths).unwrap();
+    assert_eq!(followed.len(), paths.len());
+    for (at, path) in paths.iter().enumerate() {
+        // What one question gives, each of the many gives.
+        let single = sftp.metadata(path);
+        assert_eq!(
+            followed[at].as_ref().map_err(|error| error.kind()),
+            single.as_ref().map_err(|error| error.kind()),
+            "{}",
+            path.display()
+        );
+        assert_eq!(
+            own[at].as_ref().ok().map(|meta| meta.file_type),
+            sftp.symlink_metadata(path).ok().map(|meta| meta.file_type)
+        );
+        assert_eq!(
+            targets[at].as_ref().ok(),
+            sftp.read_link(path).ok().as_ref()
+        );
+    }
+    assert!(followed[3].as_ref().unwrap().is_dir());
+    assert_eq!(
+        followed[4].as_ref().unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
+    assert!(own[4].as_ref().unwrap().is_symlink());
+    assert_eq!(targets[2].as_ref().unwrap(), Path::new("file"));
+    assert!(sftp.metadata_many(&[]).unwrap().is_empty());
+}
+
+#[test]
+fn a_tree_of_many_files_is_deleted_in_few_waits() {
+    let dir = tempfile::tempdir().unwrap();
+    let sftp = connect();
+    let tree = dir.path().join("tree");
+    fs::create_dir_all(tree.join("a/b")).unwrap();
+    fs::create_dir(dir.path().join("kept")).unwrap();
+    fs::write(dir.path().join("kept/file"), "stays").unwrap();
+    for at in 0..300 {
+        fs::write(tree.join(format!("file-{at}")), "x").unwrap();
+        fs::write(tree.join(format!("a/b/deep-{at}")), "x").unwrap();
+    }
+    // A link to a directory is deleted, not what it leads to.
+    symlink(dir.path().join("kept"), tree.join("a/link")).unwrap();
+
+    sftp.remove_dir_all(&tree).unwrap();
+    assert!(!tree.exists());
+    assert_eq!(
+        fs::read_to_string(dir.path().join("kept/file")).unwrap(),
+        "stays"
+    );
+
+    // One that cannot be deleted is said, and the others still go.
+    let files = [dir.path().join("none"), dir.path().join("kept/file")];
+    let error = sftp.remove_files(&files).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::NotFound);
+    assert!(!dir.path().join("kept/file").exists());
+}
+
+#[test]
+fn a_new_file_is_written_whole_with_its_mode_and_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let sftp = connect();
+    let path = dir.path().join("copy");
+    let then = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    // More than is under way at once, and read-only when it is done.
+    let bytes = pattern(3 * 1024 * 1024 + 17);
+    sftp.write_new(&path, 0o444, Some(then), &mut |out| {
+        std::io::Write::write_all(out, &bytes)
+    })
+    .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    let meta = fs::metadata(&path).unwrap();
+    assert_eq!(meta.permissions().mode() & 0o7777, 0o444);
+    assert_eq!(meta.modified().unwrap(), then);
+    assert_eq!(sftp.read(&path).unwrap(), bytes);
+
+    // What fails leaves nothing, also no file beside the name.
+    let failed = sftp.write_new(&dir.path().join("half"), 0o644, None, &mut |out| {
+        std::io::Write::write_all(out, b"half")?;
+        Err(std::io::Error::other("stop"))
+    });
+    assert_eq!(failed.unwrap_err().to_string(), "stop");
+    let left: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(left, ["copy"]);
+}
