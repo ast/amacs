@@ -4,6 +4,8 @@ use amacs_proto::{DisplayLine, FaceId};
 use amacs_text::Text;
 use unicode_width::UnicodeWidthChar;
 
+use crate::fold::Folds;
+
 /// Number of cells `c` occupies when drawn starting at column `col`.
 pub fn char_cells(c: char, col: usize, tab_width: usize) -> usize {
     match c {
@@ -40,21 +42,26 @@ pub fn str_cells(s: &str) -> usize {
 /// The minor mode in which long lines are broken between words.
 pub const VISUAL_LINE_MODE: &str = "visual-line-mode";
 
-/// How the text of a buffer flows into rows: how wide its tabs are, and
+/// How the text of a buffer flows into rows: how wide its tabs are,
 /// whether a line too long for the pane is broken between words, as
-/// `visual-line-mode` has it, or wherever the pane ends.
+/// `visual-line-mode` has it, or wherever the pane ends, and which lines
+/// are hidden and get no rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Flow {
+pub struct Flow<'a> {
     pub tab_width: usize,
     pub words: bool,
+    pub folds: &'a Folds,
 }
 
-impl Flow {
-    /// Rows that break wherever the pane ends.
+static NO_FOLDS: Folds = Folds::new();
+
+impl Flow<'static> {
+    /// Rows that break wherever the pane ends, of text with no line hidden.
     pub fn chars(tab_width: usize) -> Self {
         Self {
             tab_width,
             words: false,
+            folds: &NO_FOLDS,
         }
     }
 }
@@ -69,6 +76,8 @@ pub struct Row {
     pub next: Option<usize>,
     /// The line continues on the next row.
     pub continued: bool,
+    /// Lines are hidden after this row, which ends its line.
+    pub folded: bool,
 }
 
 impl Row {
@@ -111,11 +120,18 @@ pub fn walk_row(
     let mut pos = start;
     for c in text.chars_from(start) {
         if c == '\n' {
+            // The row after this one is that of the next line that is
+            // shown, if there is one.
+            let hidden_to = flow.folds.after(pos);
             return Row {
                 start,
                 end: pos,
-                next: Some(pos + 1),
+                next: match hidden_to {
+                    Some(end) => (end < text.len()).then_some(end + 1),
+                    None => Some(pos + 1),
+                },
                 continued: false,
+                folded: hidden_to.is_some(),
             };
         }
         // A tab never needs more than a whole row.
@@ -129,6 +145,7 @@ pub fn walk_row(
                 end: pos,
                 next: Some(pos),
                 continued: true,
+                folded: false,
             };
         }
         visit(pos, c, col, cells);
@@ -140,6 +157,7 @@ pub fn walk_row(
         end: pos,
         next: None,
         continued: false,
+        folded: false,
     }
 }
 
@@ -175,8 +193,10 @@ fn row_at(text: &Text, start: usize, width: usize, flow: Flow) -> Row {
 }
 
 /// Start of the screen row on which `pos` is drawn, and that row's index
-/// within its line.
+/// within its line. A position on a hidden line is drawn at the end of the
+/// line before the hidden ones.
 pub fn row_containing(text: &Text, pos: usize, width: usize, flow: Flow) -> (usize, usize) {
+    let pos = flow.folds.visible(pos);
     let mut start = text.line_start(text.line_of(pos));
     let mut index = 0;
     loop {
@@ -205,14 +225,15 @@ pub fn rows_forward(text: &Text, row_start: usize, n: usize, width: usize, flow:
 
 /// Start of the row `n` rows before `row_start`, stopping at the first row.
 pub fn rows_back(text: &Text, row_start: usize, n: usize, width: usize, flow: Flow) -> usize {
+    let row_start = flow.folds.visible(row_start);
     let mut line = text.line_of(row_start);
     let (_, index) = row_containing(text, row_start, width, flow);
     if index >= n {
         return rows_forward(text, text.line_start(line), index - n, width, flow);
     }
     let mut remaining = n - index;
-    while line > 0 {
-        line -= 1;
+    while let Some(before) = flow.folds.previous_line(text, line) {
+        line = before;
         let line_start = text.line_start(line);
         let (_, last_index) = row_containing(text, text.line_end(line), width, flow);
         let rows = last_index + 1;
@@ -360,8 +381,8 @@ mod tests {
     #[test]
     fn rows_break_between_words_when_the_flow_says_so() {
         let words = Flow {
-            tab_width: 8,
             words: true,
+            ..Flow::chars(8)
         };
         // Nine cells of text to a row: "the quick " "brown fox".
         let text = Text::from("the quick brown fox\nend");

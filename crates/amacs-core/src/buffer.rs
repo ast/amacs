@@ -10,6 +10,7 @@ use slotmap::new_key_type;
 
 use crate::error::{CmdError, CmdResult};
 use crate::faces::Severity;
+use crate::fold::Folds;
 use crate::lsp::{Document, TextChange, lsp_position};
 use crate::script::{FUNDAMENTAL_MODE, Value};
 use crate::undo_journal::{self, UndoJournal};
@@ -92,6 +93,8 @@ pub struct Buffer {
     /// Marks beside lines, by line counted from 0, each the name of the
     /// face it is drawn in: what differs from the last commit, for one.
     line_signs: HashMap<usize, String>,
+    /// The lines that are not shown.
+    folds: Folds,
     /// Copied from the `tab-width` option whenever options change.
     pub tab_width: usize,
     /// Copied from the `line-numbers` option.
@@ -158,6 +161,7 @@ impl Buffer {
             text_faces: Vec::new(),
             spans: Vec::new(),
             line_signs: HashMap::new(),
+            folds: Folds::new(),
             tab_width: 8,
             line_numbers: LineNumbers::Off,
             indent_offset: 4,
@@ -189,8 +193,9 @@ impl Buffer {
 
     /// How the text flows into rows in a window: by the width of its tabs,
     /// and between words while `visual-line-mode` is on in the buffer.
-    pub fn flow(&self) -> crate::display::Flow {
+    pub fn flow(&self) -> crate::display::Flow<'_> {
         crate::display::Flow {
+            folds: &self.folds,
             tab_width: self.tab_width,
             words: self
                 .minor_modes
@@ -436,6 +441,7 @@ impl Buffer {
         self.text_faces.clear();
         self.spans.clear();
         self.line_signs.clear();
+        self.folds.clear();
         self.mark_set = false;
         self.mark_active = false;
         self.tick += 1;
@@ -457,6 +463,7 @@ impl Buffer {
             markers: &mut self.markers,
             syntax: &mut self.syntax,
             document: &mut self.document,
+            folds: &mut self.folds,
         }
     }
 
@@ -545,6 +552,38 @@ impl Buffer {
             self.spans.retain(|(span, _)| !span.is_empty());
         }
         self.parts().delete(range)
+    }
+
+    // Lines that are not shown
+
+    /// The lines that are not shown.
+    pub fn folds(&self) -> &Folds {
+        &self.folds
+    }
+
+    /// Hides the lines that the text between two positions touches, as
+    /// [`Folds::hide`] has it. The text is not changed by it, nor is the
+    /// buffer modified. Returns the fold.
+    pub fn hide_lines(&mut self, range: Range<usize>) -> Option<Range<usize>> {
+        let fold = self.folds.hide(&self.text, range.start, range.end)?;
+        // Where point is when the buffer is next shown is not hidden.
+        let saved = self.folds.visible(self.markers.get(self.saved_point));
+        self.markers.set(self.saved_point, saved);
+        Some(fold)
+    }
+
+    /// Shows the lines of the folds that start in a range of positions, or
+    /// of all folds.
+    pub fn show_lines(&mut self, range: Option<Range<usize>>) {
+        match range {
+            Some(range) => self.folds.show(range),
+            None => self.folds.clear(),
+        }
+    }
+
+    /// Opens the folds around a position. Returns whether there was one.
+    pub fn reveal(&mut self, pos: usize) -> bool {
+        self.folds.reveal(pos)
     }
 
     // Faces laid over the text
@@ -732,6 +771,7 @@ impl Buffer {
                 markers: &mut self.markers,
                 syntax: &mut self.syntax,
                 document: &mut self.document,
+                folds: &mut self.folds,
             };
             parts.delete(edit.pos..edit.pos + inserted);
             parts.insert(edit.pos, &edit.deleted);
@@ -846,6 +886,7 @@ impl Buffer {
                 markers: &mut self.markers,
                 syntax: &mut self.syntax,
                 document: &mut self.document,
+                folds: &mut self.folds,
             };
             parts.delete(edit.pos..edit.pos + deleted);
             parts.insert(edit.pos, &edit.inserted);
@@ -863,6 +904,7 @@ struct Parts<'a> {
     markers: &'a mut MarkerSet,
     syntax: &'a mut Option<Syntax>,
     document: &'a mut Option<Document>,
+    folds: &'a mut Folds,
 }
 
 impl Parts<'_> {
@@ -887,7 +929,9 @@ impl Parts<'_> {
             syntax.before_insert(self.text, pos, s);
         }
         self.text.insert(pos, s);
-        self.markers.on_insert(pos, s.chars().count());
+        let inserted = s.chars().count();
+        self.markers.on_insert(pos, inserted);
+        self.folds.on_insert(pos, inserted);
     }
 
     fn delete(&mut self, range: Range<usize>) -> String {
@@ -899,6 +943,7 @@ impl Parts<'_> {
             syntax.before_delete(self.text, range.clone());
         }
         let deleted = self.text.remove(range.clone());
+        self.folds.on_delete(range.clone());
         self.markers.on_delete(range);
         deleted
     }

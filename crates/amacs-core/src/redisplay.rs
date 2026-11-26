@@ -71,7 +71,11 @@ fn line_number(
         return (number, faces::LINE_NUMBER_CURRENT);
     }
     let number = match buffer.line_numbers {
-        LineNumbers::Relative => line.abs_diff(point_line),
+        // Relative numbers are counts for moving by lines, which steps
+        // over hidden lines.
+        LineNumbers::Relative => {
+            line.abs_diff(point_line) - buffer.folds().hidden_lines_between(text, line, point_line)
+        }
         _ => line + 1,
     };
     (format!("{number:>digits$} "), faces::LINE_NUMBER)
@@ -119,6 +123,10 @@ impl Editor {
         for id in &leaves {
             let buffer = self.windows[*id].buffer;
             self.buffers[buffer].update_syntax();
+        }
+        // Point can have been put among hidden lines outside any command.
+        self.settle_points();
+        for id in &leaves {
             self.scroll_to_point(*id);
         }
 
@@ -313,8 +321,13 @@ impl Editor {
         let point = buffer.marker(window.point);
         let point_line = text.line_of(point);
         let window_start = buffer.marker(window.start);
-        // What the window can show at most: a char per cell.
-        let shown = window_start..(window_start + rows * width).min(text.len());
+        // What the window can show at most: a char per cell, unless lines
+        // are hidden between those that it shows.
+        let shown = if buffer.folds().is_empty() {
+            window_start..(window_start + rows * width).min(text.len())
+        } else {
+            self.visible_range(id)
+        };
         let highlights =
             buffer.highlights(text.char_to_byte(shown.start)..text.char_to_byte(shown.end));
         let mut decorations = self.decorations(id, shown, highlights.as_ref());
@@ -390,6 +403,16 @@ impl Editor {
             if row.contains(point) {
                 let col = point_col.unwrap_or(end_col).min(width - 1);
                 cursor = Some((row_index as u16, (gutter + col) as u16));
+            }
+            if row.folded {
+                // The mark that lines are hidden: after the text, or over
+                // its last cell on a row that is full.
+                let mark = [('…', faces::FOLD)];
+                if end_col < width.saturating_sub(1).max(1) {
+                    line.push("…", faces::FOLD);
+                } else {
+                    overlay_cells(&mut line, gutter + end_col - 1, 1, &mark, faces::FOLD);
+                }
             }
             let fill = decorations.fill(line_index);
             // Rows that break between words have no mark of it: the

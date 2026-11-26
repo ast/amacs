@@ -140,6 +140,49 @@ impl Editor {
         (buffer.name.as_str(), buffer.marker(window.point))
     }
 
+    /// Hides lines of a buffer, as [`Buffer::hide_lines`] has it. Point in
+    /// a window that shows the buffer moves out of what is hidden, to the
+    /// end of the line before it: else the lines would be shown again at
+    /// once, since a command that leaves point in hidden lines opens them.
+    pub fn hide_lines(&mut self, buffer: BufferId, range: std::ops::Range<usize>) {
+        if self.buffers[buffer].hide_lines(range).is_none() {
+            return;
+        }
+        let points: Vec<_> = self
+            .windows
+            .values()
+            .filter(|window| window.buffer == buffer)
+            .map(|window| window.point)
+            .collect();
+        let buffer = &mut self.buffers[buffer];
+        for point in points {
+            let shown = buffer.folds().visible(buffer.marker(point));
+            buffer.set_marker(point, shown);
+        }
+    }
+
+    /// Shows the hidden lines that point is on, in every window: the folds
+    /// around point are opened and those beside it stay. This is what
+    /// makes a jump into hidden lines, by a search or to an error, land on
+    /// text that is seen.
+    pub(crate) fn settle_points(&mut self) {
+        let hidden: Vec<_> = self
+            .windows
+            .values()
+            .filter_map(|window| {
+                let buffer = &self.buffers[window.buffer];
+                let point = buffer.marker(window.point);
+                buffer
+                    .folds()
+                    .hidden(point)
+                    .then_some((window.buffer, point))
+            })
+            .collect();
+        for (buffer, point) in hidden {
+            self.buffers[buffer].reveal(point);
+        }
+    }
+
     /// The chars a window shows: from its start to the end of its last row.
     pub fn visible_range(&self, id: WindowId) -> std::ops::Range<usize> {
         let window = &self.windows[id];

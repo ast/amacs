@@ -451,6 +451,7 @@ impl Editor {
         const SELF_INSERT: &str = "self-insert-command";
         let amalgamate = self.this_command.as_deref() == Some(SELF_INSERT)
             && self.last_command.as_deref() == Some(SELF_INSERT);
+        self.settle_points();
         self.end_undo_step(amalgamate);
         let keep_mark = std::mem::take(&mut self.keep_mark);
         if let Some(buf) = self.buffers.get_mut(buffer) {

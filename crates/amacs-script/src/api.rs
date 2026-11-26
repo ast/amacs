@@ -1046,6 +1046,53 @@ pub const API: &[ApiFn] = api! {
             ed.buffer_mut().clear_text_faces(range);
             Ok(Value::Void)
         };
+    "hide-lines!" (2, Some(2)) "Hide the lines of the current buffer that the text between two positions touches; an end at the start of a line leaves that line shown. The line before them shows a mark that lines are hidden after it. The first line of a buffer is never hidden. The lines stay hidden as the text changes, until show-lines! or reveal! shows them, or a command leaves point among them. Lines that are hidden within hidden lines stay so when the outer ones are shown. Point in a window moves to the line before what is hidden." =>
+        |ed, args| {
+            let (a, b) = (pos(ed, args, 0)?, pos(ed, args, 1)?);
+            ed.hide_lines(ed.window().buffer, a.min(b)..a.max(b));
+            Ok(Value::Void)
+        };
+    "show-lines!" (0, Some(2)) "Show hidden lines of the current buffer again: those whose first line starts in the text between two positions, or all of them." =>
+        |ed, args| {
+            let range = match args.len() {
+                0 => None,
+                2 => {
+                    let (a, b) = (pos(ed, args, 0)?, pos(ed, args, 1)?);
+                    Some(a.min(b)..a.max(b))
+                }
+                _ => return Err(CmdError::msg("give both ends of the range, or neither")),
+            };
+            ed.buffer_mut().show_lines(range);
+            Ok(Value::Void)
+        };
+    "reveal!" (0, Some(1)) "Show the line that a position (default point) is on, if it is hidden: all hidden lines around it are shown, and those that are hidden beside it stay so." =>
+        |ed, args| {
+            let pos = pos_or_point(ed, args, 0)?;
+            ed.buffer_mut().reveal(pos);
+            Ok(Value::Void)
+        };
+    "hidden?" (0, Some(1)) "Whether a position (default point) is on a hidden line." =>
+        |ed, args| {
+            let pos = pos_or_point(ed, args, 0)?;
+            Ok(ed.buffer().folds().hidden(pos).into())
+        };
+    "hidden-ranges" (0, Some(0)) "The hidden lines of the current buffer, in order: a list of lists of the start of the first hidden line and the end of the last one with its newline, which is what hide-lines! takes. Lines that are hidden within others come after them." =>
+        |ed, _| {
+            let len = ed.buffer().len();
+            Ok(Value::List(
+                ed.buffer()
+                    .folds()
+                    .all()
+                    .iter()
+                    .map(|fold| {
+                        Value::List(vec![
+                            Value::Int((fold.start + 1) as i64),
+                            Value::Int((fold.end + 1).min(len) as i64),
+                        ])
+                    })
+                    .collect(),
+            ))
+        };
     "set-line-signs!" (1, Some(1)) "Replace the marks beside the lines of the current buffer: a list of lists of a line number, counting from 1, and the name of the face to draw its mark in. The marks are shown where the line numbers are." =>
         |ed, args| {
             let Value::List(entries) = &args[0] else {

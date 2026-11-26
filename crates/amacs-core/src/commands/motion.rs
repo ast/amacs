@@ -36,10 +36,34 @@ pub fn backward_word_pos(text: &Text, pos: usize) -> usize {
     pos
 }
 
+/// Where a motion ends that came to a position: hidden lines are stepped
+/// over, forward to the line after them and back to the line before them.
+/// Forward, `None` if all lines to the end of the text are hidden.
+fn step_over_hidden(ed: &Editor, pos: usize, forward: bool) -> Option<usize> {
+    let buffer = ed.buffer();
+    buffer
+        .folds()
+        .step(pos.min(buffer.len()), forward, buffer.len())
+}
+
+/// Puts point where a motion ends that came to a position, outside hidden
+/// lines: before them if there is no line after them.
+fn set_point_shown(ed: &mut Editor, pos: usize, forward: bool) {
+    let pos = step_over_hidden(ed, pos, forward)
+        .or_else(|| step_over_hidden(ed, pos, false))
+        .unwrap_or(pos);
+    ed.set_point(pos);
+}
+
 fn move_chars(ed: &mut Editor, delta: i64) -> CmdResult {
     let len = ed.buffer().len() as i64;
     let target = ed.point() as i64 + delta;
-    ed.set_point(target.clamp(0, len) as usize);
+    let clamped = target.clamp(0, len) as usize;
+    match step_over_hidden(ed, clamped, delta > 0) {
+        Some(pos) => ed.set_point(pos),
+        // Lines are hidden from here to the end of the text.
+        None => return Err(CmdError::msg("End of buffer")),
+    }
     if target < 0 {
         Err(CmdError::msg("Beginning of buffer"))
     } else if target > len {
@@ -66,20 +90,33 @@ fn move_lines(ed: &mut Editor, delta: i64) -> CmdResult {
         .window()
         .goal_col
         .unwrap_or_else(|| column_of(text, point, tab));
-    let line = text.line_of(point) as i64;
-    let last = text.len_lines() as i64 - 1;
-    let target = (line + delta).clamp(0, last);
-    let pos = pos_at_column(text, target as usize, goal, tab);
+    // Line by line, since lines that are hidden are stepped over.
+    let folds = ed.buffer().folds();
+    let mut target = text.line_of(point);
+    let mut stopped = false;
+    for _ in 0..delta.unsigned_abs() {
+        let next = if delta > 0 {
+            folds.next_line(text, target)
+        } else {
+            folds.previous_line(text, target)
+        };
+        match next {
+            Some(line) => target = line,
+            None => {
+                stopped = true;
+                break;
+            }
+        }
+    }
+    let pos = pos_at_column(text, target, goal, tab);
 
     ed.set_point(pos);
     ed.window_mut().goal_col = Some(goal);
     ed.keep_goal = true;
-    if line + delta < 0 {
-        Err(CmdError::msg("Beginning of buffer"))
-    } else if line + delta > last {
-        Err(CmdError::msg("End of buffer"))
-    } else {
-        Ok(())
+    match (stopped, delta > 0) {
+        (false, _) => Ok(()),
+        (true, true) => Err(CmdError::msg("End of buffer")),
+        (true, false) => Err(CmdError::msg("Beginning of buffer")),
     }
 }
 
@@ -123,13 +160,13 @@ pub fn backward_word(ed: &mut Editor) -> CmdResult {
 
 fn forward_words(ed: &mut Editor, count: u64) -> CmdResult {
     let pos = (0..count).fold(ed.point(), |pos, _| forward_word_pos(ed.text(), pos));
-    ed.set_point(pos);
+    set_point_shown(ed, pos, true);
     Ok(())
 }
 
 fn backward_words(ed: &mut Editor, count: u64) -> CmdResult {
     let pos = (0..count).fold(ed.point(), |pos, _| backward_word_pos(ed.text(), pos));
-    ed.set_point(pos);
+    set_point_shown(ed, pos, false);
     Ok(())
 }
 
@@ -156,7 +193,7 @@ pub fn forward_paragraph(ed: &mut Editor) -> CmdResult {
     } else {
         text.len()
     };
-    ed.set_point(pos);
+    set_point_shown(ed, pos, true);
     Ok(())
 }
 
@@ -176,7 +213,7 @@ pub fn backward_paragraph(ed: &mut Editor) -> CmdResult {
         line -= 1;
     }
     let pos = text.line_start(line);
-    ed.set_point(pos);
+    set_point_shown(ed, pos, false);
     Ok(())
 }
 
@@ -188,7 +225,7 @@ pub fn beginning_of_buffer(ed: &mut Editor) -> CmdResult {
 
 pub fn end_of_buffer(ed: &mut Editor) -> CmdResult {
     set_mark_silently(ed);
-    ed.set_point(usize::MAX);
+    set_point_shown(ed, usize::MAX, false);
     Ok(())
 }
 
@@ -208,7 +245,7 @@ fn page_rows(ed: &Editor) -> usize {
     ed.window().text_rows().saturating_sub(2).max(1)
 }
 
-fn window_geometry(ed: &Editor) -> (usize, usize, Flow) {
+fn window_geometry(ed: &Editor) -> (usize, usize, Flow<'_>) {
     let width = ed.text_width(ed.selected());
     (ed.window().text_rows(), width, ed.buffer().flow())
 }
@@ -248,6 +285,7 @@ pub fn scroll_down(ed: &mut Editor) -> CmdResult {
     set_window_start(ed, new_start);
 
     // Find the last row now shown and pull point up to it if it is below.
+    let tab = ed.buffer().flow();
     let text = ed.text();
     let mut last_row = new_start;
     let mut visible = false;

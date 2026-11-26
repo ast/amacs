@@ -35,6 +35,7 @@ pub(crate) fn scroll_rows(ed: &mut Editor, rows: i64) -> CmdResult {
     let marker = ed.window().start;
     ed.buffer_mut().set_marker(marker, new_start);
     // Keep point on a row that is shown.
+    let tab = ed.buffer().flow();
     let height = ed.window().text_rows().max(1);
     let last = rows_forward(ed.text(), new_start, height - 1, width, tab);
     let point = ed.point();

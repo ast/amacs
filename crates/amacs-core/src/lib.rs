@@ -19,6 +19,7 @@ mod extend;
 mod faces;
 pub mod file_system;
 mod files;
+mod fold;
 mod format;
 mod frame;
 mod history;

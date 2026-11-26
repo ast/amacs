@@ -48,7 +48,9 @@ pub const JUMP_LABEL: FaceId = FaceId(22);
 pub const JUMP_BACKGROUND: FaceId = FaceId(23);
 /// A word that no dictionary knows.
 pub const MISSPELLED: FaceId = FaceId(24);
-const FIRST_SYNTAX: u32 = 25;
+/// The mark at the end of a line that lines are hidden after.
+pub const FOLD: FaceId = FaceId(25);
+const FIRST_SYNTAX: u32 = 26;
 
 /// How serious a diagnostic is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -199,6 +201,7 @@ fn built_in_faces() -> Vec<(String, FaceSpec)> {
             "misspelled",
             face("", "").underlined_in("underline-warning").wavy(),
         ),
+        ("fold", face("fg-dim", "")),
     ];
     for highlight in Highlight::ALL {
         let spec = match highlight {
@@ -574,6 +577,7 @@ mod tests {
         assert_eq!(faces.face_id("diagnostic-error"), Some(DIAGNOSTIC_ERROR));
         assert_eq!(faces.face_id("hl-line"), Some(HL_LINE));
         assert_eq!(faces.face_id("jump-background"), Some(JUMP_BACKGROUND));
+        assert_eq!(faces.face_id("fold"), Some(FOLD));
         assert_eq!(
             faces.face_id("line-number-current"),
             Some(LINE_NUMBER_CURRENT)
