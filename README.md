@@ -60,8 +60,12 @@ Working now:
 - Spelling: a wave under the misspelled words on screen, in several
   languages at once, with Hunspell's dictionaries (below)
 
-Not yet: Org, remote files, and the rest of the later
-milestones. `TODO.md` lists what is left.
+- Files on other hosts, named as tramp names them: `/ssh:host:/path` is
+  visited, saved and listed in the file manager over the user's own
+  `ssh` (below)
+
+Not yet: Org, programs and passwords on other hosts, and the rest of the
+later milestones. `TODO.md` lists what is left.
 
 ## Building and running
 
@@ -227,7 +231,6 @@ Languages: Bash, C, C++, CMake, CSS, Devicetree, Emacs Lisp, Go, HCL and
 Terraform, HTML, JavaScript, JSON, Make, Markdown, Nix, Python, Rust, Scheme,
 TOML, TSX, TypeScript and YAML. The grammars are compiled into the binary.
 Dockerfiles have a mode but no grammar.
-
 
 | Key                           | Does                                                                |
 | ----------------------------- | ------------------------------------------------------------------- |
@@ -467,6 +470,32 @@ done, and files are dragged into a directory of a listing or over to
 another listing, which moves them, or copies them with Control held. A
 press on a part of the directory's name in the first line goes up to that
 directory, and so does the back button of a mouse, one level at a time.
+
+**Files on other hosts** have tramp's names: `C-x C-f /ssh:evo:/etc/hosts`
+visits a file on the host `evo`, `/ssh:me@evo#2222:notes.txt` one under
+the home directory of `me` there, by port 2222, and `C-x d /ssh:evo:`
+lists that home directory. At a prompt that already holds a name, typing
+`//ssh:` starts the name anew, as `/~` does, so nothing has to be deleted
+first. `TAB` completes `/ssh:` to the hosts of `~/.ssh/config` and then
+the names on the host.
+
+Such a file is a file like any other: it is edited, saved with `C-x C-s`,
+and read again when it changes there, and `C-x C-j` lists its directory.
+In the file manager, `C`, `R`, `D` and `+` work on the host, and with a
+listing of this machine beside one of a host, `C` and `R` carry files
+from one to the other, directories with what is in them. All of it
+happens in the background: the editor does not stand still for a slow
+line, and says so within seconds when a host does not answer.
+
+Nothing is installed on the host. The editor runs `ssh` itself and talks
+SFTP to it, so what `ssh host` needs to work in a terminal is all that is
+needed: the user's `~/.ssh/config`, keys, agent and jump hosts apply, and
+one connection per host is kept and shared (`ControlMaster`). For now the
+host must be one that `ssh` reaches without asking anything: with a key
+or an agent, and a host key that is known already. Not there yet either:
+`/sudo:` and containers, and programs on the host, so a remote buffer has
+no `M-!`, terminal, git, formatter or language server. `(remote-hosts)`
+lists the connections and `(remote-disconnect "/ssh:evo:")` ends one.
 
 **Git**: `C-x g` shows the status of the repository of the current buffer,
 in sections that `TAB` folds. `s` and `u` stage and unstage the file or hunk

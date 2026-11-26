@@ -83,6 +83,23 @@
 (add-hook! 'scheme-mode-hook (lambda () (enable-mode! 'paredit-mode)))
 (add-hook! 'emacs-lisp-mode-hook (lambda () (enable-mode! 'paredit-mode)))
 
+;;; Files and other hosts
+;;;
+;;; A file on another host is named as tramp names it and needs nothing set
+;;; here: C-x C-f /ssh:host:/path visits it and C-x d /ssh:host: lists its
+;;; home directory, over the ssh of ~/.ssh/config. At a prompt that holds
+;;; a name already, //ssh: starts anew.
+
+;; In the file manager, b and one of these keys goes to a directory. One
+;; on another host is as good as any; put your own hosts here.
+(set-option! 'dired-quick-access
+             '(("h" "~" "Home")
+               ("d" "~/Downloads" "Downloads")
+               ("s" "~/src" "Source")
+               ;; ("e" "/ssh:evo:" "evo")
+               ;; ("n" "/ssh:evo:/etc/nixos" "evo's NixOS")
+               ))
+
 ;;; Language servers
 ;;;
 ;;; A server is started for a project when the first of its files is opened
@@ -348,4 +365,4 @@
 ;;;   ibuffer, repeat (H-z), help beyond describe-key and describe-command
 ;;;   rainbow delimiters, matching-bracket highlight
 ;;;   the breadcrumb header line, the debugger, Copilot
-;;;   git, the file manager
+;;;   on other hosts: programs, passwords, sudo, git and language servers

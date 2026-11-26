@@ -13,22 +13,26 @@ the text the line starts with."
 
 (define (read-file-name prompt . initial)
   "Reads a file name, with completion. The input starts as the optional
-argument, or else as the working directory."
-  (await (%read-string prompt
-                       (if (null? initial)
-                           (string-append (working-directory) "/")
-                           (car initial))
-                       'file)))
+argument, or else as the working directory. As in Emacs, // and /~ in what
+is typed start the name anew, and what is before them is not returned."
+  (%typed-file-name
+   (await (%read-string prompt
+                        (if (null? initial)
+                            (string-append (working-directory) "/")
+                            (car initial))
+                        'file))))
 
 (define (read-directory-name prompt . initial)
   "Reads where to put something: the name of a directory, or a new name in
 one. Directories are offered as completions; RET takes a name that ends in
-a slash as it stands, and otherwise completes it."
-  (await (%read-string prompt
-                       (if (null? initial)
-                           (string-append (working-directory) "/")
-                           (car initial))
-                       'directory)))
+a slash as it stands, and otherwise completes it. As in Emacs, // and /~
+in what is typed start the name anew."
+  (%typed-file-name
+   (await (%read-string prompt
+                        (if (null? initial)
+                            (string-append (working-directory) "/")
+                            (car initial))
+                        'directory))))
 
 (define (read-buffer-name prompt)
   "Reads a buffer name, with completion."

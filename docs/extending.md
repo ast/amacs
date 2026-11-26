@@ -251,10 +251,19 @@ modes: `(set-mode-line-text! "[working]")`, and `#f` to take it away.
 `(directory-entries dir)`, `(file-exists? name)`, `(file-directory? name)`,
 `(make-directory name)`, `(delete-file name)`, `(rename-file from to)`,
 `(read-file name)`, `(expand-file-name name)`, `(abbreviate-file-name name)`,
-`(file-name-directory name)`, `(file-name-nondirectory name)`. Copying is
-left to `cp`, through `run-process`, so that it does not hold the editor up.
+`(file-name-directory name)`, `(file-name-nondirectory name)`.
+`(copy-file from to)` copies a file, or a directory with what is in it, and
+`(move-file from to)` moves one where `rename-file` cannot; both work in the
+background, so they do not hold the editor up.
 `(read-file-name "Prompt: ")` and `(read-directory-name "Prompt: ")` ask for
 names with completion.
+
+All of these take the name of a file on another host as tramp writes it,
+`/ssh:user@host:/path`. `(file-remote? name)` says whether a name is one,
+`(file-remote-prefix name)` is the part that names the host, `/ssh:user@host:`,
+and `(file-local-name name)` the path there. What takes long on another
+host (listing, copying, moving, deleting) waits as `run-process` does,
+while the editor goes on working.
 
 A file is read into a buffer in one go, so the editor looks first:
 `(find-file name)` is an error for a file that is not text, and for one

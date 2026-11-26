@@ -19,7 +19,7 @@ use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use std::cell::Cell;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use amacs_remote::{Connections, Location, Remote, Sftp};
 pub use amacs_remote::{DirEntry, FileType, Metadata};
@@ -77,6 +77,18 @@ pub trait FileSystem {
     /// Creates a directory, and the directories above it that are
     /// missing.
     fn mkdir(&self, path: &Path) -> io::Result<()>;
+
+    /// Makes a link at `link` that points to `target`, taken as written.
+    fn symlink(&self, target: &Path, link: &Path) -> io::Result<()>;
+
+    /// Gives a file permissions, the time it was last changed, or both.
+    /// A link is followed.
+    fn set_attributes(
+        &self,
+        path: &Path,
+        mode: Option<u32>,
+        modified: Option<SystemTime>,
+    ) -> io::Result<()>;
 }
 
 /// The files of this machine.
@@ -173,6 +185,28 @@ impl FileSystem for Local {
     fn mkdir(&self, path: &Path) -> io::Result<()> {
         fs::create_dir_all(path)
     }
+
+    fn symlink(&self, target: &Path, link: &Path) -> io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    fn set_attributes(
+        &self,
+        path: &Path,
+        mode: Option<u32>,
+        modified: Option<SystemTime>,
+    ) -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(mode) = mode {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+        }
+        if let Some(modified) = modified {
+            // Reading is enough to set the time of what one owns, and
+            // all that a directory can be opened for.
+            File::open(path)?.set_modified(modified)?;
+        }
+        Ok(())
+    }
 }
 
 /// The files of the host at the other end of an SFTP connection.
@@ -227,6 +261,19 @@ impl FileSystem for Sftp {
 
     fn mkdir(&self, path: &Path) -> io::Result<()> {
         self.create_dir_all(path)
+    }
+
+    fn symlink(&self, target: &Path, link: &Path) -> io::Result<()> {
+        Sftp::symlink(self, target, link)
+    }
+
+    fn set_attributes(
+        &self,
+        path: &Path,
+        mode: Option<u32>,
+        modified: Option<SystemTime>,
+    ) -> io::Result<()> {
+        Sftp::set_attributes(self, path, mode, modified)
     }
 }
 
@@ -421,6 +468,105 @@ pub fn mkdir(path: &Path) -> io::Result<()> {
     on(path, |files, path| files.mkdir(path))
 }
 
+/// Makes a link at `link` that points to `target`, taken as written.
+pub fn symlink(target: &Path, link: &Path) -> io::Result<()> {
+    on(link, |files, link| files.symlink(target, link))
+}
+
+/// Gives a file permissions, the time it was last changed, or both.
+pub fn set_attributes(
+    path: &Path,
+    mode: Option<u32>,
+    modified: Option<SystemTime>,
+) -> io::Result<()> {
+    on(path, |files, path| {
+        files.set_attributes(path, mode, modified)
+    })
+}
+
+/// A name taken apart: the start that names the host, such as
+/// `/ssh:evo:`, and the path there as it is written. `None` for a local
+/// name, and for one that starts as a remote one and is not whole.
+pub fn split(path: &Path) -> Option<(String, PathBuf)> {
+    match remote(path) {
+        Ok(Some(remote)) => Some((remote.host(), remote.path)),
+        _ => None,
+    }
+}
+
+/// Whether two names are of files that one connection, or this machine,
+/// holds both.
+fn same_host(a: &Path, b: &Path) -> io::Result<bool> {
+    Ok(remote(a)?.map(|remote| remote.hops) == remote(b)?.map(|remote| remote.hops))
+}
+
+/// Copies a file to a new name, on the same host or another: a directory
+/// with everything in it, a link as a link. Permissions and times go
+/// along; owners do not. What is copied between two places of one host
+/// still travels through this machine. A file is whole under its new
+/// name or not there, but a directory that could not be copied whole is
+/// left as far as it got. It is an error if something has the new name.
+pub fn copy(from: &Path, to: &Path) -> io::Result<()> {
+    if symlink_metadata(to).is_ok() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("{} exists already", to.display()),
+        ));
+    }
+    if same_host(from, to)? && to.starts_with(from) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a directory is not copied into itself",
+        ));
+    }
+    copy_tree(from, to)
+}
+
+fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
+    let meta = symlink_metadata(from)?;
+    if meta.is_symlink() {
+        symlink(&read_link(from)?, to)
+    } else if meta.is_dir() {
+        mkdir(to)?;
+        for entry in read_dir(from)? {
+            copy_tree(&from.join(&entry.name), &to.join(&entry.name))?;
+        }
+        // Last, so that a directory that may not be written to can be
+        // filled, and its time is not that of the filling.
+        set_attributes(to, Some(meta.mode), meta.modified)
+    } else if meta.is_file() {
+        read_with(from, |reader| {
+            write_atomically(to, |out| io::copy(reader, out).map(drop))
+        })?;
+        set_attributes(to, Some(meta.mode), meta.modified)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is neither a file nor a directory", from.display()),
+        ))
+    }
+}
+
+/// Moves a file or directory to a new name: by renaming where that can
+/// be, and else, as between hosts, by copying it and deleting the
+/// original once the copy is whole. It is an error if something has the
+/// new name.
+pub fn move_to(from: &Path, to: &Path) -> io::Result<()> {
+    if symlink_metadata(to).is_ok() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("{} exists already", to.display()),
+        ));
+    }
+    match rename(from, to) {
+        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+            copy(from, to)?;
+            delete(from)
+        }
+        result => result,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -520,6 +666,27 @@ mod tests {
             ]
         );
 
+        // Links and attributes.
+        files.symlink(Path::new("a/b"), &at("made")).unwrap();
+        assert_eq!(fs::read_link(at("made")).unwrap(), Path::new("a/b"));
+        fs::remove_file(at("made")).unwrap();
+        let then = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        for name in ["a/b/file", "a/b"] {
+            files
+                .set_attributes(&at(name), Some(0o750), Some(then))
+                .unwrap();
+            let meta = fs::metadata(at(name)).unwrap();
+            assert_eq!(meta.permissions().mode() & 0o7777, 0o750);
+            assert_eq!(meta.modified().unwrap(), then);
+        }
+        files.set_attributes(&at("a/b/file"), None, None).unwrap();
+        files
+            .set_attributes(&at("a/b/file"), Some(0o600), None)
+            .unwrap();
+        let meta = fs::metadata(at("a/b/file")).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o7777, 0o600);
+        assert_eq!(meta.modified().unwrap(), then);
+
         // Renaming, also onto a name that is taken.
         files.rename(&at("a/b/file"), &at("moved")).unwrap();
         files.rename(&at("moved"), &at("file")).unwrap();
@@ -582,6 +749,87 @@ mod tests {
         assert_eq!(half.kind(), io::ErrorKind::InvalidInput);
         let unreached = metadata(Path::new("/sudo::/etc")).unwrap_err();
         assert_eq!(unreached.kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn files_are_copied_and_moved_between_here_and_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let here = |name: &str| root.join(name);
+        let there = |name: &str| PathBuf::from(format!("/sftp-test::{}/{name}", root.display()));
+        let then = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+
+        // More than one piece of a file, and all that a directory holds.
+        let big: Vec<u8> = (0..300_000u32).map(|n| (n % 251) as u8).collect();
+        fs::create_dir_all(here("tree/inner")).unwrap();
+        fs::write(here("tree/big"), &big).unwrap();
+        fs::write(here("tree/inner/run"), "#!/bin/sh\n").unwrap();
+        fs::set_permissions(here("tree/inner/run"), fs::Permissions::from_mode(0o755)).unwrap();
+        symlink("inner/run", here("tree/link")).unwrap();
+        symlink("nowhere", here("tree/broken")).unwrap();
+        File::open(here("tree/big"))
+            .unwrap()
+            .set_modified(then)
+            .unwrap();
+        File::open(here("tree/inner"))
+            .unwrap()
+            .set_modified(then)
+            .unwrap();
+
+        let same = |copy: &Path| {
+            assert_eq!(fs::read(copy.join("big")).unwrap(), big);
+            let run = fs::metadata(copy.join("inner/run")).unwrap();
+            assert_eq!(run.permissions().mode() & 0o7777, 0o755);
+            assert_eq!(
+                fs::read_link(copy.join("link")).unwrap(),
+                Path::new("inner/run")
+            );
+            assert_eq!(
+                fs::read_link(copy.join("broken")).unwrap(),
+                Path::new("nowhere")
+            );
+            let modified = |name: &str| fs::metadata(copy.join(name)).unwrap().modified().unwrap();
+            assert_eq!(modified("big"), then);
+            assert_eq!(modified("inner"), then);
+        };
+        copy(&here("tree"), &there("up")).unwrap();
+        same(&here("up"));
+        copy(&there("up"), &here("down")).unwrap();
+        same(&here("down"));
+        copy(&there("up"), &there("beside")).unwrap();
+        same(&here("beside"));
+        copy(&here("tree"), &here("local")).unwrap();
+        same(&here("local"));
+
+        // Nothing is written over, and nothing goes into itself.
+        let taken = copy(&here("tree"), &there("up")).unwrap_err();
+        assert_eq!(taken.kind(), io::ErrorKind::AlreadyExists);
+        let inside = copy(&there("up"), &there("up/inner/again")).unwrap_err();
+        assert_eq!(inside.to_string(), "a directory is not copied into itself");
+        assert!(!here("up/inner/again").exists());
+        // A name that only starts alike is another place.
+        copy(&there("up"), &there("upper")).unwrap();
+
+        // Moving: a rename on one host, a copy and a deletion between two.
+        move_to(&there("up"), &there("renamed")).unwrap();
+        assert!(!here("up").exists());
+        same(&here("renamed"));
+        move_to(&there("renamed"), &here("fetched")).unwrap();
+        assert!(!here("renamed").exists());
+        same(&here("fetched"));
+        let taken = move_to(&here("fetched"), &there("down")).unwrap_err();
+        assert_eq!(taken.kind(), io::ErrorKind::AlreadyExists);
+        assert!(here("fetched").exists());
+
+        assert_eq!(
+            split(&there("x")),
+            Some(("/sftp-test::".to_owned(), root.join("x")))
+        );
+        assert_eq!(
+            split(Path::new("/ssh:me@evo:")),
+            Some(("/ssh:me@evo:".to_owned(), PathBuf::new()))
+        );
+        assert_eq!(split(&root), None);
     }
 
     #[test]

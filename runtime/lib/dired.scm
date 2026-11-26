@@ -176,16 +176,26 @@ the buffer is not one of its own."
         [(dired-row-runs? row) 'dired-executable]
         [else #f]))
 
-;; Writes the listing into the current buffer and puts point on the row of
-;; a path, or else on the row it was on, or else on the first.
-(define (%dired-render state . target)
+;; Reads the directory of a buffer of the file manager and shows it there.
+;; A directory on another host is waited for, so the buffer is made the
+;; current one only once it has been read, and may be gone by then.
+(define (%dired-render buffer state . target)
+  (let ((rows (%dired-collect state (dired-state-directory state) 0)))
+    (when (and (member buffer (buffer-list))
+               (eq? state (hash-table-ref %dired-buffers buffer)))
+      (with-current-buffer buffer
+        (%dired-show state rows target)))))
+
+;; Writes rows into the current buffer and puts point on the row of a path
+;; (`target` is a list of it, or empty), or else on the row it was on, or
+;; else on the first.
+(define (%dired-show state rows target)
   (let* ((previous (and (pair? (vector->list (dired-state-rows state)))
                         (%dired-row-index state)))
          (keep (cond [(pair? target) (car target)]
                      [previous (dired-row-path
                                 (vector-ref (dired-state-rows state) previous))]
                      [else #f]))
-         (rows (%dired-collect state (dired-state-directory state) 0))
          (icons (option 'dired-icons))
          (parts '())
          (faces '())
@@ -298,18 +308,32 @@ is marked, the file that point is on."
 
 (define (dired-refresh . target)
   "Reads the directory of the current buffer again. Point stays on the same
-file, or goes to the one named by the optional argument."
-  (apply %dired-render (dired-state) target))
+file, or goes to the one named by the optional argument. A directory on
+another host is read while the editor goes on working."
+  (apply %dired-render (buffer-name) (dired-state) target))
+
+;; Shows the current buffer again from what is known, without reading the
+;; directory: for what changes the marks only.
+(define (%dired-redraw)
+  (let ((state (dired-state)))
+    (%dired-show state (vector->list (dired-state-rows state)) '())))
+
+;; Whether a directory can be read without first reaching its host.
+(define (%dired-at-hand? directory)
+  (let ((host (file-remote-prefix directory)))
+    (or (not host)
+        (equal? (assoc host (remote-hosts)) (list host "connected")))))
 
 ;; Reads again every directory that is listed in a buffer, after files
-;; have changed.
+;; have changed. A host that is not connected is not waited for.
 (define (%dired-refresh-all)
   (for-each
    (lambda (name)
-     (if (member name (buffer-list))
-         (with-current-buffer name
-           (guard (e (#t #f)) (dired-refresh)))
-         (hash-table-delete! %dired-buffers name)))
+     (let ((state (hash-table-ref %dired-buffers name)))
+       (cond
+        [(not (member name (buffer-list))) (hash-table-delete! %dired-buffers name)]
+        [(%dired-at-hand? (dired-state-directory state))
+         (guard (e (#t #f)) (%dired-render name state))])))
    (hash-table-keys %dired-buffers)))
 
 ;;; Opening
@@ -318,10 +342,24 @@ file, or goes to the one named by the optional argument."
   (let ((short (abbreviate-file-name directory)))
     (if (string-suffix? "/" short) short (string-append short "/"))))
 
+;; The name of a directory that is there, or an error. One on another
+;; host is waited for, which is also when its host is reached, and its
+;; name is made whole: /ssh:host: is the home directory there.
+(define (%dired-find-directory directory)
+  (cond
+   [(file-remote? directory)
+    (unless (%dired-at-hand? directory)
+      (message "Reaching " (or (file-remote-prefix directory) directory) "..."))
+    (let ((found (%file-job 'directory directory)))
+      (message "")
+      found)]
+   [(file-directory? directory) directory]
+   [else (error (string-append directory " is not a directory"))]))
+
 (define (dired-open directory . target)
   "Shows a directory in the file manager, in the selected window. The
 optional argument is the full name of a file to put point on."
-  (let* ((directory (expand-file-name directory))
+  (let* ((directory (%dired-find-directory (expand-file-name directory)))
          (name (%dired-buffer-name directory))
          (from (buffer-name))
          ;; The buffer left is not kept, unless another window shows it.
@@ -329,8 +367,6 @@ optional argument is the full name of a file to put point on."
                          (hash-table-contains? %dired-buffers from)
                          (not (equal? from name))
                          (not (member from (map window-buffer (cdr (window-list))))))))
-    (unless (file-directory? directory)
-      (error (string-append directory " is not a directory")))
     (set! %dired-history
           (cons directory (delete directory %dired-history)))
     (switch-to-buffer name)
@@ -367,7 +403,12 @@ act on the files. Start it with M-x dired.")
 
 ;; Hands files to the program of the dired-open-program option.
 (define (%dired-open-externally paths)
-  (let ((program (option 'dired-open-program)))
+  (let ((program (option 'dired-open-program))
+        (far (filter file-remote? paths)))
+    (unless (null? far)
+      (error (string-append (file-name-nondirectory (car far))
+                            " is on another host: copy it here to open it with "
+                            program)))
     (for-each (lambda (path) (start-process program (list path))) paths)
     (message "Opened " (%dired-describe paths) " with " program)))
 
@@ -377,6 +418,9 @@ act on the files. Start it with M-x dired.")
 ;; nonsense.
 (define (%dired-visit path)
   (cond
+   ;; On another host, finding out what a file is and reading it are one
+   ;; errand.
+   [(file-remote? path) (%visit-remote path #f #t)]
    [(not (file-text? path)) (%dired-open-externally (list path))]
    [(file-large? path)
     (when (y-or-n? (string-append (file-name-nondirectory path) " is "
@@ -511,7 +555,7 @@ the dired-open-program option, whatever they are."
     (if mark
         (hash-table-set! (dired-state-marks state) path mark)
         (hash-table-delete! (dired-state-marks state) path))
-    (dired-refresh)
+    (%dired-redraw)
     (dired-next-line)))
 
 (define-command (dired-mark)
@@ -529,7 +573,7 @@ the dired-open-program option, whatever they are."
 (define-command (dired-unmark-all)
   "Take every mark and flag off."
   (hash-table-clear! (dired-state-marks (dired-state)))
-  (dired-refresh))
+  (%dired-redraw))
 
 (define-command (dired-toggle-marks)
   "Mark the files that are not marked and unmark those that are."
@@ -541,7 +585,7 @@ the dired-open-program option, whatever they are."
              (hash-table-delete! (dired-state-marks state) path)
              (hash-table-set! (dired-state-marks state) path #\*))))
      (vector->list (dired-state-rows state)))
-    (dired-refresh)))
+    (%dired-redraw)))
 
 ;;; Acting on files
 
@@ -560,6 +604,8 @@ the dired-open-program option, whatever they are."
            (filter-map
             (lambda (path)
               (guard (e (#t (error-object-message e)))
+                (when (file-remote? path)
+                  (message "Deleting " (file-name-nondirectory path) "..."))
                 (delete-file path)
                 #f))
             paths)))
@@ -645,14 +691,28 @@ the dired-open-program option, whatever they are."
     (unless (eqv? (car result) 0)
       (error (string-append program ": " (string-trim (caddr result)))))))
 
+;; Programs run on this machine, in the directory of this buffer if that
+;; is here: cp and mv are for files that are both here.
+(define (%dired-here? . paths)
+  (not (any file-remote? (cons (working-directory) paths))))
+
 (define (%dired-copy from to)
-  (%dired-run "cp" "-a" "-T" "--" from to))
+  (cond
+   [(%dired-here? from to) (%dired-run "cp" "-a" "-T" "--" from to)]
+   [else
+    (message "Copying " (file-name-nondirectory from) "...")
+    (copy-file from to)]))
 
 (define (%dired-move from to)
-  ;; Renaming is at once and cannot leave half a file; between file
-  ;; systems it is not possible, and the files are moved instead.
-  (guard (e (#t (%dired-run "mv" "-T" "--" from to)))
-    (rename-file from to)))
+  (cond
+   [(%dired-here? from to)
+    ;; Renaming is at once and cannot leave half a file; between file
+    ;; systems it is not possible, and the files are moved instead.
+    (guard (e (#t (%dired-run "mv" "-T" "--" from to)))
+      (rename-file from to))]
+   [else
+    (message "Moving " (file-name-nondirectory from) "...")
+    (move-file from to)]))
 
 (define-command (dired-do-copy)
   "Copy the marked files, or the file on this line. The other pane of the
@@ -683,8 +743,9 @@ of the file manager is offered as where to."
 ;;; over: a directory in a listing, or the directory of a listing, in this
 ;;; window or another.
 
-;; What is being dragged: a list of the files and the buffer they were
-;; taken from, from the first movement until the button is let go.
+;; What is being dragged: a list of the files, the buffer they were taken
+;; from and whether it is a single file that is no directory, from the
+;; first movement until the button is let go.
 (define %dired-drag #f)
 
 ;; The index of the row at a position of the current buffer, or #f.
@@ -705,7 +766,12 @@ of the file manager is offered as where to."
                 ;; The bar after a part belongs to it; the first one of a
                 ;; full name is the top directory.
                 (end (if (and (= end pos) (> pos 0)) pos end)))
-           (expand-file-name (if (= end 0) "/" (substring text 0 end)))))))
+           (let ((directory (expand-file-name (if (= end 0) "/" (substring text 0 end)))))
+             ;; The part that names a host stands for the top directory
+             ;; there.
+             (if (equal? directory (file-remote-prefix directory))
+                 (string-append directory "/")
+                 directory))))))
 
 ;; Shows the directory that the part of the first line under a position
 ;; names, with point on where one came from. Returns whether the position
@@ -717,7 +783,7 @@ of the file manager is offered as where to."
                   (%dired-header-directory state pos))))
     (when (and to (not (equal? (%dired-without-slash to) (%dired-without-slash from))))
       (let* ((to (%dired-without-slash to))
-             (prefix (if (equal? to "/") "/" (string-append to "/")))
+             (prefix (if (string-suffix? "/" to) to (string-append to "/")))
              (below (and (string-prefix? prefix from)
                          (car (string-split
                                (substring from (string-length prefix) (string-length from))
@@ -765,7 +831,7 @@ manager."
       (if (hash-table-contains? marks path)
           (hash-table-delete! marks path)
           (hash-table-set! marks path #\*))
-      (dired-refresh))))
+      (%dired-redraw))))
 
 (define-command (dired-mouse-mark-range)
   "Mark the files from the one that point is on to the one that the
@@ -780,7 +846,7 @@ pointer is at."
                            (dired-row-path (vector-ref (dired-state-rows state) index))
                            #\*)
           (loop (+ index 1))))
-      (dired-refresh))))
+      (%dired-redraw))))
 
 (define-command (dired-mouse-menu)
   "Show what can be done with the file that the pointer is at, or with the
@@ -806,7 +872,9 @@ marked files if it is one of them."
     (if (member path marked) marked (list path))))
 
 (define (%dired-without-slash directory)
-  (if (and (> (string-length directory) 1) (string-suffix? "/" directory))
+  ;; The slash of a top directory is all of its name, on any host.
+  (if (and (> (string-length (file-local-name directory)) 1)
+           (string-suffix? "/" directory))
       (substring directory 0 (- (string-length directory) 1))
       directory))
 
@@ -862,7 +930,12 @@ marked files if it is one of them."
 it is one of them, and say where they would go."
   (unless %dired-drag
     (when (%dired-goto-press)
-      (set! %dired-drag (list (%dired-files-at-point) (buffer-name)))))
+      (let ((paths (%dired-files-at-point)))
+        (set! %dired-drag
+              (list paths (buffer-name)
+                    ;; Whether it is one file that a window could show.
+                    (and (null? (cdr paths))
+                         (not (eq? (dired-row-kind (dired-row-at-point)) 'directory))))))))
   (when %dired-drag
     (let* ((paths (car %dired-drag))
            (target (%dired-drop-target))
@@ -875,8 +948,7 @@ it is one of them, and say where they would go."
        [(and directory (pair? (%dired-drop-pairs paths directory)))
         (message (%dired-drop-verb) " " (%dired-describe paths) " to "
                  (abbreviate-file-name directory) "/")]
-       [(and target (not directory)
-             (null? (cdr paths)) (not (file-directory? (car paths))))
+       [(and target (not directory) (caddr %dired-drag))
         (message "Open " (%dired-describe paths) " in that window")]
        [else (message "Nowhere to put " (%dired-describe paths) " here")]))))
 
@@ -902,7 +974,7 @@ shows something else is visited there."
                               (if copy? %dired-copy %dired-move)
                               (if copy? "Copied" "Moved")
                               (cadr drag)))]
-         [(and (not directory) (null? (cdr paths)) (not (file-directory? (car paths))))
+         [(and (not directory) (caddr drag))
           (select-window (car target))
           (%dired-visit (car paths))]
          [else (message "Nothing was moved")])))))

@@ -112,6 +112,53 @@ goes on working, and is there when this returns."
         (%visit-remote (expand-file-name name) anyway #f)
         (%find-file name anyway))))
 
+;; Does work on files in the background and waits for it: see
+;; %start-file-job. Returns what the work gives, or nothing.
+(define (%file-job . what)
+  (let ((outcome (await (apply %start-file-job what))))
+    (cond ((not (car outcome)) (error (cadr outcome)))
+          ((pair? (cdr outcome)) (cadr outcome)))))
+
+(define (directory-entries directory)
+  "What a directory holds, in order of name: for each entry a list of its
+name, 'directory or 'file (a link counts as what it leads to), its size in
+bytes, when it was last changed in seconds since 1970, what it links to if
+it is a link (else #f), and whether it can be run as a program. A directory
+on another host is read while the editor goes on working."
+  (if (file-remote? directory)
+      (%file-job 'list directory)
+      (%directory-entries directory)))
+
+(define (delete-file name)
+  "Deletes a file or a link. A directory is deleted with everything in it.
+On another host that is done while the editor goes on working, and is done
+when this returns."
+  (if (file-remote? name)
+      (%file-job 'delete name)
+      (%delete-file name)))
+
+(define (rename-file from to)
+  "Gives a file or directory another name, which can be in another
+directory on the same file system, and on the same host. It is an error if
+something has the new name already. See move-file for what goes anywhere."
+  (if (or (file-remote? from) (file-remote? to))
+      (%file-job 'rename from to)
+      (%rename-file from to)))
+
+(define (copy-file from to)
+  "Copies a file to a new name, on this machine or on another host: a
+directory with everything in it, a link as a link, with permissions and
+times. The editor goes on working meanwhile. It is an error if something
+has the new name already."
+  (%file-job 'copy from to))
+
+(define (move-file from to)
+  "Moves a file or directory to a new name: by renaming it where that can
+be, and else, as between hosts, by copying it and then deleting it. The
+editor goes on working meanwhile. It is an error if something has the new
+name already."
+  (%file-job 'move from to))
+
 (define (sleep-for milliseconds)
   "Waits, while the editor goes on working."
   (await (%timer milliseconds)))

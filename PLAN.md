@@ -449,7 +449,25 @@ harness. ssh and sudo themselves are tried by hand on `evo`.
    are not carried to a remote file; `ssh` itself was not tried, since
    this machine does not know its own host key and nobody was there to
    accept it.
-3. `dired` on remote paths; copying between local and remote.
+3. `dired` on remote paths; copying between local and remote. Done
+   2026-11-26. What takes a host's time is a job in the background that
+   Scheme waits for (`%start-file-job`): listing a directory, copying,
+   moving, deleting, and finding a directory, which is also where the
+   host is reached and `/ssh:host:` becomes the home directory by its
+   whole name. `directory-entries`, `delete-file` and `rename-file` are
+   Scheme now and wait for a remote name; `copy-file` and `move-file`
+   are new and go anywhere: a directory with what is in it, links as
+   links, permissions and times along, a file whole or not there. The
+   client got links and attributes for that. `dired` reads a directory
+   before it makes the buffer the current one, redraws marks without
+   reading, and after a change reads again only the listings whose host
+   is connected. Between two local names it still runs `cp` and `mv`.
+   Found on the way: the top directory of a host lost its slash in
+   `expand-file-name` and so became the home directory, and
+   `file-name-directory` climbed out of the host; both know the host
+   part now, and `file-remote-prefix` and `file-local-name` give the
+   parts. The prompts of Scheme for file names did not start anew at
+   `//`; they do.
 4. Locations for `run-process`, `make-process`, `M-!`, the terminal.
 5. Askpass, `read-passwd`, `pass.scm`; sudo and multi-hop.
 6. README, `docs/extending.md`, `docs/ai.md`; then git and LSP.
@@ -499,6 +517,27 @@ What steps 1 and 2 did not do, beyond what the later steps are for:
 - The MCP server's connection was from an older build during both
   steps, so the editor was tried through `amacsclient -e` and not with
   keys and the screen.
+
+From step 3:
+
+- A copy from one place on a host to another there travels through this
+  machine. Newer OpenSSH servers have `copy-data`; with step 4, `cp -a`
+  on the host does it, and keeps what SFTP cannot: owners, hard links,
+  extended attributes.
+- Times are whole seconds over SFTP, so a copy to or from a host loses
+  the fractions.
+- A copy or a move says what it is at by file of the listing, not by
+  bytes, and cannot be stopped short of ending the connection
+  (`remote-disconnect`). What is typed waits for it, as for `cp`.
+- A file on another host that is not text is not opened with
+  `dired-open-program`; it has to be copied here first.
+- `file-exists?`, `file-directory?`, `file-text?` and `make-directory`
+  still ask the host on the editor's thread, one question each, with
+  its three seconds of patience.
+- The link is made with OpenSSH's order of arguments, which is not the
+  protocol's; a server that is not OpenSSH's would make it backwards.
+- A listing of another host is not read again by itself when files
+  change there.
 
 ## Dependencies added
 

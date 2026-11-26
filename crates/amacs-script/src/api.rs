@@ -115,6 +115,16 @@ fn tidy_path(path: &std::path::Path) -> std::path::PathBuf {
     tidy
 }
 
+/// [`tidy_path`] for a name that may be of a file on another host: the
+/// part that names the host is left as it is, and so is the slash of
+/// the top directory there, which is not the home directory.
+fn tidy_name(path: &std::path::Path) -> std::path::PathBuf {
+    match file_system::split(path) {
+        Some((host, at)) => format!("{host}{}", tidy_path(&at).display()).into(),
+        None => tidy_path(path),
+    }
+}
+
 /// An optional window argument, defaulting to the selected window.
 fn window_arg(ed: &Editor, args: &[Value], index: usize) -> CmdResult<WindowId> {
     if index < args.len() {
@@ -919,73 +929,64 @@ pub const API: &[ApiFn] = api! {
                 Some(_) => expand_path(string(args, 1)?, ed.working_directory()),
                 None => ed.working_directory().to_owned(),
             };
-            Ok(tidy_path(&expand_path(string(args, 0)?, &base)).display().to_string().into())
+            Ok(tidy_name(&expand_path(string(args, 0)?, &base)).display().to_string().into())
         };
     "abbreviate-file-name" (1, Some(1)) "A file name with the home directory written as ~." =>
         |_, args| Ok(amacs_core::abbreviate_path(std::path::Path::new(string(args, 0)?)).into());
-    "file-name-directory" (1, Some(1)) "The directory part of a file name, without a slash at the end, or #f if it has none. Of a directory, that is its parent." =>
+    "file-name-directory" (1, Some(1)) "The directory part of a file name, without a slash at the end, or #f if it has none. Of a directory, that is its parent. The top directory of another host, /ssh:host:/, has none." =>
         |_, args| {
             let path = std::path::Path::new(string(args, 0)?);
-            Ok(path.parent().filter(|parent| !parent.as_os_str().is_empty()).map(|parent| parent.display().to_string()).into())
+            Ok(match file_system::split(path) {
+                Some((host, at)) => at.parent().map(|parent| format!("{host}{}", parent.display())),
+                None => path.parent().filter(|parent| !parent.as_os_str().is_empty()).map(|parent| parent.display().to_string()),
+            }.into())
         };
     "file-name-nondirectory" (1, Some(1)) "The last part of a file name." =>
         |_, args| {
             let path = std::path::Path::new(string(args, 0)?);
+            let path = file_system::split(path).map_or(path.to_owned(), |(_, at)| at);
             Ok(path.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned()).into())
+        };
+    "%typed-file-name" (1, Some(1)) "A file name as a person typed it at a prompt, without what they typed over: as in Emacs, // and /~ start the name anew, so that \"~/src//ssh:evo:/etc\" is \"/ssh:evo:/etc\"." =>
+        |_, args| Ok(amacs_core::typed_name(string(args, 0)?).into());
+    "file-remote-prefix" (1, Some(1)) "The start of the name of a file on another host, which names the host: \"/ssh:evo:\" for \"/ssh:evo:/etc/hosts\". #f for a file of this machine." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            Ok(file_system::split(&path).map(|(host, _)| host).into())
+        };
+    "file-local-name" (1, Some(1)) "A file name as its own host knows it: \"/etc/hosts\" for \"/ssh:evo:/etc/hosts\", and the name itself for a file of this machine." =>
+        |_, args| {
+            let name = string(args, 0)?;
+            Ok(match file_system::split(std::path::Path::new(name)) {
+                Some((_, at)) => at.display().to_string(),
+                None => name.to_owned(),
+            }.into())
         };
     "file-exists?" (1, Some(1)) "Whether there is a file, directory or link of this name." =>
         |ed, args| Ok(file_system::symlink_metadata(&expand_path(string(args, 0)?, ed.working_directory())).is_ok().into());
     "file-directory?" (1, Some(1)) "Whether the name is that of a directory, or of a link to one." =>
         |ed, args| Ok(file_system::is_dir(&expand_path(string(args, 0)?, ed.working_directory())).into());
-    "directory-entries" (1, Some(1)) "What a directory holds, in order of name: for each entry a list of its name, 'directory or 'file (a link counts as what it leads to), its size in bytes, when it was last changed in seconds since 1970, what it links to if it is a link (else #f), and whether it can be run as a program." =>
+    "%directory-entries" (1, Some(1)) "What a directory holds, as directory-entries gives it, found before this returns." =>
         |ed, args| {
             let directory = expand_path(string(args, 0)?, ed.working_directory());
-            let failed = |error: std::io::Error| {
-                CmdError::msg(format!("cannot read {}: {error}", directory.display()))
+            let entries = amacs_core::list_directory(&directory)
+                .map_err(|error| CmdError::msg(format!("cannot read {}: {error}", directory.display())))?;
+            Ok(Value::List(entries.into_iter().map(Value::from).collect()))
+        };
+    "%start-file-job" (2, Some(3)) "Start work on files in the background, as what is on other hosts needs. The first argument says what: 'copy, 'move or 'rename with two names, 'delete with one, 'list with a directory, and 'directory with a name that should be one. Returns a promise for a list: #t and what the work gives, which is the entries for 'list and the whole name of the directory for 'directory, or #f and what went wrong. See copy-file, delete-file, rename-file and directory-entries." =>
+        |ed, args| {
+            use amacs_core::FileJob;
+            let path = |index| Ok::<_, CmdError>(tidy_name(&expand_path(string(args, index)?, ed.working_directory())));
+            let job = match (args[0].as_name(), args.len()) {
+                (Some("copy"), 3) => FileJob::Copy(path(1)?, path(2)?),
+                (Some("move"), 3) => FileJob::Move(path(1)?, path(2)?),
+                (Some("rename"), 3) => FileJob::Rename(path(1)?, path(2)?),
+                (Some("delete"), 2) => FileJob::Delete(path(1)?),
+                (Some("list"), 2) => FileJob::List(path(1)?),
+                (Some("directory"), 2) => FileJob::Directory(path(1)?),
+                _ => return Err(CmdError::msg("no such work on files, or not with that many names")),
             };
-            let mut entries = Vec::new();
-            for entry in file_system::read_dir(&directory).map_err(failed)? {
-                let path = directory.join(&entry.name);
-                let own = entry.metadata;
-                let is_link = own.is_some_and(|own| own.is_symlink());
-                let link = is_link.then(|| file_system::read_link(&path).ok()).flatten();
-                // What a link leads to says what it is, if it leads
-                // anywhere; nothing else needs a second look.
-                let followed = match own {
-                    Some(own) if !is_link => Some(own),
-                    _ => file_system::metadata(&path).ok().or(own),
-                };
-                let (is_dir, size, changed, runs) = followed.map_or((false, 0, 0, false), |meta| {
-                    let changed = meta
-                        .modified
-                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map_or(0, |since| since.as_secs());
-                    (meta.is_dir(), meta.len, changed, meta.is_executable())
-                });
-                entries.push((
-                    entry.name.to_string_lossy().into_owned(),
-                    Value::List(vec![
-                        Value::Void,
-                        Value::sym(if is_dir { "directory" } else { "file" }),
-                        Value::Int(size as i64),
-                        Value::Int(changed as i64),
-                        link.map(|target| target.display().to_string()).into(),
-                        runs.into(),
-                    ]),
-                ));
-            }
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
-            Ok(Value::List(
-                entries
-                    .into_iter()
-                    .map(|(name, mut entry)| {
-                        if let Value::List(parts) = &mut entry {
-                            parts[0] = name.into();
-                        }
-                        entry
-                    })
-                    .collect(),
-            ))
+            Ok(Value::Int(ed.file_job_promise(job) as i64))
         };
     "write-file" (2, Some(2)) "Write a string to a file, replacing what the file held." =>
         |ed, args| {
@@ -1001,14 +1002,14 @@ pub const API: &[ApiFn] = api! {
                 .map(|()| Value::Void)
                 .map_err(|error| CmdError::msg(format!("cannot create {}: {error}", path.display())))
         };
-    "delete-file" (1, Some(1)) "Delete a file or a link. A directory is deleted with everything in it." =>
+    "%delete-file" (1, Some(1)) "Delete a file, as delete-file does, before this returns." =>
         |ed, args| {
             let path = expand_path(string(args, 0)?, ed.working_directory());
             file_system::delete(&path)
                 .map(|()| Value::Void)
                 .map_err(|error| CmdError::msg(format!("cannot delete {}: {error}", path.display())))
         };
-    "rename-file" (2, Some(2)) "Give a file or directory another name, which can be in another directory on the same file system. It is an error if something has the new name already." =>
+    "%rename-file" (2, Some(2)) "Rename a file, as rename-file does, before this returns." =>
         |ed, args| {
             let from = expand_path(string(args, 0)?, ed.working_directory());
             let to = expand_path(string(args, 1)?, ed.working_directory());

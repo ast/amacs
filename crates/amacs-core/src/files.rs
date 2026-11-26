@@ -32,13 +32,18 @@ pub fn expand_path(path: &str, base: &Path) -> PathBuf {
 /// name anew, so that `~/src//ssh:host:/etc` is `/ssh:host:/etc` and
 /// nothing has to be deleted first.
 pub fn expand_typed_path(path: &str, base: &Path) -> PathBuf {
+    expand_path(typed_name(path), base)
+}
+
+/// What is left of a file name that a person typed when what they typed
+/// over is dropped: see [`expand_typed_path`].
+pub fn typed_name(path: &str) -> &str {
     let root = path.rfind("//").map(|at| at + 1);
     let home = path
         .rmatch_indices("/~")
         .map(|(at, _)| at + 1)
         .find(|at| matches!(path[at + 1..].chars().next(), None | Some('/')));
-    let start = root.max(home).unwrap_or(0);
-    expand_path(&path[start..], base)
+    &path[root.max(home).unwrap_or(0)..]
 }
 
 /// Shortens a path under the home directory to `~/...` for display.
@@ -188,8 +193,143 @@ pub(crate) fn fetch(path: &Path, anyway: bool, limit: Option<u64>) -> Result<Fet
 /// far more often; this costs an answer from the host each time.
 const REMOTE_REVERT_INTERVAL: Duration = Duration::from_secs(30);
 
+/// What a directory holds, for the file manager: see `directory-entries`
+/// in the Scheme that is part of the editor.
+pub struct Listed {
+    name: String,
+    is_dir: bool,
+    size: u64,
+    /// When it was last changed, in seconds since 1970.
+    changed: u64,
+    link: Option<PathBuf>,
+    runs: bool,
+}
+
+impl From<Listed> for Value {
+    fn from(entry: Listed) -> Self {
+        Value::List(vec![
+            entry.name.into(),
+            Value::sym(if entry.is_dir { "directory" } else { "file" }),
+            Value::Int(entry.size as i64),
+            Value::Int(entry.changed as i64),
+            entry.link.map(|target| target.display().to_string()).into(),
+            entry.runs.into(),
+        ])
+    }
+}
+
+/// What a directory holds, in order of name. A link counts as what it
+/// leads to.
+pub fn list_directory(directory: &Path) -> io::Result<Vec<Listed>> {
+    let mut entries = Vec::new();
+    for entry in file_system::read_dir(directory)? {
+        let path = directory.join(&entry.name);
+        let own = entry.metadata;
+        let is_link = own.is_some_and(|own| own.is_symlink());
+        let link = is_link
+            .then(|| file_system::read_link(&path).ok())
+            .flatten();
+        // What a link leads to says what it is, if it leads anywhere;
+        // nothing else needs a second look.
+        let followed = match own {
+            Some(own) if !is_link => Some(own),
+            _ => file_system::metadata(&path).ok().or(own),
+        };
+        let (is_dir, size, changed, runs) = followed.map_or((false, 0, 0, false), |meta| {
+            let changed = meta
+                .modified
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |since| since.as_secs());
+            (meta.is_dir(), meta.len, changed, meta.is_executable())
+        });
+        entries.push(Listed {
+            name: entry.name.to_string_lossy().into_owned(),
+            is_dir,
+            size,
+            changed,
+            link,
+            runs,
+        });
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+/// Work on files that Scheme starts and waits for: see `%start-file-job`.
+pub enum FileJob {
+    /// See [`file_system::copy`].
+    Copy(PathBuf, PathBuf),
+    /// See [`file_system::move_to`].
+    Move(PathBuf, PathBuf),
+    /// Renaming on one host, to a name that nothing has.
+    Rename(PathBuf, PathBuf),
+    Delete(PathBuf),
+    /// See [`list_directory`].
+    List(PathBuf),
+    /// Finding a directory: its name, with the path made whole if it was
+    /// one from the home directory there.
+    Directory(PathBuf),
+}
+
+/// What a [`FileJob`] came to.
+enum Outcome {
+    Nothing,
+    Name(PathBuf),
+    Entries(Vec<Listed>),
+}
+
+impl FileJob {
+    fn run(self) -> Result<Outcome, String> {
+        let said = |verb: &str, path: &Path| {
+            let about = format!("cannot {verb} {}", abbreviate_path(path));
+            move |error: io::Error| format!("{about}: {error}")
+        };
+        match self {
+            Self::Copy(from, to) => file_system::copy(&from, &to)
+                .map(|()| Outcome::Nothing)
+                .map_err(said("copy", &from)),
+            Self::Move(from, to) => file_system::move_to(&from, &to)
+                .map(|()| Outcome::Nothing)
+                .map_err(said("move", &from)),
+            Self::Rename(from, to) => {
+                if file_system::symlink_metadata(&to).is_ok() {
+                    return Err(format!("{} exists already", to.display()));
+                }
+                file_system::rename(&from, &to)
+                    .map(|()| Outcome::Nothing)
+                    .map_err(said("rename", &from))
+            }
+            Self::Delete(path) => file_system::delete(&path)
+                .map(|()| Outcome::Nothing)
+                .map_err(said("delete", &path)),
+            Self::List(path) => list_directory(&path)
+                .map(Outcome::Entries)
+                .map_err(said("read", &path)),
+            Self::Directory(path) => {
+                // A path that does not start at the top starts at the
+                // home directory there, which only the host can name.
+                let whole = match file_system::split(&path) {
+                    Some((_, at)) if !at.is_absolute() => {
+                        file_system::canonicalize(&path).map_err(said("find", &path))?
+                    }
+                    _ => path,
+                };
+                match file_system::metadata(&whole) {
+                    Ok(meta) if meta.is_dir() => Ok(Outcome::Name(whole)),
+                    Ok(_) => Err(format!("{} is not a directory", whole.display())),
+                    Err(error) => Err(said("read", &whole)(error)),
+                }
+            }
+        }
+    }
+}
+
 /// Something that a thread in the background has finished.
 enum Done {
+    Job {
+        promise: u64,
+        outcome: Result<Outcome, String>,
+    },
     Fetched {
         promise: u64,
         outcome: Result<Fetched, String>,
@@ -538,10 +678,38 @@ impl Editor {
         promise
     }
 
+    /// Starts work on files in the background, as what is on other hosts
+    /// needs: returns a promise that resolves to a list of `#t` and what
+    /// the work gives, if anything, or of `#f` and what went wrong. What
+    /// is typed meanwhile waits, if a command asked for the work.
+    pub fn file_job_promise(&mut self, job: FileJob) -> u64 {
+        let promise = self.new_promise();
+        self.await_program(promise);
+        self.in_background(move || Done::Job {
+            promise,
+            outcome: job.run(),
+        });
+        promise
+    }
+
     /// Takes in what the threads in the background have finished.
     pub(crate) fn file_jobs_poll(&mut self) {
         while let Ok(done) = self.file_jobs.done.try_recv() {
             match done {
+                Done::Job { promise, outcome } => {
+                    let result = match outcome {
+                        Ok(Outcome::Nothing) => vec![true.into()],
+                        Ok(Outcome::Name(path)) => {
+                            vec![true.into(), path.display().to_string().into()]
+                        }
+                        Ok(Outcome::Entries(entries)) => vec![
+                            true.into(),
+                            Value::List(entries.into_iter().map(Value::from).collect()),
+                        ],
+                        Err(problem) => vec![false.into(), problem.into()],
+                    };
+                    self.resolve_promise(promise, Value::List(result));
+                }
                 Done::Fetched { promise, outcome } => {
                     let found = match outcome {
                         Ok(Fetched::Directory(path)) => {

@@ -32,6 +32,7 @@ const CLOSE: u8 = 4;
 const READ: u8 = 5;
 const WRITE: u8 = 6;
 const LSTAT: u8 = 7;
+const SETSTAT: u8 = 9;
 const FSETSTAT: u8 = 10;
 const OPENDIR: u8 = 11;
 const READDIR: u8 = 12;
@@ -42,6 +43,7 @@ const REALPATH: u8 = 16;
 const STAT: u8 = 17;
 const RENAME: u8 = 18;
 const READLINK: u8 = 19;
+const SYMLINK: u8 = 20;
 const STATUS: u8 = 101;
 const HANDLE: u8 = 102;
 const DATA: u8 = 103;
@@ -776,6 +778,48 @@ impl Sftp {
             }
             result => result,
         }
+    }
+
+    /// Makes a link at `link` that points to `target`, which is taken as
+    /// it is written.
+    pub fn symlink(&self, target: &Path, link: &Path) -> io::Result<()> {
+        // The protocol has the link first. OpenSSH's server has always
+        // read them the other way round, and its own client writes them
+        // so; every server one meets is that one.
+        self.command(|id| {
+            Packet::new(SYMLINK, id)
+                .bytes(target.as_os_str().as_bytes())
+                .path(link)
+        })
+    }
+
+    /// Gives a file permissions, the time it was last changed, or both.
+    /// A link is followed.
+    pub fn set_attributes(
+        &self,
+        path: &Path,
+        mode: Option<u32>,
+        modified: Option<SystemTime>,
+    ) -> io::Result<()> {
+        // The protocol counts seconds in 32 bits.
+        let seconds = modified
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .and_then(|since| u32::try_from(since.as_secs()).ok());
+        let flags = mode.map_or(0, |_| ATTR_PERMISSIONS) | seconds.map_or(0, |_| ATTR_TIMES);
+        if flags == 0 {
+            return Ok(());
+        }
+        self.command(|id| {
+            let mut packet = Packet::new(SETSTAT, id).path(path).u32(flags);
+            if let Some(mode) = mode {
+                packet = packet.u32(mode & 0o7777);
+            }
+            if let Some(seconds) = seconds {
+                // When it was last read, then when it was last changed.
+                packet = packet.u32(seconds).u32(seconds);
+            }
+            packet
+        })
     }
 
     /// Deletes a file or a link.
