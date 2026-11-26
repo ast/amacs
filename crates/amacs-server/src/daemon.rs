@@ -198,12 +198,17 @@ pub fn run(options: &Options) -> Result<ExitCode> {
     // Tells systemd that the server is ready; does nothing otherwise.
     let _ = sd_notify::notify(&[sd_notify::NotifyState::Ready]);
 
-    {
+    let waker: amacs_core::Waker = {
         let sender = sender.clone();
-        session.editor_mut().set_waker(std::sync::Arc::new(move || {
+        std::sync::Arc::new(move || {
             let _ = sender.send(Event::Wake);
-        }));
-    }
+        })
+    };
+    session.editor_mut().set_waker(waker.clone());
+    // What ssh and its like ask is answered in a frame from now on.
+    let askpass = crate::askpass::start(waker)
+        .inspect_err(|why| eprintln!("amacs: programs cannot ask for passwords: {why}"))
+        .ok();
     let interrupt = session.interrupt_handle();
     let mut server = Server {
         session,
@@ -271,6 +276,7 @@ pub fn run(options: &Options) -> Result<ExitCode> {
     };
     server.close_all(message, u8::from(crashed));
     drop(listener);
+    drop(askpass);
     if crashed {
         bail!(
             "internal error; {}",

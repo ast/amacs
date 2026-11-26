@@ -38,6 +38,9 @@ pub enum Piece {
     /// Words that are there only if all of what they need is: `-l` and
     /// the user, when a user is named.
     Group(Vec<Piece>),
+    /// Words that are there only if nobody can answer what the program
+    /// asks: those that tell it to ask nothing.
+    Unasked(Vec<Piece>),
 }
 
 /// A way to reach a place.
@@ -113,6 +116,7 @@ pub fn fixtures() -> Vec<MethodDef> {
     let text = |word: &str| Piece::Text(word.to_owned());
     let ssh: Vec<Piece> = vec![
         text("ssh"),
+        Piece::Unasked(vec![text("-o"), text("BatchMode=yes")]),
         Piece::Group(vec![text("-J"), Piece::Jumps]),
         Piece::Group(vec![text("-l"), Piece::User]),
         Piece::Group(vec![text("-p"), Piece::Port]),
@@ -189,6 +193,8 @@ struct Step<'a> {
     hop: &'a Hop,
     method: MethodDef,
     jumps: Vec<String>,
+    /// Somebody answers what the program asks.
+    asked: bool,
 }
 
 impl Step<'_> {
@@ -205,7 +211,7 @@ impl Step<'_> {
             Piece::User => self.hop.user.clone().or_else(|| self.method.user.clone()),
             Piece::Port => self.hop.port.map(|port| port.to_string()),
             Piece::Jumps => Some(self.jumps.join(",")).filter(|jumps| !jumps.is_empty()),
-            Piece::Group(_) => None,
+            Piece::Group(_) | Piece::Unasked(_) => None,
         }
     }
 
@@ -217,10 +223,15 @@ impl Step<'_> {
             match piece {
                 Piece::Group(inner) => {
                     let whole = inner.iter().all(|piece| match piece {
-                        Piece::Group(_) => true,
+                        Piece::Group(_) | Piece::Unasked(_) => true,
                         piece => self.value(piece, in_jump).is_some(),
                     });
                     if whole {
+                        words.extend(self.words(inner, in_jump));
+                    }
+                }
+                Piece::Unasked(inner) => {
+                    if !self.asked {
                         words.extend(self.words(inner, in_jump));
                     }
                 }
@@ -236,8 +247,9 @@ fn refused(kind: io::ErrorKind, why: String) -> io::Error {
 }
 
 /// The command whose pipes speak SFTP with the far end of some steps:
-/// the program and its arguments.
-pub fn command_line(hops: &[Hop]) -> io::Result<Vec<String>> {
+/// the program and its arguments. `asked` says that somebody answers
+/// what the program asks, a password for one: see [`Piece::Unasked`].
+pub fn command_line(hops: &[Hop], asked: bool) -> io::Result<Vec<String>> {
     let mut steps: Vec<Step> = Vec::new();
     for (index, hop) in hops.iter().enumerate() {
         let method = method(&hop.method).ok_or_else(|| {
@@ -271,7 +283,12 @@ pub fn command_line(hops: &[Hop]) -> io::Result<Vec<String>> {
             jumps.push(previous.words(jump, true).concat());
             steps.pop();
         }
-        steps.push(Step { hop, method, jumps });
+        steps.push(Step {
+            hop,
+            method,
+            jumps,
+            asked,
+        });
     }
 
     // What speaks SFTP at the far end. Where no step leaves this
@@ -325,7 +342,7 @@ mod tests {
     }
 
     fn line(name: &str) -> Vec<String> {
-        command_line(&remote(name).hops).unwrap()
+        command_line(&remote(name).hops, true).unwrap()
     }
 
     #[test]
@@ -337,6 +354,11 @@ mod tests {
             ]
         );
         assert_eq!(line("/ssh:evo:/etc"), ["ssh", "-s", "--", "evo", "sftp"]);
+        // With nobody to answer, the program is told to ask nothing.
+        assert_eq!(
+            command_line(&remote("/ssh:evo:/etc").hops, false).unwrap(),
+            ["ssh", "-o", "BatchMode=yes", "-s", "--", "evo", "sftp"]
+        );
         // Hosts in a row are reached through by the last of them.
         assert_eq!(
             line("/ssh:me@gate#2222|ssh:[::1]|ssh:evo:/etc"),
@@ -404,7 +426,7 @@ mod tests {
 
     #[test]
     fn what_cannot_be_reached_says_so() {
-        let stays = command_line(&remote("/ssh:evo|sudo:pi:/etc").hops).unwrap_err();
+        let stays = command_line(&remote("/ssh:evo|sudo:pi:/etc").hops, true).unwrap_err();
         assert_eq!(stays.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(
             stays.to_string(),
@@ -416,7 +438,7 @@ mod tests {
             host: "x".to_owned(),
             port: None,
         };
-        let unknown = command_line(&[hop]).unwrap_err();
+        let unknown = command_line(&[hop], true).unwrap_err();
         assert_eq!(unknown.kind(), io::ErrorKind::Unsupported);
         assert_eq!(unknown.to_string(), "gone: is not a method that is defined");
     }

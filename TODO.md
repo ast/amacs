@@ -110,10 +110,22 @@ the ones that are still not there, the ones that need the core first.
 
 ## Secrets (`runtime/lib/crypt.scm`, `crypt-file.scm`, `pass.scm`, `secrets.scm`)
 
-- [ ] Nothing asks `secret-get` yet: ssh and sudo for files on other
-      hosts, git over https and the keys of coding agents still need a
-      key, an agent or a helper of their own. One askpass program for all
-      of them (`amacsclient --askpass`) is the plan.
+- [ ] `ssh` for files on other hosts asks through the editor
+      (`runtime/lib/askpass.scm`, `amacsclient --askpass`) and gets the
+      password of a host from `secret-get`. Not yet: `sudo` (`/sudo::`
+      can take `sudo -A` with the same helper; `sudo` on another host
+      cannot reach a helper on this machine), git (its credential
+      helpers say the host and the user as data, which the askpass
+      question does not), and the keys of coding agents.
+- [ ] A question of a program stays open when the program gives up
+      before it is answered, as `ssh` does after its time for logging
+      in: the answer then goes nowhere.
+- [ ] A user's own askpass program in place of the editor's, by an
+      option: a window of pinentry, `ksshaskpass`.
+- [ ] What is typed for a program is always hidden, also a name or
+      `yes`: no program says which answers may be shown.
+- [ ] With several hosts in a row (`/ssh:a|ssh:b:`), the password store
+      is asked for the last one, whichever host asks first.
 - [ ] One-time passwords from the `otpauth://` lines of an entry.
 - [ ] A file encrypted with a passphrase alone (`gpg -c`) is read but
       cannot be saved; age asks for a passphrase only through rage's
@@ -278,8 +290,9 @@ three of its six steps and part of the fifth.
       hops and containers where nothing is asked, as methods that Scheme
       defines (`define-remote-method`), with a prompt that offers each
       next step of a name and says it in words, and `sudo-edit`. Left:
-      programs and the terminal on the host, passwords, git and language
-      servers. Still to be tried by hand, since no test can:
+      programs and the terminal on the host, a password for `sudo`,
+      git and language servers. `ssh` asks its questions in the
+      minibuffer since 2026-11-26. Still to be tried by hand, since no test can:
       `C-x C-f //sudo::/etc/hosts`, `/ssh:host|sudo::/etc/hosts` and
       `/ssh:a|ssh:b:/etc/hostname`.
 - [ ] Org.

@@ -16,7 +16,7 @@ mod metadata;
 mod methods;
 mod sftp;
 
-pub use connections::Connections;
+pub use connections::{Asked, Asker, Asking, Connections};
 pub use hosts::{SshHost, ssh_hosts, ssh_hosts_in};
 pub use location::{Hop, Location, ParseError, Remote};
 pub use metadata::{DirEntry, FileType, Metadata};

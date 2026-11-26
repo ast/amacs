@@ -579,6 +579,50 @@ fn a_prompt_says_what_scheme_tells_it_about_its_input() {
 }
 
 #[test]
+fn the_full_name_of_a_host_for_its_password_is_what_ssh_says_it_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("config");
+    fs::write(
+        &file,
+        "Host short\n  HostName full.example.org\n  User me\n  Port 2222\n",
+    )
+    .unwrap();
+    // Without an ssh that knows who runs it there is nothing to ask.
+    let works = std::process::Command::new("ssh")
+        .arg("-F")
+        .arg(&file)
+        .args(["-G", "short"])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !works {
+        return;
+    }
+    let mut h = Harness::new(100, 12);
+    let facts = |h: &mut Harness, place: &str| {
+        h.eval(&format!(
+            "(define facts 'none)
+             (run-later (lambda ()
+                          (set! facts (%ssh-facts {place:?} (list \"-F\" {:?})))))",
+            file.display().to_string()
+        ));
+        h.wait_until(|h| h.eval("facts") != "none");
+        h.eval("facts")
+    };
+    assert_eq!(
+        facts(&mut h, "/ssh:short:"),
+        "(\"full.example.org\" \"me\" \"2222\")"
+    );
+    // What the name says wins over the configuration, as for ssh.
+    assert_eq!(
+        facts(&mut h, "/ssh:you@short#22:/etc"),
+        "(\"full.example.org\" \"you\" \"22\")"
+    );
+    // The last step is what asks; a step that is not ssh has no such facts.
+    assert_eq!(facts(&mut h, "/ssh:short|sudo::/etc"), "#f");
+    assert_eq!(facts(&mut h, "git push"), "#f");
+}
+
+#[test]
 fn the_configuration_of_the_user_wins_over_that_of_the_editor() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = Harness::new(100, 12);

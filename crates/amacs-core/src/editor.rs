@@ -562,8 +562,17 @@ impl Editor {
 
     pub fn handle_event(&mut self, event: InputEvent) {
         // What is typed while a command waits for a program is for what
-        // the command does next.
-        if self.holds_input() && matches!(event, InputEvent::Key(_) | InputEvent::Paste(_)) {
+        // the command does next. Not so while a prompt is open here: the
+        // command did not open it, since it waits, and what is typed is
+        // for the prompt. The program may be the one that asks, as ssh
+        // asks for a password before it gives the file that a command
+        // waits for.
+        let prompt_here = self.key_prompt.is_some()
+            || (self.minibuffer.is_some() && self.prompt_frame == Some(self.current_frame()));
+        if self.holds_input()
+            && !prompt_here
+            && matches!(event, InputEvent::Key(_) | InputEvent::Paste(_))
+        {
             if event == InputEvent::Key(Key::ctrl('g')) {
                 self.stop_waiting();
             } else {
@@ -883,6 +892,7 @@ impl Editor {
         self.lsp_poll(now);
         self.extend_poll(now);
         self.file_jobs_poll();
+        self.askpass_poll();
         self.spell_poll();
         self.process_poll();
         self.websocket_poll();

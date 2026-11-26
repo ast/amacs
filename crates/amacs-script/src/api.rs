@@ -740,6 +740,33 @@ pub const API: &[ApiFn] = api! {
             }
             Ok(Value::Int(ed.read_secret_promise(string(args, 0)?)? as i64))
         };
+    "%askpass-ticket" (3, Some(3)) "Make a ticket for a program that is about to be started and may ask the user something through the helper of the editor: who it is, in the words that start the question, and the host and the user that it may want a password for, each a string or #f. Its questions are shown in the frame that is current now. Returns the ticket, a string. An error if nobody can answer in this session, as in a batch run. See askpass-environment." =>
+        |ed, args| {
+            if ed.for_program() {
+                return Err(CmdError::msg("a program is not given a ticket to ask the user with"));
+            }
+            let part = |index: usize| args[index].as_name().map(str::to_owned);
+            Ok(ed.askpass_ticket(string(args, 0)?, part(1), part(2))?.into())
+        };
+    "%askpass-variables" (1, Some(1)) "The environment variables that a program with a ticket is started with, as a list of lists of a name and a value: they lead ssh, sudo -A and git to the helper of the editor, and the helper to the editor. See askpass-environment." =>
+        |_, args| Ok(Value::List(
+            amacs_core::askpass::environment(string(args, 0)?)
+                .into_iter()
+                .map(|(name, value)| Value::List(vec![name.into(), value.into()]))
+                .collect(),
+        ));
+    "%askpass-release!" (1, Some(1)) "End a ticket that %askpass-ticket made: its program is done, and nothing can be asked with it any more. Returns whether the ticket was known. See askpass-done!." =>
+        |_, args| Ok(amacs_core::askpass::release(string(args, 0)?).into());
+    "askpass-served?" (0, Some(0)) "Whether the editor answers the questions of programs in this session: it does as a server and in a terminal, and not in a batch run." =>
+        |_, _| Ok(amacs_core::askpass::is_served().into());
+    "%askpass-answer" (2, Some(2)) "Answer a question that a program asked through the helper of the editor: the number of the question, and the answer, a string, or #f for none. Returns whether the question was open." =>
+        |ed, args| {
+            if ed.for_program() {
+                return Err(CmdError::msg("a program does not answer what the user is asked"));
+            }
+            let id = u64::try_from(int(args, 0)?).map_err(|_| wrong_type(0, "a question", &args[0]))?;
+            Ok(amacs_core::askpass::answer(id, args[1].as_name().map(str::to_owned)).into())
+        };
     "%completing-read" (3, Some(3)) "Start choosing among candidates: prompt, candidates, category. A candidate is a string or a list of a string and its annotation. Returns a promise." =>
         |ed, args| {
             let Value::List(items) = &args[1] else {
@@ -1080,6 +1107,9 @@ pub const API: &[ApiFn] = api! {
                         "jumps" => Piece::Jumps,
                         other => return Err(CmdError::msg(format!("{other} is not a part of a command: host, user, port or jumps"))),
                     },
+                    Value::List(inner) if matches!(inner.first(), Some(Value::Sym(name)) if name == "unasked") => {
+                        Piece::Unasked(pieces(&Value::List(inner[1..].to_vec()))?)
+                    }
                     group @ Value::List(_) => Piece::Group(pieces(group)?),
                     _ => return Err(CmdError::msg("a command is a list of strings, symbols and lists")),
                 })).collect()
@@ -1134,7 +1164,7 @@ pub const API: &[ApiFn] = api! {
             let remote = file_system::remote(&path)
                 .map_err(|error| CmdError::msg(error.to_string()))?
                 .ok_or_else(|| CmdError::msg(format!("{} is a file of this machine", path.display())))?;
-            let line = amacs_remote::command_line(&remote.hops).map_err(|error| CmdError::msg(error.to_string()))?;
+            let line = amacs_remote::command_line(&remote.hops, amacs_remote::Connections::global().asks()).map_err(|error| CmdError::msg(error.to_string()))?;
             Ok(Value::List(line.into_iter().map(Value::from).collect()))
         };
     "ssh-hosts" (0, Some(0)) "The hosts that the user's ssh knows by name: those that ~/.ssh/config and the files it includes name outright, then those of ~/.ssh/known_hosts. For each a list of its name, then what the configuration says of it, each a string or #f: the address behind the name, the user, the port and the host that it is reached through; and last whether it is only in known_hosts." =>
@@ -1146,7 +1176,7 @@ pub const API: &[ApiFn] = api! {
             host.jump.into(),
             host.only_known.into(),
         ])).collect()));
-    "set-prompt-hint!" (2, Some(2)) "Give the open prompt a line to show under its input: what the input means, or what to type next. The first argument is the input that the line is about, and the line shows while that is the input; the second is the line, or #f for none. For functions of prompt-change-hook." =>
+    "set-prompt-hint!" (2, Some(2)) "Give the open prompt a line to show under its input: what the input means, or what to type next. The first argument is the input that the line is about, and the line shows while that is the input; the second is the line, or #f for none. A text of a few lines is shown as so many rows. For functions of prompt-change-hook." =>
         |ed, args| {
             ed.set_prompt_hint(string(args, 0)?, args[1].as_name().map(str::to_owned));
             Ok(Value::Void)

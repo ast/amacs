@@ -34,6 +34,7 @@ const FILES: &[(&str, &str)] = &[
     file!("lib/crypt-file.scm"),
     file!("lib/secrets.scm"),
     file!("lib/pass.scm"),
+    file!("lib/askpass.scm"),
     file!("lib/section.scm"),
     file!("lib/menu.scm"),
     file!("lib/ibuffer.scm"),

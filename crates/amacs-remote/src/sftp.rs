@@ -274,6 +274,12 @@ pub(crate) fn patience() -> Duration {
     PATIENCE_HERE.get()
 }
 
+/// Whether this thread waits less for a host than threads usually do:
+/// it has something else to get back to.
+pub(crate) fn in_a_hurry() -> bool {
+    patience() < PATIENCE
+}
+
 /// The program at the other end, when this client started it.
 struct Program {
     child: Mutex<Child>,

@@ -369,15 +369,29 @@ A terminal in a remote buffer is `ssh -t host` in the right directory.
 ### Passwords
 
 ssh and sudo ask through the editor: `SSH_ASKPASS` and `SUDO_ASKPASS`
-point at `amacs-askpass`, a mode of `amacsclient` that evaluates
-`(read-passwd prompt)` with the waiting `Eval` of M12 and prints the
-answer; `SSH_ASKPASS_REQUIRE=force` and `sudo -A` make them use it. The
-prompt appears, with its input hidden, in the frame the user last used;
-two-factor codes come the same way. Before asking, the
-`password-functions` hook is tried, and `runtime/lib/pass.scm` supplies
-one that asks `pass`, so hosts in the password store never prompt.
+point at a mode of `amacsclient`, which brings the question to the
+editor and prints the answer; `SSH_ASKPASS_REQUIRE=force` and `sudo -A`
+make them use it. The prompt appears, with its input hidden, in the
+frame that the program was started from; two-factor codes come the same
+way. Before asking, the `askpass-functions` hook is tried and then
+`secret-get`, so hosts in the password store never prompt.
 `ControlMaster` and sudo's ticket mean one answer per host per idle
 period.
+
+As built on 2026-11-26, for `ssh`: the helper does not evaluate
+`(read-passwd ...)`, because code that comes over the socket is refused
+that, and rightly. It sends the question on a socket of its own
+(`askpass-<pid>.sock`, which the editor in a terminal opens too), with a
+ticket that the editor put in the environment of the program; without a
+ticket that is known, nothing is asked. Tickets and open questions are in
+`amacs_core::askpass`, how a question is answered is in
+`runtime/lib/askpass.scm`, and `amacs-remote` is told who answers through
+`Connections::set_asker`. `BatchMode=yes` is on the command line only
+where nobody answers (`unasked` in the command of a method). The time of
+a question is not counted against those who wait for the connection, and
+the editor's own thread does not wait for an answer at all. Nothing of
+what `ssh` writes or asks is read for its meaning: the full name of a
+host for the password store is what `ssh -G` says.
 
 ### For language models
 
@@ -505,8 +519,9 @@ harness. ssh and sudo themselves are tried by hand on `evo`.
    tests check the command lines, and that the line for a place finds
    an `sftp-server` on this machine. Rust's own tests run without
    Scheme and so define stand-ins for the methods
-   (`amacs_remote::define_fixtures`). Left of this step: askpass,
-   `read-passwd`, `pass.scm`.
+   (`amacs_remote::define_fixtures`). Askpass for `ssh` is in since
+   the same day, see Passwords above. Left of this step: a password
+   for `sudo`.
 6. README, `docs/extending.md`, `docs/ai.md`; then git and LSP.
 
 ### How `ssh` is used, after a pass on 2026-11-26
@@ -520,7 +535,8 @@ first, then sets the editor's values under `Host *`, then includes the
 system's. `ssh` takes the first value it sees, so the user's control
 connections, keep-alive and compression hold and the editor's fill what
 is left; `-F` is handed on to the `ssh` for a jump host. Only
-`BatchMode=yes` stays on the command line.
+`BatchMode=yes` stays on the command line, and only where nobody can
+answer a question.
 
 Fewer waits for a host: the links of a directory are asked about
 together (`metadata_many`, `read_link_many`: two waits for a listing or

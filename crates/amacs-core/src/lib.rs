@@ -4,6 +4,7 @@
 //! feeds it [`amacs_proto::InputEvent`]s and applies the
 //! [`amacs_proto::DrawOp`]s that [`Editor::redisplay`] returns.
 
+pub mod askpass;
 mod buffer;
 mod commands;
 mod complete;

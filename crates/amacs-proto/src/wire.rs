@@ -146,6 +146,30 @@ pub enum ServerMsg {
     },
 }
 
+/// What a program asks the user through `amacsclient --askpass`: sent
+/// alone on the editor's socket for questions, which is not the one that
+/// clients connect to, and answered with an [`Answer`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ask {
+    /// What the editor gave the program to ask with.
+    pub ticket: String,
+    /// The question, in the program's words.
+    pub prompt: String,
+    /// `confirm` for a question of yes or no, `none` for words that want
+    /// no answer, else empty: something to type.
+    pub kind: String,
+}
+
+/// The answer to an [`Ask`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Answer {
+    Given(String),
+    /// The user gave none.
+    None,
+    /// The editor would not ask, and why.
+    Refused(String),
+}
+
 /// Writes one message and flushes.
 pub fn write_msg<W: Write, T: Serialize>(mut writer: W, message: &T) -> io::Result<()> {
     let bytes = postcard::to_stdvec(message).map_err(io::Error::other)?;
@@ -255,6 +279,13 @@ mod tests {
             message: Some("bye".into()),
             status: 1,
         });
+        round_trip(&Ask {
+            ticket: "0f".into(),
+            prompt: "Password: ".into(),
+            kind: String::new(),
+        });
+        round_trip(&Answer::Given("hemlig".into()));
+        round_trip(&Answer::Refused("no".into()));
     }
 
     #[test]

@@ -562,7 +562,10 @@ impl Editor {
         let Some(session) = session else {
             // A prompt without candidates may still have a hint.
             if let Some(hint) = self.prompt_hint() {
-                return vec![DisplayLine::plain(fit(hint, width), faces::ANNOTATION)];
+                return hint
+                    .lines()
+                    .map(|line| DisplayLine::plain(fit(line, width), faces::ANNOTATION))
+                    .collect();
             }
             return self
                 .frame()
@@ -583,42 +586,43 @@ impl Editor {
         let column = (longest + 2).min(width / 2);
         // What the prompt says about its input comes before what can
         // follow it.
-        let hint = self.prompt_hint().map(|hint| {
-            let mut line = DisplayLine::default();
-            line.push(fit(hint, width), faces::ANNOTATION);
-            line
-        });
-        hint.into_iter()
-            .chain(visible.iter().map(|(index, candidate)| {
-                let selected = session.selected() == Some(*index);
-                let face = if selected {
-                    faces::CURRENT_CANDIDATE
-                } else {
-                    faces::DEFAULT
-                };
-                let mut line = DisplayLine {
-                    fill: face,
-                    ..DisplayLine::default()
-                };
-                let text: String = candidate
-                    .text
-                    .chars()
-                    .map(|c| if c.is_control() { ' ' } else { c })
-                    .collect();
-                let text = fit(&text, width);
-                line.push(text, face);
-                let used = str_cells(text);
-                if !candidate.annotation.is_empty() && used + 2 < width {
-                    let gap = column.saturating_sub(used).max(2);
-                    line.push(&" ".repeat(gap), face);
-                    let annotation_face = if selected { face } else { faces::ANNOTATION };
-                    line.push(
-                        fit(&candidate.annotation, width - used - gap),
-                        annotation_face,
-                    );
-                }
+        let hint = self.prompt_hint().into_iter().flat_map(|hint| {
+            hint.lines().map(|text| {
+                let mut line = DisplayLine::default();
+                line.push(fit(text, width), faces::ANNOTATION);
                 line
-            }))
-            .collect()
+            })
+        });
+        hint.chain(visible.iter().map(|(index, candidate)| {
+            let selected = session.selected() == Some(*index);
+            let face = if selected {
+                faces::CURRENT_CANDIDATE
+            } else {
+                faces::DEFAULT
+            };
+            let mut line = DisplayLine {
+                fill: face,
+                ..DisplayLine::default()
+            };
+            let text: String = candidate
+                .text
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect();
+            let text = fit(&text, width);
+            line.push(text, face);
+            let used = str_cells(text);
+            if !candidate.annotation.is_empty() && used + 2 < width {
+                let gap = column.saturating_sub(used).max(2);
+                line.push(&" ".repeat(gap), face);
+                let annotation_face = if selected { face } else { faces::ANNOTATION };
+                line.push(
+                    fit(&candidate.annotation, width - used - gap),
+                    annotation_face,
+                );
+            }
+            line
+        }))
+        .collect()
     }
 }

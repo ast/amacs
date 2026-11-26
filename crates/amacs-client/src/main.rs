@@ -9,7 +9,8 @@ use std::process::{Command, ExitCode, Stdio};
 
 use amacs_client::{Connection, parse_position, sibling_binary};
 use amacs_proto::{
-    ClientMsg, EvalFailure, FileSpec, FrameRequest, ServerMsg, read_msg, socket_path, write_msg,
+    Answer, Ask, ClientMsg, EvalFailure, FileSpec, FrameRequest, ServerMsg, read_msg, socket_path,
+    write_msg,
 };
 use amacs_tty::Tty;
 use anyhow::{Context, Result, anyhow, bail};
@@ -28,6 +29,9 @@ Options:
                           the value and what the code wrote, or the error's
                           message, location and trace
       --kill-server       Stop the server, saving what it can for recovery
+      --askpass PROMPT    Ask the user PROMPT in the editor and print the
+                          answer: what ssh, sudo and git run to ask for a
+                          password, in a program that the editor started
   -s, --socket-name PATH  Use this socket instead of the default
   -h, --help              Show this help
   -V, --version           Show the version
@@ -154,7 +158,69 @@ fn eval_json(ok: bool, text: &str, output: &str, failure: Option<&EvalFailure>) 
     value.to_string()
 }
 
+/// The question to ask as a helper of `ssh`, `sudo` or git, if this
+/// program was run as one: under a name that starts with `askpass`,
+/// which is how the editor has those programs run it, or with
+/// `--askpass`. The question is the argument.
+fn asked_as_helper() -> Option<String> {
+    let mut args = std::env::args_os();
+    let name = args.next().map(PathBuf::from);
+    let by_name = name
+        .as_deref()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("askpass"));
+    let mut rest: Vec<String> = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
+    if !by_name {
+        if rest.first().map(String::as_str) != Some("--askpass") {
+            return None;
+        }
+        rest.remove(0);
+    }
+    Some(rest.join(" "))
+}
+
+/// Brings a question to the editor that started the program which asks,
+/// and prints the answer. Without an answer the status says so, and the
+/// program that asked gives up.
+fn askpass(prompt: String) -> Result<ExitCode> {
+    use std::os::unix::net::UnixStream;
+
+    let variable = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("{name} is not set: this is for programs that amacs started"))
+    };
+    let ticket = variable("AMACS_ASKPASS_TICKET")?;
+    let socket = variable("AMACS_ASKPASS_SOCKET")?;
+    // ssh says what kind of question it is.
+    let kind = std::env::var("SSH_ASKPASS_PROMPT").unwrap_or_default();
+    let stream = UnixStream::connect(&socket)
+        .with_context(|| format!("cannot reach the editor at {socket}"))?;
+    write_msg(
+        &stream,
+        &Ask {
+            ticket,
+            prompt,
+            kind,
+        },
+    )
+    .context("cannot write to the editor")?;
+    match read_msg::<_, Answer>(&stream).context("cannot read from the editor")? {
+        Some(Answer::Given(answer)) => {
+            println!("{answer}");
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Answer::None) | None => Ok(ExitCode::FAILURE),
+        Some(Answer::Refused(why)) => bail!("{why}"),
+    }
+}
+
 fn run() -> Result<ExitCode> {
+    if let Some(prompt) = asked_as_helper() {
+        return askpass(prompt);
+    }
     let Some(options) = parse_args()? else {
         return Ok(ExitCode::SUCCESS);
     };

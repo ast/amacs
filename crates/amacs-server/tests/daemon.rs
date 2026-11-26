@@ -466,6 +466,116 @@ fn a_text_field_of_a_browser_gets_a_window_that_closes_when_it_is_done() {
     assert_eq!(first.screen.row(0), "at work");
 }
 
+/// The socket on which a server takes the questions of programs.
+fn askpass_socket(server: &Server) -> PathBuf {
+    let start = Instant::now();
+    loop {
+        let found = fs::read_dir(server.dir.path())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                name.starts_with("askpass-") && name.ends_with(".sock")
+            });
+        if let Some(found) = found {
+            return found;
+        }
+        assert!(start.elapsed() < Duration::from_secs(20), "no socket");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn what_a_program_asks_is_answered_in_the_frame_of_a_person() {
+    use amacs_proto::{Answer, Ask};
+
+    let server = Server::start();
+    let socket = askpass_socket(&server);
+    // Beside the socket is the helper, under a name of this server's own.
+    let link = socket.with_extension("");
+    assert!(link.is_symlink(), "{}", link.display());
+    let ask = |ticket: &str, prompt: &str| {
+        let stream = UnixStream::connect(&socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(20)))
+            .unwrap();
+        write_msg(
+            &stream,
+            &Ask {
+                ticket: ticket.to_owned(),
+                prompt: prompt.to_owned(),
+                kind: String::new(),
+            },
+        )
+        .unwrap();
+        stream
+    };
+    let answer = |stream: &UnixStream| read_msg::<_, Answer>(stream).unwrap().unwrap();
+
+    // Nobody asks without a ticket, and a program that evaluates code is
+    // given none.
+    let refused = answer(&ask("made-up", "Password: "));
+    assert!(matches!(refused, Answer::Refused(_)), "{refused:?}");
+    let mut program = Client::connect(&server);
+    let error = program
+        .eval("(askpass-environment \"a program\")")
+        .unwrap_err();
+    assert!(error.contains("a program is not given a ticket"), "{error}");
+
+    // A person starts something that may ask, in a terminal of theirs.
+    let mut person = Client::attach(&server, 70, 10, &[], false);
+    let mut other = Client::attach(&server, 70, 10, &[], false);
+    person
+        .keys("M-:")
+        .type_text("(define environment (askpass-environment \"git push\"))")
+        .keys("RET");
+    let ticket = program
+        .eval("(cadr (assoc \"AMACS_ASKPASS_TICKET\" environment))")
+        .unwrap();
+    let ticket = ticket.trim_matches('"');
+    let helper = program
+        .eval("(cadr (assoc \"SSH_ASKPASS\" environment))")
+        .unwrap();
+    assert_eq!(Path::new(helper.trim_matches('"')), link);
+
+    // The other frame was used since: the question still comes where the
+    // program was started.
+    other.keys("C-f");
+    let waiting = ask(ticket, "Password for 'https://example.org': ");
+    let start = Instant::now();
+    while !person.echo().starts_with("git push Password for") {
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "{}",
+            person.echo()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        person.sync();
+    }
+    other.sync();
+    assert!(!other.echo().contains("Password"), "{}", other.echo());
+    person.type_text("hunter2");
+    assert!(person.echo().ends_with(": *******"), "{}", person.echo());
+    person.keys("RET");
+    assert_eq!(answer(&waiting), Answer::Given("hunter2".to_owned()));
+
+    // C-g is no answer.
+    let waiting = ask(ticket, "Password: ");
+    let start = Instant::now();
+    while !person.echo().starts_with("git push Password:") {
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "{}",
+            person.echo()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        person.sync();
+    }
+    person.keys("C-g");
+    assert_eq!(answer(&waiting), Answer::None);
+}
+
 #[test]
 fn a_vanished_client_takes_its_frame_with_it() {
     let server = Server::start();

@@ -400,6 +400,25 @@ fit for passwords, which those of `random` are not. `run-process` takes
 environment variables as a fourth argument, a list of lists of a name and a
 value, for programs such as `gpg` that are told where to look that way.
 
+A program that may ask for a password is started with the variables that
+`(askpass-environment who 'host host 'user user)` returns, as the
+`'environment` of `make-process` or the fourth argument of `run-process`.
+`ssh`, `sudo -A` and git then ask through the editor: they run its helper
+with their question, which is how they are made to ask (`SSH_ASKPASS`,
+`SUDO_ASKPASS`, `GIT_ASKPASS`), and nothing that they write is watched.
+The question is shown in the minibuffer of the frame that the program was
+started from, after `who`, and the answer is typed hidden. `(askpass-done!
+environment)` ends the permission when the program has ended. Only a
+program that was started this way can ask. `runtime/lib/askpass.scm` is
+the code, and `(askpass-answer who host user prompt kind before)` is where
+an answer is found: the functions of the hook `askpass-functions` are
+called first, with the same arguments, and the first that returns a string
+has answered; then, for the first question of a program with a host,
+`secret-get`; then the user. `kind` is what the program says of its
+question, `confirm`, `none` or else `secret`, and the words of the
+question are not read for more. Files on other hosts use this for `ssh`.
+`(askpass-served?)` says whether anybody answers: not in a batch run.
+
 A file whose name ends in `.gpg`, `.asc` or `.age` is an encrypted one:
 visiting it shows its plain text in a secret buffer, in the mode that the
 name asks for without that suffix, and saving encrypts the text again;

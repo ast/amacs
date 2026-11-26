@@ -288,8 +288,9 @@ impl Editor {
         (*input == self.minibuffer_input()).then_some(hint.as_str())
     }
 
-    /// Gives the open prompt a line to show under its input: what the
-    /// input means, or what it still needs. It shows while the input is
+    /// Gives the open prompt a line to show under its input, or a few
+    /// lines: what the input means, or what it still needs. It shows while
+    /// the input is
     /// `input`, which is the input that it was worked out for; `None`
     /// takes it away.
     pub fn set_prompt_hint(&mut self, input: &str, hint: Option<String>) {
@@ -318,7 +319,7 @@ impl Editor {
     }
 
     /// Rows of the echo area in the current frame: one, plus the candidate
-    /// list while a prompt with candidates is open there and a row for
+    /// list while a prompt with candidates is open there and the rows of
     /// what the prompt was given to say about its input, or the lines of
     /// a key hint.
     pub fn echo_rows(&self) -> u16 {
@@ -331,7 +332,7 @@ impl Editor {
                 } else {
                     0
                 };
-                candidates + usize::from(self.prompt_hint().is_some())
+                candidates + self.prompt_hint().map_or(0, |hint| hint.lines().count())
             }
             _ => self.frame().hint.len(),
         };

@@ -30,11 +30,19 @@ pub fn run(options: &Options) -> Result<ExitCode> {
     // that the main thread is busy running.
     let (sender, events) = mpsc::channel();
     let interrupt = session.interrupt_handle();
-    {
+    let waker: amacs_core::Waker = {
         let sender = sender.clone();
-        session.editor_mut().set_waker(std::sync::Arc::new(move || {
+        std::sync::Arc::new(move || {
             let _ = sender.send(Event::Wake);
-        }));
+        })
+    };
+    session.editor_mut().set_waker(waker.clone());
+    // What ssh and its like ask is answered in this terminal from now on.
+    let askpass = crate::askpass::start(waker);
+    if let Err(why) = &askpass {
+        session
+            .editor_mut()
+            .log(&format!("Programs cannot ask for passwords: {why}"));
     }
     std::thread::spawn(move || {
         loop {

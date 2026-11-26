@@ -33,8 +33,11 @@ is replaced. After the name come keys and values:
   'command  The program that enters the place, and its arguments: a list
             of strings and of the symbols host, user and port, which stand
             for those parts of the step. A list in the list is left out
-            if a part that it names is not there: (\"-l\" user). The
-            command to run in the place is added at the end.
+            if a part that it names is not there: (\"-l\" user). A
+            list that starts with the symbol unasked holds words that
+            are there only if nobody can answer what the program asks:
+            (unasked \"-o\" \"BatchMode=yes\"). The command to run in
+            the place is added at the end.
   'line     #t if the command to run in the place is one argument, a line
             for a shell there, as ssh takes it. Else it is added as words.
   'sftp     The full command for the last step of a name, if the method
@@ -96,16 +99,23 @@ is replaced. After the name come keys and values:
    "  ServerAliveCountMax 3\n"
    "Include /etc/ssh/ssh_config\n"))
 
-;; What every ssh of the editor is told. Nobody can answer a question, so
-;; none is asked, whatever a configuration says. The rest is in a file of
-;; the editor, see %ssh-config, which ssh also gives to the ssh that it
-;; starts for a host that it goes through. Without a place for that file,
-;; ssh reads the configuration of the user and nothing is added.
+;; What every ssh of the editor is told. Where nobody can answer a
+;; question, as in a batch run, none is asked, whatever a configuration
+;; says. Else ssh asks through the editor, see runtime/lib/askpass.scm.
+;; The rest is in a file of the editor, see %ssh-config, which ssh also
+;; gives to the ssh that it starts for a host that it goes through. The
+;; file is where the editor has its sockets. Without a place for that
+;; file, ssh reads the configuration of the user and nothing is added.
 (define %ssh-options
   (append
-   '("-o" "BatchMode=yes")
+   '((unasked "-o" "BatchMode=yes"))
    (let* ((runtime (getenv "XDG_RUNTIME_DIR"))
-          (directory (and runtime (string-append runtime "/amacs")))
+          (user (getenv "USER"))
+          (directory (cond [(and runtime (not (string-null? runtime)))
+                            (string-append runtime "/amacs")]
+                           [user (string-append (or (getenv "TMPDIR") "/tmp")
+                                                "/amacs-" user)]
+                           [else #f]))
           (file (and directory (string-append directory "/ssh_config"))))
      (if (and file
               (guard (e (#t #f))
@@ -404,6 +414,55 @@ can follow, so that a chain such as ssh:evo|sudo:: needs no memory."
             (set-prompt-offers! input #f))))))
 
 (add-hook! 'prompt-change-hook %remote-prompt-changed)
+
+;;; Passwords
+
+;; The value after a word at the start of a line of text, or #f: what
+;; ssh -G prints is such lines.
+(define (%ssh-setting text word)
+  (let loop ((lines (string-split text #\newline)))
+    (cond [(null? lines) #f]
+          [(string-prefix? (string-append word " ") (car lines))
+           (substring (car lines) (+ (string-length word) 1) (string-length (car lines)))]
+          [else (loop (cdr lines))])))
+
+;; What ssh makes of the last step of a place such as /ssh:nina:, by its
+;; own account (ssh -G, which connects to nothing): a list of the full
+;; name of the host, the user and the port, or #f. The name that is typed
+;; can be a short one that the configuration of the user gives a meaning.
+;; `options` are the words for ssh before these.
+(define (%ssh-facts place options)
+  (let* ((parts (file-remote-steps place))
+         (step (and (pair? parts)
+                    (not (eq? (car parts) 'error))
+                    (last (car parts)))))
+    (and step
+         (equal? (car step) "ssh")
+         (let* ((user (cadr step))
+                (port (cadddr step))
+                (result (run-process
+                         "ssh"
+                         (append options
+                                 (if user (list "-l" user) '())
+                                 (if port (list "-p" (number->string port)) '())
+                                 (list "-G" "--" (caddr step)))))
+                (text (cadr result))
+                (host (and (eqv? (car result) 0) (%ssh-setting text "hostname"))))
+           (and host
+                (list host (%ssh-setting text "user") (%ssh-setting text "port")))))))
+
+;; For the first question of the ssh of a place, the password that a
+;; source of secrets has for the host, under its full name. A function
+;; of askpass-functions.
+(define (%ssh-stored-password who host user prompt kind before)
+  (and (eq? kind 'secret)
+       (eqv? before 0)
+       (guard (e (#t #f))
+         (let ((facts (%ssh-facts who (filter string? %ssh-options))))
+           (and facts
+                (secret-get 'host (car facts) 'user (cadr facts) 'port (caddr facts)))))))
+
+(add-hook! 'askpass-functions %ssh-stored-password)
 
 ;;; As root
 

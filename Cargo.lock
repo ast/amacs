@@ -55,6 +55,7 @@ dependencies = [
  "amacs-tty",
  "anyhow",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

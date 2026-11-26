@@ -70,8 +70,10 @@ is `#f` for a local name. `(file-as-root name)` builds the name for root,
 without running it.
 `(remote-places)` lists the hosts that the user has worked on, the latest
 first, and `(remote-hosts)` those connected now, with why not for those
-that failed. Nothing can be asked of the user on the way to a host yet, so
-a host that wants a password is an error that says so. Programs are not
+that failed. What `ssh` asks on the way to a host, a password for one, is
+asked of the user in a frame of theirs, never in yours: a host that wants
+an answer waits for the user, and says `waiting for your answer` in
+`(remote-hosts)` meanwhile. Programs are not
 run on other hosts yet: `run-process` in a remote buffer is refused.
 
 ## Secrets
@@ -84,7 +86,9 @@ frame that a program has for itself, and what such code leaves to run later
 or waits for. Such code cannot read the text of a secret buffer, by name or
 as the current buffer, and can do nothing in one but leave it; the buffer
 is drawn as one line that says it is secret; a command is not run in it;
-and `read-passwd` is refused. A coding agent that asks for a file that a
+and `read-passwd` is refused. Such code is given no ticket to make the
+editor ask the user for a password (`askpass-environment`), and cannot
+answer what a program asked. A coding agent that asks for a file that a
 secret buffer visits gets an error.
 
 This keeps a model from reading a secret because it was there. It is not a

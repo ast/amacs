@@ -1,6 +1,7 @@
 //! The `amacs` binary: the editor as a single process in a terminal, as a
 //! server for `amacsclient` (`--daemon`), or without any display (`--batch`).
 
+mod askpass;
 mod clipboard;
 mod daemon;
 mod standalone;

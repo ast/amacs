@@ -538,11 +538,21 @@ ones as the terminal does, so a host that a terminal is logged in to
 opens at once, and the other way round. Where it does not, the editor
 keeps one connection per host of its own, for ten minutes after its last
 use. Compression and the like are the configuration's to set. Hosts that
-are gone through are treated the same. For now the
-host must be one that `ssh` reaches without asking anything, with a key
-or an agent and a host key that is known already, and `sudo` must ask no
-password there: because it never does, or because it was used in a
-terminal a moment ago. Not there yet either: programs on the host, so a
+are gone through are treated the same.
+
+What `ssh` asks on the way, it asks in the minibuffer: the password of a
+host, the passphrase of a key, a code, whether a host that it does not
+know is the right one. The editor does not watch the output of `ssh` for
+this. `ssh` is told of a helper (`SSH_ASKPASS`), runs it with its
+question and reads the answer from it; the helper is `amacsclient`, which
+brings the question to the editor that started that `ssh`. This works in
+a window and in a terminal alike, also one that is reached over `ssh`.
+The words of a question are shown and not read, so every answer is typed
+hidden. For the first question to a host, the password store is looked in
+before the user is asked, under the full name that `ssh -G` gives for the
+host. One answer serves for as long as the connection is kept. `sudo`
+must still ask no password: because it never does, or because it was
+used in a terminal a moment ago. Not there yet either: programs on the host, so a
 remote buffer has no `M-!`, terminal, git, formatter or language server.
 
 The methods are not built in. `ssh`, `sudo`, `podman` and `docker` are
