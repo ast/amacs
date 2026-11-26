@@ -21,6 +21,7 @@ amacs-mcp.workspace = true
 serde_json.workspace = true
 amacs-testkit.workspace = true
 tempfile.workspace = true
+tungstenite.workspace = true
 
 [lints]
 workspace = true

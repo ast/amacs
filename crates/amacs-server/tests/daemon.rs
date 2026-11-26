@@ -397,6 +397,76 @@ fn a_waiting_frame_closes_when_its_files_are_finished() {
 }
 
 #[test]
+fn a_text_field_of_a_browser_gets_a_window_that_closes_when_it_is_done() {
+    use tungstenite::Message;
+    use tungstenite::client::IntoClientRequest;
+
+    let server = Server::start();
+    let mut first = Client::attach(&server, 40, 6, &[], false);
+    first.type_text("at work");
+    // The test opens the window itself, where the editor would start a
+    // program that does.
+    let port: u16 = first
+        .eval(
+            "(set-option! 'ghost-text-port 0)
+             (set-option! 'ghost-text-new-window #t)
+             (define (start-process . ignored) #t)
+             (ghost-text-start)
+             (websocket-server-port %ghost-server)",
+        )
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    let stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    let mut request = format!("ws://localhost:{port}/")
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("Origin", "moz-extension://test".parse().unwrap());
+    let (mut browser, _) = tungstenite::client(request, stream).unwrap();
+    let field = serde_json::json!({
+        "title": "A page", "url": "example.com", "syntax": "",
+        "text": "from the page", "selections": [{ "start": 13, "end": 13 }],
+    });
+    browser.send(Message::text(field.to_string())).unwrap();
+    let start = Instant::now();
+    while first.eval("(ghost-text-fields)").unwrap() == "()" {
+        assert!(start.elapsed() < Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let mut window = Client::attach(&server, 40, 6, &[], false);
+    assert_eq!(window.screen.row(0), "from the page");
+    // The frame that was in use is left as it was.
+    first.sync();
+    assert_eq!(first.screen.row(0), "at work");
+
+    window.type_text("!");
+    window.send(ClientMsg::Input(InputEvent::Key("C-c".parse().unwrap())));
+    window.send(ClientMsg::Input(InputEvent::Key("C-c".parse().unwrap())));
+    assert_eq!(
+        window.receive(),
+        Some(ServerMsg::Exit {
+            message: None,
+            status: 0
+        })
+    );
+    let sent: serde_json::Value = match browser.read().unwrap() {
+        Message::Text(text) => serde_json::from_str(text.as_str()).unwrap(),
+        other => panic!("unexpected message: {other:?}"),
+    };
+    assert_eq!(sent["text"], "from the page!");
+    assert!(matches!(browser.read(), Ok(Message::Close(_))));
+    first.sync();
+    assert_eq!(first.screen.row(0), "at work");
+}
+
+#[test]
 fn a_vanished_client_takes_its_frame_with_it() {
     let server = Server::start();
     let mut stays = Client::attach(&server, 60, 6, &[], false);

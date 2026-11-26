@@ -61,7 +61,9 @@ editor runs `pre-command-hook` and `post-command-hook` around every command,
 `after-save-hook` around the writing of a buffer to its file,
 `kill-buffer-hook` after a buffer is killed, with its name,
 `window-size-change-hook` when the text area of a window changes size or
-comes to show another buffer, `term-directory-hook` when the program in a
+comes to show another buffer, `after-make-frame-hook` when a client has
+opened a window or a terminal on the editor, with that frame the current
+one, `term-directory-hook` when the program in a
 terminal has changed directory, with the buffer's name and the directory,
 and a hook named after each mode when the mode is switched.
 
@@ -172,6 +174,54 @@ what they say. `(process-list)` is every process not yet deleted, and
 `M-x list-processes` shows them. Nothing waits for a process, so typing is
 never held by one; every program still running is ended when the editor
 exits.
+
+## Programs that connect
+
+Some programs do not run under the editor but connect to it, as the
+extension of a web browser does. `make-websocket-server` listens for them
+on a port of this machine, and the editor hears from each connection in
+text messages:
+
+```scheme
+(define server
+  (make-websocket-server 4001
+    'origins '("moz-extension://")
+    'open (lambda (connection origin) (message "connected: " origin))
+    'message (lambda (connection text)
+               (websocket-send connection (string-append "got " text)))
+    'close (lambda (connection) (message "gone"))))
+```
+
+Servers and connections are numbers. The procedures are called on the
+editor's thread, in the frame that was last used. `(websocket-send
+connection text)` hands a message to a thread, so a program slow to read
+does not hold the editor; `(websocket-close connection)` closes after what
+was sent has gone out, and `(websocket-live? connection)` says whether it
+is open. `(websocket-server-port server)` is the port, which with port 0
+is one that was free; `(websocket-connections server)`,
+`(websocket-server-list)` and `(delete-websocket-server server)` do what
+they say. A server given `'reply`, a text of JSON, answers a plain GET with
+it, as some protocols want before the WebSocket;
+`(set-websocket-server-reply! server text)` changes it.
+
+The server listens to this machine only. That does not keep web pages
+out: any page can ask the browser to connect to a port of the machine the
+browser runs on. A browser says where the code that connects is from, its
+origin, and `'origins` lists what an origin must start with to be served.
+A request with another origin is refused before it becomes a connection.
+A program that is not a browser gives no origin and is served: it runs on
+this machine as the user already.
+
+`runtime/lib/ghost-text.scm`, the text fields of a web browser in buffers,
+is a feature written on this. It also shows the pieces for keeping a
+buffer and something outside the editor the same: `(buffer-tick)` is a
+number that grows each time the text of a buffer changes, so equal ticks
+mean the same text; `(string-difference old new)` says how much two texts
+share at the start and at the end, so that only what differs is replaced;
+`(make-buffer name)` makes a buffer without showing it and returns its
+name; and `(char-index->utf16 string index)` and `(utf16->char-index
+string index)` change between positions in chars and positions as
+browsers and language servers count them.
 
 ## The pointer
 

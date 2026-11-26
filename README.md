@@ -57,6 +57,8 @@ Working now:
   pseudo-terminal, its screen in an ordinary buffer (below)
 - A coding agent (`C-c c c`): Claude Code, or another agent that speaks
   the Agent Client Protocol, with its conversation in a buffer (below)
+- The text fields of a web browser in buffers, through the GhostText
+  extension, kept the same as the page while either is typed in (below)
 - Spelling: a wave under the misspelled words on screen, in several
   languages at once, with Hunspell's dictionaries (below)
 
@@ -886,6 +888,56 @@ from code.
 
 Not there yet: narrowing, `repeat`, renaming a buffer, and regular
 expressions in `C-s`. `TODO.md` has the list.
+
+## Text fields of a web browser
+
+A text field of a web page can be edited here instead of in the page,
+where the site decides what the keys do. The browser's side is the
+[GhostText](https://ghosttext.fregante.com/) extension, for Firefox and
+Chrome; the editor's side is `M-x ghost-text-start`, or in the init file:
+
+```scheme
+(ghost-text-start)
+```
+
+In the browser, put the cursor in a field and press the extension's button
+or its key, `Ctrl-Shift-H` on Linux unless changed. The field comes up in
+a buffer named after the site, with the cursor where it was in the page.
+What is typed in the buffer is in the page a moment later, and what is
+typed in the page is in the buffer, so nothing has to be saved or sent.
+The extension also knows the editors that sites build themselves, such as
+CodeMirror and Monaco.
+
+| Key | Does |
+|---|---|
+| `C-c C-c`, `C-x #` | Hand the field back to the browser, which shows its page again |
+| `C-c C-k` | Hand it back with the text it had when the editing began |
+
+Killing the buffer hands the field back as well, and a field that the
+browser closes, as when its page is left, takes its buffer along.
+`M-x ghost-text-stop` stops listening.
+
+| Option | Says |
+|---|---|
+| `ghost-text-new-window` | Whether a field gets a window of its own, which closes when the field is done; otherwise it is shown in the frame last used |
+| `ghost-text-modes` | The major mode for the fields of a site: lists of a regular expression for the host and a mode. GitHub, GitLab, Reddit and Stack Overflow are Markdown |
+| `ghost-text-default-mode` | The mode for the other sites: `text-mode` |
+| `ghost-text-port` | The port to listen on: 4001, which is what the extension asks unless its options say otherwise |
+| `ghost-text-origins` | What the origin of a program that connects must start with: the extensions of browsers |
+| `ghost-text-delay` | For how many milliseconds changes are collected before they are sent: 50 |
+
+```scheme
+(set-option! 'ghost-text-new-window #t)
+(set-option! 'ghost-text-modes
+  (cons '("(^|\\.)example\\.org$" markdown-mode) (option 'ghost-text-modes)))
+```
+
+One editor can listen on the port at a time; a second one, such as the
+server of a development build, says that the port is taken. The editor
+listens to this machine only, and of what a browser runs it serves the
+extensions and not the pages: any page can ask a browser to connect to a
+port of the machine it runs on. `runtime/lib/ghost-text.scm` is the code,
+on top of `make-websocket-server`, which `docs/extending.md` describes.
 
 ## Themes
 

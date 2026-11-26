@@ -167,6 +167,7 @@ pub struct Editor {
     pub(crate) file_jobs: crate::files::FileJobs,
     pub(crate) spell: crate::spell::SpellState,
     pub(crate) processes: ProcessState,
+    pub(crate) websockets: crate::websocket::WebSocketState,
     pub(crate) terminals: crate::terminal::Terminals,
     /// Keymaps by name: [`GLOBAL_MAP`], [`MINIBUFFER_MAP`], and one per mode,
     /// named after the mode.
@@ -254,6 +255,7 @@ impl Editor {
             file_jobs: crate::files::FileJobs::default(),
             spell: crate::spell::SpellState::default(),
             processes: ProcessState::default(),
+            websockets: Default::default(),
             terminals: crate::terminal::Terminals::default(),
             script: ScriptState::new(),
             faces: Faces::default(),
@@ -847,6 +849,7 @@ impl Editor {
         self.file_jobs_poll();
         self.spell_poll();
         self.process_poll();
+        self.websocket_poll();
         self.completion_poll(now);
         if self.auto_revert_due.is_none_or(|due| due <= now) {
             self.auto_revert_due = Some(now + AUTO_REVERT_INTERVAL);

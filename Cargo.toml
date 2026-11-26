@@ -53,6 +53,8 @@ signal-hook = "0.4"
 slotmap = "1"
 smithay-client-toolkit = "0.21"
 tempfile = "3"
+# WebSockets without an async runtime: the editor's threads are its own.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 thiserror = "2"
 unicode-width = "0.2"
 # The driver of a GPU talks to the system's libwayland, so the window's
@@ -65,8 +67,8 @@ pollster = "0.4"
 # Pseudo-terminals, with the controlling terminal set in the child.
 portable-pty = "0.9"
 raw-window-handle = "0.6"
-# Signals to the programs that Scheme code starts.
-rustix = { version = "1", features = ["process"] }
+# Signals to the programs that Scheme code starts, and waiting for sockets.
+rustix = { version = "1", features = ["event", "process"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

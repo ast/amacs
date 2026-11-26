@@ -180,6 +180,21 @@ whole frame anew.
 - [ ] The picture from `screen` uses the server's configured font and falls
       back silently to another monospace font when it is missing.
 
+## Text fields of a web browser (`runtime/lib/ghost-text.scm`)
+
+- [ ] A change made in the page replaces everything between what the two
+      texts share at the start and at the end. A real diff would keep
+      point and the undo history finer when the page changes two places.
+- [ ] The cursor goes to the page with changed text only: moving about in
+      the buffer does not move the cursor in the page.
+- [ ] A change that no command made, as by a coding agent, goes to the
+      page after the next command in the buffer. A hook for changes to a
+      buffer would send it at once.
+- [ ] Closing a field's own window with the compositor leaves the field
+      open in its buffer until the page closes it.
+- [ ] WebSocket servers carry text only, without TLS, and the editor
+      cannot connect to one as a client.
+
 ## From the plan, to check before assuming done
 
 Not verified since they were written. Check each against the code before

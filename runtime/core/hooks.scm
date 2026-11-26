@@ -11,6 +11,8 @@
 ;;;                      size, or the window came to show another buffer
 ;;;   term-directory-hook  after the program in a terminal changed
 ;;;                      directory, with the buffer's name and the directory
+;;;   after-make-frame-hook  after a client opened a window or a terminal
+;;;                      on the editor, with that frame the current one
 ;;; Every mode also has a hook named after it, such as `rust-mode-hook`.
 
 (define %hooks (make-hash-table))

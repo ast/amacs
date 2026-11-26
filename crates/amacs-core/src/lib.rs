@@ -37,6 +37,7 @@ mod snippet;
 mod spell;
 mod terminal;
 mod undo_view;
+mod websocket;
 mod window;
 
 pub use buffer::{Buffer, BufferId, LineNumbers};

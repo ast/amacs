@@ -318,6 +318,37 @@ pub const API: &[ApiFn] = api! {
             let (a, b) = (pos(ed, args, 0)?, pos(ed, args, 1)?);
             Ok(ed.text().slice(a.min(b)..a.max(b)).into())
         };
+    "char-index->utf16" (2, Some(2)) "Where a position in a string, counted in chars, is when counted in the code units of UTF-16, as web browsers and language servers count: a char outside the basic plane, such as an emoji, takes two units. A position past the end counts as the end." =>
+        |_, args| {
+            let chars = usize::try_from(int(args, 1)?).unwrap_or(0);
+            Ok(string(args, 0)?.chars().take(chars).map(char::len_utf16).sum::<usize>().into())
+        };
+    "utf16->char-index" (2, Some(2)) "Where a position in a string, counted in the code units of UTF-16, is when counted in chars. A position inside a char that takes two units is that char's start, and one past the end is the end." =>
+        |_, args| {
+            let units = usize::try_from(int(args, 1)?).unwrap_or(0);
+            let mut seen = 0;
+            let chars = string(args, 0)?
+                .chars()
+                .take_while(|c| {
+                    seen += c.len_utf16();
+                    seen <= units
+                })
+                .count();
+            Ok(chars.into())
+        };
+    "string-difference" (2, Some(2)) "Where two strings differ: a list of the number of chars they share at the start and the number they share at the end after that. What lies between is what changing the one into the other must replace." =>
+        |_, args| {
+            let (a, b) = (string(args, 0)?, string(args, 1)?);
+            let start = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
+            let end = a
+                .chars()
+                .rev()
+                .zip(b.chars().rev())
+                .take(a.chars().count().min(b.chars().count()) - start)
+                .take_while(|(x, y)| x == y)
+                .count();
+            Ok(Value::List(vec![start.into(), end.into()]))
+        };
     "string-width" (1, Some(1)) "The number of columns a string takes on screen: two for a wide char such as a CJK ideograph, none for a combining mark." =>
         |_, args| Ok(amacs_core::string_cells(string(args, 0)?).into());
     "buffer-string" (0, Some(1)) "The whole text of the current buffer, or of the named one." =>
@@ -373,6 +404,8 @@ pub const API: &[ApiFn] = api! {
         };
     "buffer-modified?" (0, Some(1)) "Whether a buffer has unsaved changes." =>
         |ed, args| Ok(buffer(ed, args, 0)?.is_modified().into());
+    "buffer-tick" (0, Some(1)) "A number that grows each time the text of a buffer changes: equal ticks mean the same text." =>
+        |ed, args| Ok(Value::Int(buffer(ed, args, 0)?.tick() as i64));
     "buffer-read-only?" (0, Some(1)) "Whether a buffer refuses edits." =>
         |ed, args| Ok(buffer(ed, args, 0)?.read_only.into());
     "set-buffer-read-only!" (1, Some(1)) "Make the current buffer read-only, or writable with #f." =>
@@ -394,6 +427,11 @@ pub const API: &[ApiFn] = api! {
             };
             ed.switch_to_buffer(id);
             Ok(Value::Void)
+        };
+    "make-buffer" (1, Some(1)) "Make a new, empty buffer without showing it, and return its name: the name given, or that name with <2>, <3> and so on if it is taken." =>
+        |ed, args| {
+            let id = ed.add_buffer(Buffer::new(string(args, 0)?));
+            Ok(ed.buffer_by_id(id).map(|buffer| buffer.name.clone()).into())
         };
     "kill-buffer" (0, Some(1)) "Remove a buffer without asking, even if it is modified." =>
         |ed, args| {
@@ -453,6 +491,15 @@ pub const API: &[ApiFn] = api! {
         |ed, _| {
             ed.release_input();
             Ok(Value::Void)
+        };
+    "editor-program" (1, Some(1)) "The file name of a program that is part of the editor, such as \"amacsclient\": the one beside the editor that is running, so that it is of the same build, or the plain name, to be looked for on the PATH, if there is none there." =>
+        |_, args| {
+            let name = string(args, 0)?;
+            let beside = std::env::current_exe()
+                .ok()
+                .and_then(|editor| Some(editor.parent()?.join(name)))
+                .filter(|program| program.is_file());
+            Ok(beside.map_or_else(|| name.to_owned(), |program| program.display().to_string()).into())
         };
     "start-process" (2, Some(2)) "Start a program, with its arguments as a list of strings, and leave it to itself: nothing waits for it and what it writes is thrown away. For programs that show something of their own. An error if it cannot be started." =>
         |ed, args| {
@@ -1406,6 +1453,61 @@ pub const API: &[ApiFn] = api! {
         };
 
     // Terminals
+
+    // WebSocket servers
+
+    "%make-websocket-server" (6, Some(6)) "Listen for WebSocket connections on a port of this machine: the port, or 0 for one that is free; the JSON text to answer a plain GET with, or #f; the starts of the origins to serve, as a list of strings; and three procedures or #f, called with a new connection and its origin, with a connection and each text message, and with a connection that has ended. Returns the server's number. See `make-websocket-server`." =>
+        |ed, args| {
+            let port = u16::try_from(int(args, 0)?)
+                .map_err(|_| wrong_type(0, "a port, 0 to 65535", &args[0]))?;
+            let reply = match &args[1] {
+                Value::Bool(false) => None,
+                Value::Str(reply) => Some(reply.clone()),
+                other => return Err(wrong_type(1, "a string or #f", other)),
+            };
+            let id = ed.websocket_listen(
+                port,
+                reply,
+                strings(args, 2)?,
+                procedure_or_false(args, 3)?,
+                procedure_or_false(args, 4)?,
+                procedure_or_false(args, 5)?,
+            )?;
+            Ok(Value::Int(id as i64))
+        };
+    "websocket-server-list" (0, Some(0)) "The WebSocket servers that listen, oldest first, as numbers." =>
+        |ed, _| Ok(Value::List(ed.websocket_server_list().into_iter().map(|id| Value::Int(id as i64)).collect()));
+    "websocket-server-port" (1, Some(1)) "The port a WebSocket server listens on." =>
+        |ed, args| Ok(Value::Int(i64::from(ed.websocket_server_port(process_id(args, 0)?)?)));
+    "websocket-connections" (1, Some(1)) "The connections of a WebSocket server that are open, oldest first, as numbers." =>
+        |ed, args| Ok(Value::List(ed.websocket_connections(process_id(args, 0)?).into_iter().map(|id| Value::Int(id as i64)).collect()));
+    "set-websocket-server-reply!" (2, Some(2)) "Set the JSON text that a WebSocket server answers a plain GET with, or #f for none: for an answer that tells the port the server got." =>
+        |ed, args| {
+            let reply = match &args[1] {
+                Value::Bool(false) => None,
+                Value::Str(reply) => Some(reply.clone()),
+                other => return Err(wrong_type(1, "a string or #f", other)),
+            };
+            ed.set_websocket_server_reply(process_id(args, 0)?, reply)?;
+            Ok(Value::Void)
+        };
+    "delete-websocket-server" (1, Some(1)) "Stop a WebSocket server and close its connections, without word to its procedures." =>
+        |ed, args| {
+            ed.delete_websocket_server(process_id(args, 0)?)?;
+            Ok(Value::Void)
+        };
+    "websocket-live?" (1, Some(1)) "Whether a WebSocket connection is open." =>
+        |ed, args| Ok(ed.websocket_live(process_id(args, 0)?).into());
+    "websocket-send" (2, Some(2)) "Send a text message on a WebSocket connection. The text is handed to a thread, so a client slow to read does not hold the editor. An error if the connection has ended." =>
+        |ed, args| {
+            ed.websocket_send(process_id(args, 0)?, string(args, 1)?)?;
+            Ok(Value::Void)
+        };
+    "websocket-close" (1, Some(1)) "Close a WebSocket connection, after what was sent on it has gone out. The procedure of its server for the end is called when it has ended. Nothing happens if it has ended already." =>
+        |ed, args| {
+            ed.websocket_close(process_id(args, 0)?);
+            Ok(Value::Void)
+        };
 
     "%make-terminal" (5, Some(6)) "Make a buffer the screen of a process on a pseudo-terminal: the buffer's name, the process, columns, rows, the lines of scrollback to keep, and a procedure called with the buffer's name, an event and its argument when the program asks something of its terminal: 'title with the text or #f, 'bell, 'clipboard with the text, 'exit with the status. The buffer's text is taken over." =>
         |ed, args| {

@@ -117,6 +117,26 @@
                ;; ("n" "/ssh:evo:/etc/nixos" "evo's NixOS")
                ))
 
+;;; Text fields of a web browser
+;;;
+;;; With the GhostText extension in the browser, its button or
+;;; Control-Shift-H in a text field of a page brings the field up in a
+;;; buffer here, kept the same as the page. C-c C-c hands it back.
+
+;; One editor can have the port. A second one that reads this file, such as
+;; the server of a development build, says so and goes on without.
+(guard (e (#t (message "GhostText is off here. Another editor has its port.")))
+  (ghost-text-start))
+
+;; A window for each field, which closes when the field is done, in place
+;; of the frame that was last used.
+;; (set-option! 'ghost-text-new-window #t)
+
+;; The fields of more sites as Markdown.
+;; (set-option! 'ghost-text-modes
+;;              (cons '("(^|\\.)example\\.org$" markdown-mode)
+;;                    (option 'ghost-text-modes)))
+
 ;;; Language servers
 ;;;
 ;;; A server is started for a project when the first of its files is opened

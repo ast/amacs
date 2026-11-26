@@ -483,6 +483,11 @@ impl Server {
                     Err(error) => editor.message(error.to_string()),
                 }
             }
+            // Code that asked for a window, as for a text field of a web
+            // browser, now says what the window is to show.
+            if frame.is_some() && !headless {
+                editor.run_hook("after-make-frame-hook", Vec::new());
+            }
         }
         self.session.run_pending();
         if headless {
