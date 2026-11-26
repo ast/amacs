@@ -290,6 +290,103 @@ places in windows, and `(hide-labels!)` removes them. `(avy-candidates match?)`
 finds places on screen, `(avy-pick candidates)` lets the user choose one by
 its label, and `(avy-jump candidates)` goes there.
 
+## Lines that are hidden
+
+`(hide-lines! start end)` hides the lines of the current buffer that the
+text between two positions touches; an end at the start of a line leaves
+that line shown. The line before them shows a mark, in the face `fold`.
+The text is not changed, and the first line of a buffer is never hidden.
+`(show-lines! start end)` shows the hidden lines that start between two
+positions, `(show-lines!)` all of them, and `(reveal! pos)` those around a
+position. `(hidden? pos)` says whether a position is on a hidden line, and
+`(hidden-ranges)` lists what is hidden, as pairs that `hide-lines!` takes.
+
+Hidden lines stay hidden as the text changes, and can lie within one
+another: showing the outer ones leaves the inner ones hidden. Motion steps
+over them. A command that leaves point among them, as a jump to a line or
+to an error does, shows the lines around point; code that jumps has
+nothing to do for that.
+
+## Headings
+
+A mode whose text is under headings tells the library for outlines,
+`runtime/lib/outline.scm`, how to find them:
+
+```scheme
+(define-outline 'markdown-mode
+  'headings markdown-headings   ; => ((position level text) ...)
+  'marker "#"                   ; a line starts with this once per level
+  'max-level 6)                 ; or #f
+```
+
+With that the mode can bind `outline-next-heading`, `outline-up-heading`,
+`outline-goto-heading`, `outline-promote`, `outline-demote-subtree`,
+`outline-move-subtree-up`, `outline-cycle` and the rest, as
+`runtime/lib/markdown.scm` and `runtime/lib/org.scm` do. For code,
+`(outline-headings)` lists the headings, `(outline-heading-at pos)` and
+`(outline-current-heading pos)` find one, `(outline-subtree-end heading)`
+says where what is under it ends, and `(outline-fold heading)`,
+`(outline-unfold heading)` and `(outline-folded? heading)` fold it.
+
+`(mode-lookup table)` is how such a library finds what a mode told it: the
+entry of a hash table for the major mode or the nearest mode that it is
+derived from. `(property-ref '(marker "#" max-level 6) 'marker)` reads a
+list of keys and values.
+
+## Links
+
+`(open-link "https://example.org")` goes where a target leads, and
+`(browse-url url)` hands an address to the program of the
+`browse-url-program` option. A new kind of link is a name and a procedure
+that is given the rest of the target:
+
+```scheme
+(define-link-type "ticket"
+  (lambda (number)
+    (browse-url (string-append "https://tickets.example.org/" number))))
+```
+
+After that `ticket:42` is followed in Org, `[[ticket:42]]`, and in
+Markdown, `[the ticket](ticket:42)`. A mode says how its links are written
+with `(define-links 'mode 'at-point procedure 'internal procedure)`:
+`at-point` is given a position and returns `(start end target text)` or
+`#f`, and `internal` is given a target that names a place in the buffer and
+returns its position. `(link-at)` is the link at point in any mode.
+
+## Tables and lists
+
+`runtime/lib/prose.scm` has the tables and lists of Markdown and Org:
+`table-align`, `table-next-cell`, `table-insert`, `list-item-newline`,
+`list-item-toggle-checkbox`, and for code `(table-format lines)`,
+`(table-bounds)` and `(list-item-parts line)`. A mode says how it writes
+them with `(define-prose-style 'mode 'rule 'plus 'tick "[X]" 'star-items?
+#f)`.
+
+## Org
+
+`runtime/lib/org.scm` is made to be added to.
+
+- `(org-parse-heading "** TODO Write it :work:")` gives `(2 "TODO" "Write
+  it" ("work"))`, and `(org-headings-in text)` the headings of a string:
+  code that reads many files, as an agenda does, needs no buffer for them.
+- `(org-element-at)` says what is at point: `(heading start level state
+  title tags)`, `(block start end name rest)`, `(table start end)`, `(item
+  ...)`, `(keyword start name value)` or `(paragraph start)`.
+- `(define-org-action kind procedure)` gives `C-c C-c` more to do on a kind
+  of element. The procedure is given the element and returns `#f` if it
+  did nothing:
+
+  ```scheme
+  (define-org-action 'block
+    (lambda (block)
+      (and (equal? (cadddr block) "src")
+           (begin (message "A block of " (list-ref block 4)) #t))))
+  ```
+
+- `org-mode-hook` runs in every buffer of Org, and
+  `(set-syntax-keywords! not-done done)` tells the colours which words are
+  states of headings.
+
 ## Buffers that code writes
 
 A feature that shows something of its own, as the file manager does, writes

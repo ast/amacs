@@ -189,8 +189,54 @@ the ones that are still not there, the ones that need the core first.
 - [ ] Tables are lined up by changing the text. Showing an unaligned table
       aligned without touching it needs virtual text in redisplay.
 - [ ] Hiding markup and a reading mode, as `markdown-ts-view-mode` has.
-- [ ] Moving subtrees, a table of contents, struck-through text drawn
-      struck through (it is drawn as a comment).
+- [ ] A table of contents, struck-through text drawn struck through (it
+      is drawn as a comment).
+
+## Org (`runtime/lib/org.scm`, colours in `crates/amacs-treesit/src/org.rs`)
+
+The Org that edits a file of notes is there since 2026-11-26: colours,
+folding, headings and their states, lists, tables, links. Left, in the
+order that seems most useful:
+
+- [ ] Running source blocks with `C-c C-c` and their `#+RESULTS:`, and
+      tangling the blocks that have `:tangle`. `define-org-action` on
+      `'block` is the place.
+- [ ] Capture into a file under a heading, and the journal with its tree
+      of dates.
+- [ ] The agenda: headings with states and dates over several files.
+      `org-headings-in` reads a file without a buffer. Dates need parsing
+      and arithmetic, which Scheme does not have yet.
+- [ ] Tags (`C-c C-q`), priorities, and `SCHEDULED`, `DEADLINE` and
+      `CLOSED` set by commands. A state per file from `#+TODO:`.
+- [ ] Lists: renumbering, indenting an item with what is under it, and
+      the `[1/3]` counts of boxes.
+- [ ] Tables: `RET` to the cell below, moving rows and columns, formulas.
+- [ ] Folding drawers and blocks with `TAB`, and drawers folded when a
+      file is visited.
+- [ ] `C-c '` to edit a source block in a buffer of its language.
+- [ ] Links by `id:` to entries of other files, which takes an index of
+      the files; `C-c l` to store a link to this place.
+- [ ] Hiding emphasis markers and the targets of links, and indenting
+      text under its heading as `org-indent-mode` does. Both need text
+      hidden or added within a line, in redisplay.
+- [ ] Underlined and struck text have no colour: faces have no line
+      through text.
+- [ ] Export.
+
+## Lines that are hidden (`crates/amacs-core/src/fold.rs`)
+
+- [ ] Faces and spans laid over text do not follow an undo: `Buffer::undo`
+      changes the text without the code that moves them. Hidden lines do
+      follow, since they are moved where every change goes through
+      (`Parts`); faces and spans can move there too.
+- [ ] With lines hidden, the highlights and the scans for symbols and
+      spelling are made for all text from the first row of a window to its
+      last, the hidden lines among it. If a large folded file feels slow,
+      make them for the parts that are shown (`Folds::shown_in`).
+- [ ] A search that only previews a line shows the hidden lines around
+      it, and they stay shown if the search is cancelled.
+- [ ] Balanced expressions are moved over without regard to hidden lines:
+      `C-M-f` into them shows them.
 - [ ] Text in another language is parsed anew each time it is drawn
       (`paint_injections`); cache the trees if large documents feel slow.
 
@@ -299,7 +345,6 @@ three of its six steps and part of the fifth.
       minibuffer since 2026-11-26. Still to be tried by hand, since no test can:
       `C-x C-f //sudo::/etc/hosts`, `/ssh:host|sudo::/etc/hosts` and
       `/ssh:a|ssh:b:/etc/hostname`.
-- [ ] Org.
 - [ ] age encryption.
 
 ## Things that bit before

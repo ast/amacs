@@ -50,7 +50,8 @@ Code:
 
 Writing:
 
-- Markdown, with tables that line up and lists that continue
+- Org and Markdown: headings that fold away what is under them and move
+  with it, tables that line up, lists that continue, links that are followed
 - Spelling in several languages at once, with a wave under wrong words
 - The text fields of a web browser, edited here with the GhostText
   extension
@@ -78,7 +79,7 @@ The sections below describe each of these.
 
 The larger things that the editor cannot do yet:
 
-- Org
+- More of Org: the agenda, capture, running source blocks, export
 - On other hosts: programs, language servers and git. Passwords are not
   asked for, so a host must let you in with a key
 - Narrowing, `repeat`, renaming a buffer, and regular expressions in `C-s`
@@ -322,6 +323,69 @@ Lining up a table changes its text: every cell of a column is made as wide
 as the widest, counted in screen columns, and placed as the row of dashes
 says (`:--` left, `--:` right, `:-:` in the middle). It is written in
 Scheme, in `runtime/lib/markdown.scm`.
+
+Headings have the colour of their level. `TAB` on a heading folds away what
+is under it; a second `TAB` shows the headings under it, and a third shows
+all. `S-TAB` outside a table does the same for the whole buffer: the
+headings of the highest level, all headings, all text. `C-c C-u` goes to
+the heading above, `C-c C-f` and `C-c C-b` to the next and the previous
+heading of the same level, `M-S-<left>` and `M-S-<right>` change the level
+of a heading with all under it, and `M-<up>` and `M-<down>` move a heading
+with all under it past the one beside it.
+
+`C-c C-o`, the middle button or `C-<mouse-1>` follows the link at point: a
+web address opens in the browser, a file is visited (`notes/plan.md#the-plan`
+at that heading), and `#the-plan` goes to the heading of that name in the
+same file. Links by reference, `[text][label]`, are followed through the
+line that gives the address. An address written out in the text is a link
+in every mode.
+
+## Org
+
+Files that end in `.org` open in `org-mode`. This is the Org that edits a
+file of notes: there is no agenda, no capture, and source blocks are not
+run. Headings, lists, tables and links work as in Markdown, above, with
+what Org writes in its own way.
+
+| Key | Does |
+|---|---|
+| `TAB`, `S-TAB` | On a heading and elsewhere: fold and show, as in Markdown. In a table: the next and the previous cell |
+| `M-RET` | A new heading of the same level after all that is under this one; in a list, a new item |
+| `M-<left>`, `M-<right>` | On a heading: its level. Elsewhere: by words, as everywhere |
+| `M-S-<left>`, `M-S-<right>`, `M-<up>`, `M-<down>` | A heading with all under it: its level, and past the one beside it |
+| `C-c C-n`, `C-c C-p`, `C-c C-u`, `C-c C-f`, `C-c C-b`, `C-c C-j` | Go by headings; `C-c C-j` asks for one by its text |
+| `C-c C-t` | The next state of the heading: none, `TODO`, `DONE`, none |
+| `C-c C-c` | Line up the table at point, or tick or clear the box of a list item |
+| `C-c \|` | Insert a table |
+| `C-c .` | Insert the date of today, `<2026-11-26 Thu>` |
+| `C-c C-l`, `C-c C-o` | Insert a link; follow the link at point |
+| `M-+` after `src`, `quote` or `example` | A block of that kind |
+
+The states of a heading are those of the `org-todo-keywords` option: the
+words for what is still to do, and the words for what is done.
+
+```scheme
+(set-option! 'org-todo-keywords
+             '(("TODO" "FEEDBACK" "VERIFY") ("DONE" "DELEGATED")))
+(set-option! 'org-startup-folded 'overview)   ; or 'content, or #f
+```
+
+A file is shown folded as its line `#+STARTUP:` says (`overview`,
+`content`, `showall`), or else as the `org-startup-folded` option says.
+
+A link is `[[target]]` or `[[target][text]]`. The target is a web address,
+`file:other.org` or `./other.org` (with `::*Heading`, `::#custom-id`, a line
+number or text to look for after it), `*Heading`, `#custom-id`, `id:` and
+the `ID` of an entry of the same file, or the text of a heading or of a
+`<<target>>`.
+
+A table has a rule of dashes and plus signs, and a column of numbers is
+lined up to the right. The code of a source block is coloured as its
+language. Emphasis markers and the targets of links are shown as they are
+written: nothing is hidden within a line.
+
+Org is written in Scheme, in `runtime/lib/org.scm`, on libraries that
+Markdown uses too; `docs/extending.md` says how to add to it.
 
 ## Language servers
 
@@ -1004,7 +1068,10 @@ option, and `M-x choose-theme` picks one by name. The faces are listed in
 `string`, `escape`, `regexp`, `constant`, `number`, `keyword`, `operator`,
 `bracket`, `delimiter`, `function-name`, `function-call`, `builtin`,
 `preprocessor`, `type`, `variable-name`, `property`, `heading`, `emphasis`,
-`strong`, `code` and `link`.
+`strong`, `code` and `link`; for prose also `heading-2` to `heading-8`,
+`prose-todo`, `prose-done`, `prose-tag`, `prose-metadata`, `prose-verbatim`,
+`prose-table` and `date`. `fold` is the mark after a line that lines are
+hidden after.
 
 ## Server and clients
 
