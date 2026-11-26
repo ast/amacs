@@ -91,6 +91,30 @@ Like `define-minor-mode`, for a mode that is on in every buffer at once.")
        (set! %global-modes (cons 'name %global-modes))
        (define-command (name) doc (%toggle-minor-mode 'name pretty #t)))]))
 
+;;; What a library knows of each mode
+;;;
+;;; A library that serves several modes, such as the one for links, keeps a
+;;; hash table from the name of a mode to what that mode told it, often a
+;;; list of keys and values.
+
+(define (mode-lookup table)
+  "The entry of a hash table for the major mode of the current buffer, or
+for the nearest of the modes that it is derived from that has one; #f if
+none has. The keys of the table are names of modes."
+  (let loop ((mode (major-mode)))
+    (and mode
+         (or (hash-table-ref table mode)
+             (loop (%mode-parent mode))))))
+
+(define (property-ref properties key . default)
+  "The value after a key in a list of keys and values, such as
+'(marker \"#\" max-level 6); the default, or else #f, if the key is not
+there."
+  (cond [(or (null? properties) (null? (cdr properties)))
+         (and (pair? default) (car default))]
+        [(eq? (car properties) key) (cadr properties)]
+        [else (apply property-ref (cddr properties) key default)]))
+
 ;;; Choosing a major mode from the file name
 
 ;; Pairs of (suffix . mode), newest first.

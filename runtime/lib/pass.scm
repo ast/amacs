@@ -244,8 +244,7 @@ field is asked for."
          (url (pass-field name "url")))
     (unless url
       (error (string-append name " has no url field")))
-    (start-process (option 'dired-open-program) (list url))
-    (message "Opened " url)))
+    (browse-url url)))
 
 (define-command (pass-edit)
   "Visit an entry of the password store, to read it or change it. Saving

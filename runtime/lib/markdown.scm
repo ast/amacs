@@ -1,6 +1,7 @@
 ;;; Editing Markdown: tables that keep their columns in line, lists that
-;;; go on, boxes that are ticked, and moving by headings. How Markdown is
-;;; coloured is the business of its grammar, in crates/amacs-treesit.
+;;; go on, boxes that are ticked, moving by headings, and links that are
+;;; followed. How Markdown is coloured is the business of its grammar, in
+;;; crates/amacs-treesit.
 
 ;;; Lines
 
@@ -461,6 +462,96 @@ the text."
   "Make the heading at point one level less important: one # more."
   (%markdown-shift-heading 1))
 
+;;; Links
+
+;; The address that a label stands for: that of the line `[label]: address`
+;; of the buffer, or #f. Labels are the same whatever the case of their
+;; letters.
+(define (%markdown-definition label)
+  (let ((label (string-downcase (string-trim label)))
+        (text (buffer-string)))
+    (let loop ((from 0))
+      (let ((match (regexp-search "(?m)^ {0,3}\\[([^\\]]+)\\]:[ \\t]*<?([^\\s>]+)" text from)))
+        (and match
+             (if (equal? label
+                         (string-downcase
+                          (string-trim (apply substring text (cadr match)))))
+                 (apply substring text (caddr match))
+                 (loop (cadr (car match)))))))))
+
+;; The target that the address of a link stands for. An address that is
+;; no web address and does not start with # is the name of a file, and the
+;; # before a place in that file is written :: and # for the library of
+;; links.
+(define (%markdown-target address)
+  (let ((hash (string-search address "#")))
+    (cond [(or (eqv? hash 0) (regexp-search "^[A-Za-z][A-Za-z0-9+.-]*:" address))
+           address]
+          [hash (string-append "file:" (substring address 0 hash) "::"
+                               (substring address hash (string-length address)))]
+          [else (string-append "file:" address)])))
+
+(define (markdown-link-at pos)
+  "The link of Markdown that a position is in: a list of where it starts,
+where it ends, its target and its text, or #f. A link is [text](address),
+a picture ![text](address), [text][label] or [label] where a line
+`[label]: address` of the buffer gives the address, or the address of
+such a line."
+  (let* ((start (line-beginning-position pos))
+         (line (buffer-substring start (line-end-position pos)))
+         (index (- pos start))
+         (part (lambda (match group) (apply substring line (list-ref match group))))
+         (link (lambda (match address text)
+                 (and address
+                      (list (+ start (car (car match))) (+ start (cadr (car match)))
+                            (%markdown-target address) text)))))
+    (cond
+     [(regexp-search-around
+       "!?\\[([^\\]]*)\\]\\(\\s*<?([^)\\s>]+)>?(?:\\s+\"[^\"]*\")?\\s*\\)" line index)
+      => (lambda (match) (link match (part match 2) (part match 1)))]
+     [(regexp-search-around "\\[([^\\]]+)\\]\\[([^\\]]*)\\]" line index)
+      => (lambda (match)
+           (let ((label (part match 2)))
+             (link match
+                   (%markdown-definition (if (string-null? label) (part match 1) label))
+                   (part match 1))))]
+     [(regexp-search-around "^ {0,3}\\[([^\\]]+)\\]:[ \\t]*<?([^\\s>]+)" line index)
+      => (lambda (match) (link match (part match 2) (part match 1)))]
+     [(regexp-search-around "\\[([^\\]]+)\\]" line index)
+      => (lambda (match)
+           (link match (%markdown-definition (part match 1)) (part match 1)))]
+     [else #f])))
+
+(define (markdown-slug text)
+  "The name that a link gives a heading with a text, as in [the plan](#the-plan):
+the text in small letters with a hyphen for each blank and without
+punctuation."
+  (list->string
+   (filter-map (lambda (char)
+                 (cond [(char=? char #\space) #\-]
+                       [(or (char-alphabetic? char) (char-numeric? char)
+                            (memv char '(#\- #\_)))
+                        char]
+                       [else #f]))
+               (string->list (string-downcase (string-trim text))))))
+
+(define (markdown-link-place target)
+  "The position of the heading that a target names: #name is the heading
+whose text gives that name with markdown-slug, and other text is the text
+of a heading. #f if there is no such heading."
+  (let* ((name? (string-prefix? "#" target))
+         (wanted (if name?
+                     (string-downcase (substring target 1 (string-length target)))
+                     target))
+         (found (filter (lambda (heading)
+                          (equal? wanted (if name?
+                                             (markdown-slug (caddr heading))
+                                             (caddr heading))))
+                        (markdown-headings))))
+    (and (pair? found) (car (car found)))))
+
+(define-links 'markdown-mode 'at-point markdown-link-at 'internal markdown-link-place)
+
 ;;; Keys
 
 (define-command (markdown-tab)
@@ -487,4 +578,6 @@ item of a list."
    ("C-c C-c" markdown-do) ("C-c |" markdown-table-insert)
    ("C-c C-n" markdown-next-heading) ("C-c C-p" markdown-previous-heading)
    ("C-c C-j" markdown-goto-heading)
-   ("M-<left>" markdown-promote) ("M-<right>" markdown-demote)))
+   ("M-<left>" markdown-promote) ("M-<right>" markdown-demote)
+   ("C-c C-o" open-link-at-point)
+   ("<mouse-2>" open-link-at-mouse) ("C-<mouse-1>" open-link-at-mouse)))
