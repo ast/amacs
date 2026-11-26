@@ -59,6 +59,9 @@
               pkgs.zip
               pkgs.unzip
             ];
+            # zip and unzip are run in a UTF-8 locale, for names that are not
+            # ASCII, and a build has no locales unless it is given them.
+            LOCALE_ARCHIVE = "${pkgs.glibcLocales}/lib/locale/locale-archive";
             # The renderer's tests draw text and need a known font.
             AMACS_TEST_FONTS = "${pkgs.jetbrains-mono}/share/fonts";
             # Some tests expand `~`.
