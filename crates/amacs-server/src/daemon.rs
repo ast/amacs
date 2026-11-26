@@ -388,7 +388,23 @@ impl Server {
                 if let Some(frame) = own {
                     self.session.editor_mut().select_frame(frame);
                 }
-                let result = self.session.eval_quietly(&source);
+                let allowed = !matches!(
+                    self.session.editor().option("program-eval"),
+                    Ok(amacs_core::Value::Bool(false))
+                );
+                let result = if allowed {
+                    self.session.eval_quietly(&source)
+                } else {
+                    let message =
+                        "Programs may not evaluate code here: the program-eval option is off";
+                    Err(amacs_script::EvalError {
+                        summary: message.to_owned(),
+                        message: message.to_owned(),
+                        report: format!("error: {message}"),
+                        location: None,
+                        trace: Vec::new(),
+                    })
+                };
                 if own.is_some() {
                     self.restore_frame(before);
                 }
@@ -488,6 +504,10 @@ impl Server {
         }
         self.session.run_pending();
         if headless {
+            // A frame that nobody looks at is a program's.
+            if let Some(frame) = frame {
+                self.session.editor_mut().set_frame_of_program(frame);
+            }
             self.restore_frame(before);
         }
 

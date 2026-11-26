@@ -382,6 +382,24 @@ impl Editor {
             self.message(format!("Unknown command: {name}"));
             return;
         };
+        // A program does not run commands in a buffer that is secret: a
+        // command can copy the text to where the program can read it.
+        // It can leave the buffer.
+        const LEAVING: [&str; 7] = [
+            "switch-to-buffer",
+            "kill-buffer",
+            "other-window",
+            "next-buffer",
+            "previous-buffer",
+            "keyboard-quit",
+            "execute-extended-command",
+        ];
+        if !LEAVING.contains(&name)
+            && let Err(error) = self.keep_from_program(self.window().buffer)
+        {
+            self.message(error.to_string());
+            return;
+        }
         self.current_prefix = self.prefix_arg.take();
         self.this_command = Some(name.to_owned());
         self.keep_goal = false;

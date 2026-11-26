@@ -85,6 +85,8 @@ impl Session {
     /// Evaluates Scheme source for a program rather than for the user: the
     /// result or error is returned and nothing is shown in the echo area.
     pub fn eval_quietly(&mut self, source: &str) -> EvalResult {
+        // What a program has evaluated is not given what is secret.
+        self.editor.borrow_mut().set_for_program(true);
         self.editor.borrow_mut().begin_script();
         let result = self.host.eval(&self.editor, source, None);
         let call = ScriptCall {

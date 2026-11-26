@@ -33,6 +33,10 @@ pub(crate) struct Frame {
     pub minibuffer_buffer: BufferId,
     /// The input in progress here, while another frame is the current one.
     pub input: InputState,
+    /// The frame is one that a program has for itself, as a language
+    /// model has through the MCP server: nobody looks at it, and what is
+    /// secret is neither drawn in it nor given to its keys.
+    pub program: bool,
 }
 
 impl Editor {
@@ -60,6 +64,7 @@ impl Editor {
         self.frames.insert(Frame {
             minibuffer_buffer,
             input: InputState::default(),
+            program: false,
             layout: Layout::Leaf(selected),
             selected,
             minibuffer_window,
@@ -147,7 +152,18 @@ impl Editor {
     pub fn handle_frame_event(&mut self, frame: FrameId, event: InputEvent) {
         if self.frames.contains_key(frame) {
             self.select_frame(frame);
+            // The keys of a program's frame are a program's doing, and so
+            // is what they queue.
+            self.set_for_program(self.frames[frame].program);
             self.handle_event(event);
+            self.set_for_program(false);
+        }
+    }
+
+    /// Says that a frame is one that a program has for itself.
+    pub fn set_frame_of_program(&mut self, frame: FrameId) {
+        if let Some(frame) = self.frames.get_mut(frame) {
+            frame.program = true;
         }
     }
 

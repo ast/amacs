@@ -363,13 +363,18 @@ comes."
 (define (%acp-fs-read id params)
   ;; Unsaved edits are seen: a buffer visiting the file wins over the disk.
   (let* ((path (json-ref params 'path))
-         (buffer (%acp-buffer-visiting path))
-         (content (cond [buffer (buffer-string buffer)]
-                        [(file-exists? path) (read-file path)]
-                        [else ""])))
-    (%acp-respond id (json-object 'content (%acp-slice content
-                                                       (%acp-get params 'line)
-                                                       (%acp-get params 'limit))))))
+         (buffer (%acp-buffer-visiting path)))
+    (if (and buffer (with-current-buffer buffer (option 'buffer-secret)))
+        ;; The file on disk is not the text, and the text is not for an
+        ;; agent.
+        (%acp-respond-error id -32602
+                            (string-append path " is secret: amacs does not give it to an agent"))
+        (let ((content (cond [buffer (buffer-string buffer)]
+                             [(file-exists? path) (read-file path)]
+                             [else ""])))
+          (%acp-respond id (json-object 'content (%acp-slice content
+                                                             (%acp-get params 'line)
+                                                             (%acp-get params 'limit))))))))
 
 (define (%acp-slice text line limit)
   ;; The lines of a text from a line, counted from 1, and no more of them

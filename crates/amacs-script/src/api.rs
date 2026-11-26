@@ -352,7 +352,10 @@ pub const API: &[ApiFn] = api! {
     "string-width" (1, Some(1)) "The number of columns a string takes on screen: two for a wide char such as a CJK ideograph, none for a combining mark." =>
         |_, args| Ok(amacs_core::string_cells(string(args, 0)?).into());
     "buffer-string" (0, Some(1)) "The whole text of the current buffer, or of the named one." =>
-        |ed, args| Ok(buffer(ed, args, 0)?.text().to_string().into());
+        |ed, args| {
+            ed.keep_from_program(buffer_arg(ed, args, 0)?)?;
+            Ok(buffer(ed, args, 0)?.text().to_string().into())
+        };
     "erase-buffer" (0, Some(0)) "Delete all text in the current buffer." =>
         |ed, _| {
             let len = ed.buffer().len();
@@ -724,7 +727,12 @@ pub const API: &[ApiFn] = api! {
             Ok(Value::Int(id as i64))
         };
     "%read-secret" (1, Some(1)) "Start reading a secret, such as a password: the prompt. What is typed is drawn as stars, is in no history, and no hook sees it. Returns a promise." =>
-        |ed, args| Ok(Value::Int(ed.read_secret_promise(string(args, 0)?)? as i64));
+        |ed, args| {
+            if ed.for_program() {
+                return Err(CmdError::msg("a program is not given what the user types as a secret"));
+            }
+            Ok(Value::Int(ed.read_secret_promise(string(args, 0)?)? as i64))
+        };
     "%completing-read" (3, Some(3)) "Start choosing among candidates: prompt, candidates, category. A candidate is a string or a list of a string and its annotation. Returns a promise." =>
         |ed, args| {
             let Value::List(items) = &args[1] else {

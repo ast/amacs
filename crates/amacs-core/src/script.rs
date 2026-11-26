@@ -174,6 +174,16 @@ pub(crate) struct ScriptState {
     /// any, what is typed waits: it was typed for what the command will
     /// show or ask when the program is done.
     awaited_programs: std::collections::HashSet<u64>,
+    /// The code that runs now was asked for by a program, not by the user
+    /// at a frame: it came over the socket to be evaluated, or from keys
+    /// that a program pressed in a frame of its own. Such code is not
+    /// given what is secret.
+    for_program: bool,
+    /// For each call in the queue, whether it was queued by such code.
+    queue_for_program: std::collections::VecDeque<bool>,
+    /// The promises that such code made: what waits for one of them goes
+    /// on as such code.
+    program_promises: std::collections::HashSet<u64>,
     /// What was typed meanwhile, with the frame it was typed in.
     held_input: std::collections::VecDeque<(crate::frame::FrameId, amacs_proto::InputEvent)>,
     /// When to say that what is typed is waiting.
@@ -290,6 +300,11 @@ impl ScriptState {
                 PERSISTENT_UNDO,
                 Value::Bool(true),
                 "Whether the undo history of a file is kept on disk, in the state directory: it is there again when the file is next visited, and has what was not saved before a crash. It holds text that was deleted.",
+            ),
+            (
+                "program-eval",
+                Value::Bool(true),
+                "Whether a program may have Scheme evaluated in the editor, as the MCP server does for a language model and `amacsclient --eval` for a script. Code that a program has evaluated can do what the user can, also later, through what it defines: turn this off when the editor holds secrets and such programs are not trusted with them.",
             ),
             (
                 BUFFER_SECRET,
@@ -412,6 +427,9 @@ impl Editor {
             return Err(CmdError::msg("Scheme is not available in this session"));
         }
         self.script.queue.push_back(call);
+        self.script
+            .queue_for_program
+            .push_back(self.script.for_program);
         Ok(())
     }
 
@@ -443,6 +461,7 @@ impl Editor {
     /// after.
     pub fn take_script_call(&mut self) -> Option<ScriptCall> {
         let call = self.script.queue.pop_front()?;
+        let mut for_program = self.script.queue_for_program.pop_front().unwrap_or(false);
         if let Some(command) = &call.command
             && let Some((_, prefix)) = self
                 .script
@@ -457,11 +476,13 @@ impl Editor {
             (ScriptTarget::Named("%promise-resolve" | "%promise-reject"), Some(Value::Int(id))) => {
                 let id = *id as u64;
                 self.script.awaited_programs.remove(&id);
+                for_program |= self.script.program_promises.remove(&id);
                 self.script.command_promises.remove(&id)
             }
             _ => None,
         };
         self.script.running_command = call.command.clone().or(settled);
+        self.script.for_program = for_program;
         if let Some(frame) = call.frame
             && frame != self.current_frame()
             && self.has_frame(frame)
@@ -481,6 +502,7 @@ impl Editor {
 
     pub fn end_script(&mut self, call: &ScriptCall, outcome: ScriptOutcome) {
         self.script.running_command = None;
+        self.script.for_program = false;
         if let Some((buffer, tick)) = self.script.frame.take() {
             self.finish_command(buffer, tick, call.command.is_some());
         }
@@ -505,6 +527,11 @@ impl Editor {
     /// Allocates an id that Scheme code can `await`.
     pub fn new_promise(&mut self) -> u64 {
         self.script.next_promise += 1;
+        if self.script.for_program {
+            self.script
+                .program_promises
+                .insert(self.script.next_promise);
+        }
         let frame = self.current_frame();
         self.script
             .promise_frames
@@ -710,6 +737,33 @@ impl Editor {
     /// The value of an option in a given buffer.
     pub(crate) fn option_for(&self, buffer: BufferId, name: &str) -> Option<Value> {
         self.option_in(buffer, name)
+    }
+
+    /// Whether the code that runs now was asked for by a program, not by
+    /// the user: see [`Editor::set_for_program`].
+    pub fn for_program(&self) -> bool {
+        self.script.for_program
+    }
+
+    /// Says that what runs from now on was asked for by a program: Scheme
+    /// that came over the socket to be evaluated, or the keys of a frame
+    /// that a program has for itself. Such code, and what it queues or
+    /// waits for, is not given what is secret. The end of a script call
+    /// takes the mark off again.
+    pub fn set_for_program(&mut self, for_program: bool) {
+        self.script.for_program = for_program;
+    }
+
+    /// An error if a program asks for something of a buffer that is
+    /// secret.
+    pub fn keep_from_program(&self, buffer: BufferId) -> CmdResult {
+        if self.script.for_program && self.is_secret(buffer) {
+            let name = &self.buffers[buffer].name;
+            return Err(CmdError::msg(format!(
+                "{name} is secret: a program is not given what is in it"
+            )));
+        }
+        Ok(())
     }
 
     /// Whether the text of a buffer is a secret: the `buffer-secret`

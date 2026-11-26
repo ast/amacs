@@ -371,6 +371,120 @@ fn a_model_works_with_buffers_and_files_and_reloads_code() {
 }
 
 #[test]
+fn a_model_is_not_given_what_is_secret() {
+    let server = Server::start();
+    let mut mcp = Mcp::new(server.socket());
+    // A buffer becomes secret; until then it is a buffer like any other.
+    ok(
+        &mut mcp,
+        "eval",
+        json!({ "code": "(switch-to-buffer \"vault\") (insert \"hunter2\") (set-local! 'buffer-secret #t)" }),
+    );
+    let refused = |mcp: &mut Mcp, tool: &str, arguments: Value| {
+        let (text, failed) = call(mcp, tool, arguments);
+        assert!(failed, "{tool} gave: {text}");
+        assert!(text.contains("secret"), "{text}");
+        assert!(!text.contains("hunter2"), "{text}");
+    };
+
+    // Its text is not read: by name, as the current buffer, or in parts.
+    refused(&mut mcp, "read_buffer", json!({ "name": "vault" }));
+    refused(
+        &mut mcp,
+        "eval",
+        json!({ "code": "(buffer-string \"vault\")" }),
+    );
+    refused(&mut mcp, "eval", json!({ "code": "(buffer-string)" }));
+    refused(
+        &mut mcp,
+        "eval",
+        json!({ "code": "(with-current-buffer \"vault\" (buffer-substring 0 3))" }),
+    );
+    refused(
+        &mut mcp,
+        "eval",
+        json!({ "code": "(with-current-buffer \"vault\" (line-number-at-pos))" }),
+    );
+    // Nor drawn in the model's frame, nor copied by its keys.
+    let screen = ok(&mut mcp, "screen", json!({}));
+    assert!(
+        screen.contains("This buffer is secret. It is not shown to a program."),
+        "{screen}"
+    );
+    assert!(!screen.contains("hunter2"), "{screen}");
+    let screen = ok(&mut mcp, "keys", json!({ "keys": "C-x h M-w" }));
+    assert!(screen.contains("vault is secret"), "{screen}");
+    ok(
+        &mut mcp,
+        "eval",
+        json!({ "code": "(switch-to-buffer \"*scratch*\")" }),
+    );
+    let kill = ok(&mut mcp, "eval", json!({ "code": "(current-kill)" }));
+    assert!(!kill.contains("hunter2"), "{kill}");
+
+    // Code that a model leaves to run later, or that waits, is the
+    // model's still.
+    ok(
+        &mut mcp,
+        "eval",
+        json!({ "code": "(define later 'not-yet) (define waited 'not-yet)
+                         (define (try) (guard (e (#t 'refused)) (buffer-string \"vault\")))
+                         (run-later (lambda () (set! later (try))))
+                         (run-after 20 (lambda () (set! waited (try))))" }),
+    );
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        ok(&mut mcp, "eval", json!({ "code": "(list later waited)" })),
+        "(refused refused)"
+    );
+    // What the user types as a secret is not for a model either.
+    refused(
+        &mut mcp,
+        "eval",
+        json!({ "code": "(read-passwd \"Password: \")" }),
+    );
+
+    // What the buffer is can be asked, and the editor works as before.
+    let buffers = ok(&mut mcp, "buffers", json!({}));
+    assert!(buffers.contains("vault  (fundamental-mode)"), "{buffers}");
+    assert_eq!(ok(&mut mcp, "eval", json!({ "code": "(+ 1 2)" })), "3");
+    assert_eq!(
+        ok(
+            &mut mcp,
+            "eval",
+            json!({ "code": "(buffer-string \"*scratch*\")" })
+        ),
+        "\"\""
+    );
+    // With the user's frame as the place, the same holds.
+    let (text, failed) = call(
+        &mut mcp,
+        "eval",
+        json!({ "code": "(buffer-string \"vault\")", "in_user_frame": true }),
+    );
+    assert!(
+        failed && text.contains("secret") && !text.contains("hunter2"),
+        "{text}"
+    );
+
+    // Evaluation for programs can be turned off altogether; keys and the
+    // screen go on working.
+    ok(
+        &mut mcp,
+        "eval",
+        json!({ "code": "(set-option! 'program-eval #f)" }),
+    );
+    let (text, failed) = call(&mut mcp, "eval", json!({ "code": "(+ 1 2)" }));
+    assert!(failed, "{text}");
+    assert_eq!(
+        text,
+        "error: Programs may not evaluate code here: the program-eval option is off"
+    );
+    let screen = ok(&mut mcp, "keys", json!({ "keys": "C-x b RET" }));
+    assert!(screen.contains("This buffer is secret"), "{screen}");
+}
+
+#[test]
 fn a_models_frame_stays_out_of_the_users_way() {
     let mut server = Server::start();
     let mut mcp = Mcp::new(server.socket());

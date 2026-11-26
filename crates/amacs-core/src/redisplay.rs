@@ -299,6 +299,15 @@ impl Editor {
         let window = &self.windows[id];
         let buffer = &self.buffers[window.buffer];
         let rows = window.text_rows();
+        // In a frame that a program has for itself, a secret is not drawn.
+        if self.frame().program && self.is_secret(window.buffer) {
+            let mut lines = vec![DisplayLine::plain(
+                "This buffer is secret. It is not shown to a program.",
+                faces::DEFAULT,
+            )];
+            lines.resize(rows, DisplayLine::default());
+            return (lines, Some((0, 0)));
+        }
         let (gutter, width) = text_area(window, buffer);
         let (text, tab) = (buffer.text(), buffer.flow());
         let point = buffer.marker(window.point);

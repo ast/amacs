@@ -74,6 +74,34 @@ that failed. Nothing can be asked of the user on the way to a host yet, so
 a host that wants a password is an error that says so. Programs are not
 run on other hosts yet: `run-process` in a remote buffer is refused.
 
+## Secrets
+
+A buffer whose `buffer-secret` option is set holds a secret, such as an
+entry of a password store. What a program asks of the editor is kept from
+it: Scheme that came over the socket to be evaluated (the MCP server's
+`eval`, `read_buffer` and `load`, and `amacsclient --eval`), the keys of a
+frame that a program has for itself, and what such code leaves to run later
+or waits for. Such code cannot read the text of a secret buffer, by name or
+as the current buffer, and can do nothing in one but leave it; the buffer
+is drawn as one line that says it is secret; a command is not run in it;
+and `read-passwd` is refused. A coding agent that asks for a file that a
+secret buffer visits gets an error.
+
+This keeps a model from reading a secret because it was there. It is not a
+wall against a model that sets out to get one, and cannot be made one:
+
+- Scheme has one world. Code that a program has evaluated can define a
+  hook, an advice or a command, which then runs when the user does
+  something, as the user. The `program-eval` option, set to `#f`, refuses
+  evaluation for programs altogether; the tools that press keys and read
+  the screen go on working.
+- A program that can run other programs can run `gpg` or `age` itself, or
+  connect to the editor as a person does.
+
+What does stop that is outside the editor: a key that asks for a touch or a
+PIN each time it is used, so that nothing is decrypted without the user.
+The editor does not keep passphrases or PINs.
+
 ## Working on the editor itself
 
 `CLAUDE.md` says how: write features in Scheme, try them in the running

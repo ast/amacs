@@ -146,6 +146,14 @@ impl SchemeHost {
                     let mut editor = editor
                         .try_borrow_mut()
                         .map_err(|_| Error::new(format!("{}: the editor is busy", api.name)))?;
+                    // A program does nothing in a buffer that is secret
+                    // but leave it or ask what it is.
+                    if !PROGRAM_MAY_IN_SECRET.contains(&api.name) {
+                        let current = editor.window().buffer;
+                        editor
+                            .keep_from_program(current)
+                            .map_err(|error| Error::new(format!("{}: {error}", api.name)))?;
+                    }
                     let result = (api.run)(&mut editor, &args)
                         .map_err(|error| Error::new(format!("{}: {error}", api.name)))?;
                     Ok(to_scheme(core, &result))
@@ -450,3 +458,33 @@ impl SchemeHost {
         }
     }
 }
+
+/// The primitives that a program may call while the current buffer is a
+/// secret one: those that leave the buffer, and those that say what the
+/// buffer is and nothing of what is in it. A primitive that is not here
+/// is refused there, so that one that is added later is safe without
+/// being thought of.
+const PROGRAM_MAY_IN_SECRET: [&str; 22] = [
+    "%set-buffer",
+    "switch-to-buffer",
+    "kill-buffer",
+    "buffer-name",
+    "buffer-list",
+    "buffer-file-name",
+    "buffer-modified?",
+    "buffer-read-only?",
+    "buffer-tick",
+    "major-mode",
+    "option",
+    "%message",
+    "selected-window",
+    "window-list",
+    "window-buffer",
+    "select-window",
+    "working-directory",
+    "expand-file-name",
+    "abbreviate-file-name",
+    "file-exists?",
+    "file-remote?",
+    "command-names",
+];
