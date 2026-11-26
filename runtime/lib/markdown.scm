@@ -406,61 +406,9 @@ the text."
                               found))
                   (loop (cdr lines) next fence found)))])))))
 
-(define-command (markdown-next-heading)
-  "Go to the next heading."
-  (let ((later (filter (lambda (heading) (> (car heading) (point))) (markdown-headings))))
-    (if (null? later)
-        (message "No heading after this")
-        (goto-char (car (car later))))))
-
-(define-command (markdown-previous-heading)
-  "Go to the heading before point."
-  (let ((earlier (filter (lambda (heading) (< (car heading) (line-beginning-position)))
-                         (markdown-headings))))
-    (if (null? earlier)
-        (message "No heading before this")
-        (goto-char (car (last earlier))))))
-
-(define-command (markdown-goto-heading)
-  "Go to a heading of the buffer, chosen by its text."
-  (let* ((headings (markdown-headings))
-         (names (map (lambda (heading)
-                       (string-append (make-string (* 2 (- (cadr heading) 1)) #\space)
-                                      (caddr heading)))
-                     headings)))
-    (when (null? headings)
-      (error "The buffer has no headings"))
-    (let ((chosen (completing-read "Heading: " names)))
-      (let loop ((headings headings) (names names))
-        (cond [(null? headings) (error "No such heading:" chosen)]
-              [(equal? (car names) chosen) (goto-char (car (car headings)))]
-              [else (loop (cdr headings) (cdr names))])))))
-
-(define (%markdown-shift-heading delta)
-  (let* ((line (%markdown-line (point)))
-         (level (let count ((index 0))
-                  (if (and (< index (string-length line))
-                           (char=? (string-ref line index) #\#))
-                      (count (+ index 1))
-                      index))))
-    (unless (and (<= 1 level 6)
-                 (or (= level (string-length line)) (char=? (string-ref line level) #\space)))
-      (error "Point is not on a heading"))
-    (unless (<= 1 (+ level delta) 6)
-      (error "Headings have levels 1 to 6"))
-    (save-excursion
-      (goto-char (line-beginning-position))
-      (if (> delta 0)
-          (insert "#")
-          (delete-region (point) (+ (point) 1))))))
-
-(define-command (markdown-promote)
-  "Make the heading at point one level more important: one # less."
-  (%markdown-shift-heading -1))
-
-(define-command (markdown-demote)
-  "Make the heading at point one level less important: one # more."
-  (%markdown-shift-heading 1))
+;; Moving by headings, their levels and moving them with what is under
+;; them are in runtime/lib/outline.scm.
+(define-outline 'markdown-mode 'headings markdown-headings 'marker "#" 'max-level 6)
 
 ;;; Links
 
@@ -576,8 +524,12 @@ item of a list."
  (lambda (binding) (define-key 'markdown-mode (car binding) (cadr binding)))
  '(("TAB" markdown-tab) ("S-TAB" markdown-backtab) ("RET" markdown-newline)
    ("C-c C-c" markdown-do) ("C-c |" markdown-table-insert)
-   ("C-c C-n" markdown-next-heading) ("C-c C-p" markdown-previous-heading)
-   ("C-c C-j" markdown-goto-heading)
-   ("M-<left>" markdown-promote) ("M-<right>" markdown-demote)
+   ("C-c C-n" outline-next-heading) ("C-c C-p" outline-previous-heading)
+   ("C-c C-u" outline-up-heading)
+   ("C-c C-f" outline-forward-same-level) ("C-c C-b" outline-backward-same-level)
+   ("C-c C-j" outline-goto-heading)
+   ("M-<left>" outline-promote) ("M-<right>" outline-demote)
+   ("M-S-<left>" outline-promote-subtree) ("M-S-<right>" outline-demote-subtree)
+   ("M-<up>" outline-move-subtree-up) ("M-<down>" outline-move-subtree-down)
    ("C-c C-o" open-link-at-point)
    ("<mouse-2>" open-link-at-mouse) ("C-<mouse-1>" open-link-at-mouse)))
