@@ -6,7 +6,7 @@ expression: "highlighted(\"markdown\", \"sample.md\")"
 
 Some «delimiter|*»«emphasis|emphasis»«delimiter|*», «delimiter|**»«strong|strong»«delimiter|**», «delimiter|`»«code|code»«delimiter|`», «delimiter|~~»«comment|struck»«delimiter|~~» and a «delimiter|[»«link|link»«delimiter|](»«string|https://example.org»«delimiter|)».
 
-«delimiter|##» «heading|Table»
+«delimiter|##» «heading-2|Table»
 
 «delimiter||» «strong|Key »«delimiter||» «strong|Does »«delimiter||» «strong|Notes »«delimiter||»
 «delimiter||---|:---:|--:|»
@@ -45,3 +45,8 @@ Some «delimiter|*»«emphasis|emphasis»«delimiter|*», «delimiter|**»«stro
 and not closed* by this one
 
 «link|[ref]»: «string|https://example.org» «code|"Title"»
+
+«delimiter|###» «heading-3|Third»
+
+«heading-2|Setext two»
+«delimiter|----------»

@@ -41,3 +41,8 @@ fn main() { println!("hi"); }
 and not closed* by this one
 
 [ref]: https://example.org "Title"
+
+### Third
+
+Setext two
+----------

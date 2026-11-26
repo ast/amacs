@@ -225,6 +225,13 @@ fn built_in_faces() -> Vec<(String, FaceSpec)> {
             Highlight::Strong => face("", "").bold(),
             Highlight::Code => face("fg-prose-code", "bg-prose-code"),
             Highlight::Link => face("fg-link", "").underline(),
+            Highlight::Heading2 => face("fg-heading-2", "").bold(),
+            Highlight::Heading3 => face("fg-heading-3", "").bold(),
+            Highlight::Heading4 => face("fg-heading-4", "").bold(),
+            Highlight::Heading5 => face("fg-heading-5", "").bold(),
+            Highlight::Heading6 => face("fg-heading-6", "").bold(),
+            Highlight::Heading7 => face("fg-heading-7", "").bold(),
+            Highlight::Heading8 => face("fg-heading-8", "").bold(),
         };
         faces.push((highlight.name(), spec));
     }

@@ -155,9 +155,15 @@ impl Places {
         };
         names
             .iter()
-            .filter_map(|name| {
-                let name = name.as_name()?;
-                Highlight::ALL.into_iter().find(|kind| kind.name() == name)
+            .filter_map(Value::as_name)
+            .flat_map(|name| {
+                // A name stands for the kinds named after it as well:
+                // `heading` for `heading-2` and the other levels.
+                Highlight::ALL.into_iter().filter(move |kind| {
+                    kind.name()
+                        .strip_prefix(name)
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
+                })
             })
             .collect()
     }
@@ -819,6 +825,27 @@ mod tests {
             .into_iter()
             .map(|word| word.text)
             .collect()
+    }
+
+    #[test]
+    fn a_kind_of_syntax_stands_for_those_named_after_it() {
+        let names = |names: &[&str]| {
+            Value::List(
+                names
+                    .iter()
+                    .map(|name| Value::Str((*name).into()))
+                    .collect(),
+            )
+        };
+        let kinds = Places::kinds(&names(&["code", "heading"]));
+        assert_eq!(kinds.len(), 9, "{kinds:?}");
+        assert!(kinds.contains(&Highlight::Code));
+        assert!(kinds.contains(&Highlight::Heading));
+        assert!(kinds.contains(&Highlight::Heading8));
+        assert_eq!(
+            Places::kinds(&names(&["heading-2", "head"])),
+            vec![Highlight::Heading2]
+        );
     }
 
     #[test]

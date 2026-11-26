@@ -1,8 +1,15 @@
 ; The blocks of Markdown. What is within paragraphs, headings and table
 ; cells is highlighted by markdown-inline.scm.
 
-(atx_heading (inline) @text.title)
-(setext_heading (paragraph) @text.title)
+; A heading has the colour of its level.
+(atx_heading (atx_h1_marker) (inline) @markup.heading)
+(atx_heading (atx_h2_marker) (inline) @markup.heading.2)
+(atx_heading (atx_h3_marker) (inline) @markup.heading.3)
+(atx_heading (atx_h4_marker) (inline) @markup.heading.4)
+(atx_heading (atx_h5_marker) (inline) @markup.heading.5)
+(atx_heading (atx_h6_marker) (inline) @markup.heading.6)
+(setext_heading (paragraph) @markup.heading (setext_h1_underline))
+(setext_heading (paragraph) @markup.heading.2 (setext_h2_underline))
 
 [
   (atx_h1_marker)

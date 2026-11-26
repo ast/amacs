@@ -27,10 +27,18 @@ pub enum Highlight {
     Strong,
     Code,
     Link,
+    /// Headings below the first level, which `Heading` is.
+    Heading2,
+    Heading3,
+    Heading4,
+    Heading5,
+    Heading6,
+    Heading7,
+    Heading8,
 }
 
 impl Highlight {
-    pub const ALL: [Highlight; 23] = [
+    pub const ALL: [Highlight; 30] = [
         Highlight::Comment,
         Highlight::Doc,
         Highlight::String,
@@ -54,6 +62,13 @@ impl Highlight {
         Highlight::Strong,
         Highlight::Code,
         Highlight::Link,
+        Highlight::Heading2,
+        Highlight::Heading3,
+        Highlight::Heading4,
+        Highlight::Heading5,
+        Highlight::Heading6,
+        Highlight::Heading7,
+        Highlight::Heading8,
     ];
 
     /// The name of the face that draws this kind of text.
@@ -82,7 +97,30 @@ impl Highlight {
             Highlight::Strong => "strong",
             Highlight::Code => "code",
             Highlight::Link => "link",
+            Highlight::Heading2 => "heading-2",
+            Highlight::Heading3 => "heading-3",
+            Highlight::Heading4 => "heading-4",
+            Highlight::Heading5 => "heading-5",
+            Highlight::Heading6 => "heading-6",
+            Highlight::Heading7 => "heading-7",
+            Highlight::Heading8 => "heading-8",
         }
+    }
+
+    /// The kind that the heading of a level is drawn as, from 1. Levels
+    /// beyond the eighth start again from the first.
+    pub fn heading(level: usize) -> Self {
+        const LEVELS: [Highlight; 8] = [
+            Highlight::Heading,
+            Highlight::Heading2,
+            Highlight::Heading3,
+            Highlight::Heading4,
+            Highlight::Heading5,
+            Highlight::Heading6,
+            Highlight::Heading7,
+            Highlight::Heading8,
+        ];
+        LEVELS[level.saturating_sub(1) % LEVELS.len()]
     }
 
     pub(crate) fn from_index(index: u8) -> Option<Self> {
@@ -127,6 +165,11 @@ impl Capture {
             ("keyword", Some(Highlight::Keyword)),
             ("label", Some(Highlight::Constant)),
             ("markup.heading", Some(Highlight::Heading)),
+            ("markup.heading.2", Some(Highlight::Heading2)),
+            ("markup.heading.3", Some(Highlight::Heading3)),
+            ("markup.heading.4", Some(Highlight::Heading4)),
+            ("markup.heading.5", Some(Highlight::Heading5)),
+            ("markup.heading.6", Some(Highlight::Heading6)),
             ("markup.italic", Some(Highlight::Emphasis)),
             ("markup.link", Some(Highlight::Link)),
             ("markup.raw", Some(Highlight::Code)),
