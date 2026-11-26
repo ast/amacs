@@ -39,6 +39,21 @@ fn cursor_color_sequence(color: Color) -> String {
 /// What gives the terminal's cursor its own colour back (OSC 112).
 const RESET_CURSOR_COLOR: &str = "\x1b]112\x1b\\";
 
+/// What tells a terminal the colour of its own background (OSC 11): the
+/// colour of what no cell covers. A window is seldom a whole number of
+/// cells high and wide, and the strip that is left over at its bottom
+/// and right is drawn in this colour, which is that of the terminal's
+/// own theme unless it is told the editor's.
+fn background_color_sequence(color: Color) -> String {
+    format!(
+        "\x1b]11;#{:02x}{:02x}{:02x}\x1b\\",
+        color.r, color.g, color.b
+    )
+}
+
+/// What gives the terminal its own background back (OSC 111).
+const RESET_BACKGROUND_COLOR: &str = "\x1b]111\x1b\\";
+
 /// Puts the terminal back the way it was. Safe to call more than once, and
 /// from a panic hook.
 fn restore_terminal(enhanced_keys: bool) {
@@ -51,6 +66,7 @@ fn restore_terminal(enhanced_keys: bool) {
         out,
         DisableBracketedPaste,
         Print(RESET_CURSOR_COLOR),
+        Print(RESET_BACKGROUND_COLOR),
         SetCursorStyle::DefaultUserShape,
         Show,
         LeaveAlternateScreen
@@ -83,6 +99,8 @@ pub struct Tty {
     cursor: Option<(u16, u16, CursorShape)>,
     /// The colour the terminal was last told to draw its cursor in.
     cursor_color: Option<Color>,
+    /// The colour the terminal was last told its background is.
+    background: Option<Color>,
     enhanced_keys: bool,
     in_update: bool,
 }
@@ -123,6 +141,7 @@ impl Tty {
             faces: Vec::new(),
             cursor: None,
             cursor_color: None,
+            background: None,
             enhanced_keys,
             in_update: false,
         })
@@ -142,7 +161,21 @@ impl Tty {
                 self.in_update = true;
             }
             match op {
-                DrawOp::DefineFaces(faces) => self.faces.clone_from(faces),
+                DrawOp::DefineFaces(faces) => {
+                    self.faces.clone_from(faces);
+                    // The first face is the theme's default: its
+                    // background is that of the whole frame, also of
+                    // what is left over beside the cells.
+                    let background = faces.first().and_then(|face| face.bg);
+                    if background != self.background {
+                        let sequence = match background {
+                            Some(color) => background_color_sequence(color),
+                            None => RESET_BACKGROUND_COLOR.to_owned(),
+                        };
+                        queue!(self.out, Print(sequence))?;
+                        self.background = background;
+                    }
+                }
                 DrawOp::Layout { panes, .. } => {
                     self.panes = panes.iter().map(|pane| (pane.id, *pane)).collect();
                     self.cursor = None;
@@ -272,6 +305,10 @@ mod tests {
         assert_eq!(
             cursor_color_sequence(Color::rgb(0xd0, 0x00, 0x0a)),
             "\x1b]12;#d0000a\x1b\\"
+        );
+        assert_eq!(
+            background_color_sequence(Color::rgb(0xfb, 0xf7, 0xf0)),
+            "\x1b]11;#fbf7f0\x1b\\"
         );
     }
 }
