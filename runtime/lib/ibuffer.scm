@@ -298,7 +298,7 @@ by the optional argument."
 
 ;;; Opening
 
-(define-major-mode ibuffer-mode #f "Ibuffer"
+(define-major-mode ibuffer-mode special-mode "Ibuffer"
   "Major mode of the buffer list: the buffers grouped by project, with keys
 that mark them and act on the marked ones. Start it with C-x C-b.")
 
@@ -474,7 +474,8 @@ buffers of the group whose heading it is."
   (%ibuffer-set-mark! #f))
 
 (define-command (ibuffer-flag-for-kill)
-  "Flag the buffer on this line to be killed; x kills the flagged buffers."
+  "Flag the buffer on this line to be killed. ibuffer-do-kill-flagged kills
+the flagged buffers."
   (%ibuffer-set-mark! #\D))
 
 (define-command (ibuffer-unmark-all)

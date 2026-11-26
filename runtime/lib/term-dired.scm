@@ -89,9 +89,9 @@ directory at point."
    "'"))
 
 (define-command (dired-cd-terminal)
-  "Send the shell of the terminal that this listing follows to the
-directory at point, or to the listing's own when point is on a file: types
-a `cd` at its prompt."
+  "Send the shell of the terminal to the directory at point. That is the
+terminal that this listing follows, and the directory is the listing's own
+when point is on a file. A `cd` is typed at the shell's prompt."
   (let ((terminal (term-dired-terminal)))
     (unless terminal
       (error "This listing follows no terminal: see term-dired"))

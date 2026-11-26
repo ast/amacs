@@ -46,6 +46,7 @@ pub use completion::{Candidate, Completion, Offers, Waker};
 pub use display::string_cells;
 pub use editor::{
     Clipboard, Command, CommandBody, Editor, EditorEvent, GLOBAL_MAP, MINIBUFFER_MAP, Prefix,
+    doc_summary,
 };
 pub use env::EnvState;
 pub use error::{CmdError, CmdResult};

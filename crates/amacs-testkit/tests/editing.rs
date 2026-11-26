@@ -253,7 +253,8 @@ fn m_x_narrows_commands_as_words_are_typed() {
     assert_eq!(h.prompt(), "1/1 M-x line beg");
     assert_eq!(
         h.candidates(),
-        ["move-beginning-of-line  Move point to the beginning of the line."]
+        ["move-beginning-of-line  C-a  Move point to the beginning of the line."],
+        "with the key that runs it"
     );
     h.keys("RET");
     assert_eq!(h.screen.cursor(), Some((0, 0)));

@@ -393,7 +393,7 @@ optional argument is the full name of a file to put point on."
 (define (%visit-directory directory)
   (dired-open directory))
 
-(define-major-mode dired-mode #f "Dired"
+(define-major-mode dired-mode special-mode "Dired"
   "Major mode of the file manager: a listing of a directory, with keys that
 act on the files. Start it with M-x dired.")
 
@@ -433,17 +433,18 @@ act on the files. Start it with M-x dired.")
    [else (find-file path)]))
 
 (define-command (dired-find-file)
-  "Visit the file on this line; a directory is shown in the file manager,
-and so is what is in an archive. Any other file that is not text is opened with the program of the
-dired-open-program option."
+  "Visit the file on this line. A directory is shown in the file manager,
+and so is what is in an archive. Any other file that is not text is opened
+with the program of the dired-open-program option."
   (let ((row (dired-row-at-point)))
     (if (eq? (dired-row-kind row) 'directory)
         (dired-open (dired-row-path row))
         (%dired-visit (dired-row-path row)))))
 
 (define-command (dired-open-externally)
-  "Open the marked files, or the file on this line, with the program of
-the dired-open-program option, whatever they are."
+  "Open the marked files, or the file on this line, with another program.
+That is the program of the dired-open-program option, whatever the files
+are."
   (%dired-open-externally (dired-marked-files)))
 
 (define-command (dired-find-file-other-window)
@@ -571,7 +572,8 @@ the dired-open-program option, whatever they are."
   (%dired-set-mark! #f))
 
 (define-command (dired-flag-file-deletion)
-  "Flag the file on this line for deletion; x deletes the flagged files."
+  "Flag the file on this line for deletion. dired-do-flagged-delete deletes
+the flagged files."
   (%dired-set-mark! #\D))
 
 (define-command (dired-unmark-all)
@@ -1014,9 +1016,9 @@ shows something else is visited there."
    ("<motion-mouse-1>" dired-mouse-drag) ("<drag-mouse-1>" dired-mouse-drop)))
 
 (define-command (dired-jump)
-  "Show the directory that the file of the current buffer is in, with
-point on the file. In the file manager, show the directory above. A buffer
-without a file has its working directory shown."
+  "Show the directory of this buffer's file, with point on the file. In
+the file manager, show the directory above. A buffer without a file has its
+working directory shown."
   (cond
    [(hash-table-contains? %dired-buffers (buffer-name)) (dired-up-directory)]
    [(buffer-file-name)

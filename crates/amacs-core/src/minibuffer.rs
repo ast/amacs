@@ -225,6 +225,9 @@ impl Editor {
                     .filter(|name| self.command(name).is_some())
                     .collect();
                 let rest = names.iter().copied().filter(|name| !recent.contains(name));
+                // Each command is shown with the keys that run it here and
+                // with what its documentation starts with.
+                let keys = self.keys_by_command();
                 let candidates = recent
                     .iter()
                     .copied()
@@ -233,7 +236,13 @@ impl Editor {
                         let doc = self
                             .command(name)
                             .map_or("", |command| command.doc.as_str());
-                        Candidate::annotated(name, doc.lines().next().unwrap_or_default())
+                        let doc = crate::editor::doc_summary(doc);
+                        let key = keys.get(name).map(|keys| shortest_keys(keys));
+                        let annotation = match key {
+                            Some(key) if !key.is_empty() => format!("{key}  {doc}"),
+                            _ => doc,
+                        };
+                        Candidate::annotated(name, annotation)
                     })
                     .collect();
                 Completion::Items {
@@ -623,4 +632,16 @@ pub fn default_directory(ed: &Editor) -> String {
         shown.push('/');
     }
     shown
+}
+
+/// The key of a command as a candidate shows it: the one that is shortest
+/// to press, and not one of the pointer. The candidate's row is for what
+/// the command does; help lists all of its keys.
+fn shortest_keys(keys: &[String]) -> String {
+    keys.iter()
+        .map(String::as_str)
+        .filter(|keys| !keys.contains("mouse"))
+        .min_by_key(|keys| (keys.split(' ').count(), keys.chars().count(), *keys))
+        .unwrap_or_default()
+        .to_owned()
 }

@@ -115,10 +115,10 @@ when it has ended."
 
 (set-face! 'process-list-header 'bold #t)
 
-(define-major-mode process-list-mode #f "Processes"
-  "The processes started by Scheme code, one per line: name, status, the
-system's id, the buffer and the program. `k` ends the one at point, `d`
-forgets it, `g` lists again."
+(define-major-mode process-list-mode special-mode "Processes"
+  "Major mode of the list of processes that Scheme code started: one on
+each line with its name, its status, the system's id, its buffer and its
+program."
   (set-buffer-read-only! #t))
 
 (define (%process-status-label process)

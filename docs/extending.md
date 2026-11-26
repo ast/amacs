@@ -17,6 +17,26 @@ others: jumping to places on screen by label, in 200 lines.
 (global-set-key "C-c d" 'insert-date)
 ```
 
+The string is the command's documentation, and its first sentence is what
+the user sees of it: `M-x` shows it beside the name, and `C-h m`, or `?` in a
+buffer that is not typed into, shows it beside the keys of the command. So
+the first sentence says what the command does, alone, in the words of
+[ASD-STE100](https://www.asd-ste100.org): one instruction, in the active
+voice and the present tense, short, with the words that the rest of the
+editor uses. `Delete the marked files, after asking.`, not `This will
+cause the files that have been marked to be deleted`. More lines can say
+the rest. The keys are not named in it: they are read from the keymaps
+(`(keymap-bindings 'dired-mode)`, `(command-keys 'find-file)`), so help
+stays right when a key is bound to something else.
+
+A major mode of a buffer that is not typed into takes `special-mode` as its
+parent, which gives it `?` and `h` for that help:
+
+```scheme
+(define-major-mode score-mode special-mode "Scores"
+  "Major mode of the list of scores.")
+```
+
 A command defined with the name of a built-in one replaces it, for keys and
 `M-x` alike; `(call-built-in-command 'name)` still runs the original.
 `(call-command 'name)` runs any command.

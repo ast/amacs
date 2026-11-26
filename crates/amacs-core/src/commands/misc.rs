@@ -763,7 +763,7 @@ fn read_key_sequence(ed: &mut Editor, mut keys: Vec<Key>) {
             KeyMeaning::Command(name) => {
                 let doc = ed
                     .command(&name)
-                    .map(|command| command.doc.lines().next().unwrap_or("").to_owned())
+                    .map(|command| crate::editor::doc_summary(&command.doc))
                     .unwrap_or_default();
                 ed.message(format!("{described} runs {name}: {doc}"));
             }

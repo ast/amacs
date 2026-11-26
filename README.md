@@ -187,7 +187,8 @@ Then, for example:
 6. `C-x 2` and `C-x 3` split the window, `M-o` goes to another, and
    `C-x 1` leaves one.
 7. `M-:` and `(message "Hello from " (buffer-name))` runs Scheme in the
-   editor, and `C-h k` followed by a key says what the key does.
+   editor, and `C-h k` followed by a key says what the key does; `?`
+   lists the keys of a buffer such as the file manager's.
 8. `C-x C-c` quits, after asking about buffers that are not saved.
 
 To keep the configuration, copy it to where the editor looks for it, and
@@ -859,7 +860,13 @@ Editing: `M-%` query-replace, `M-;` comment or uncomment the region or line,
 `C-x C-u` and `C-x C-l` for the region, `M-m`, `M-^`, `M-\` and `M-SPC`,
 `C-x C-q` read-only, `M-!` and `M-|` for shell commands (with `C-u`, the
 output replaces the region), and `scroll-up-line` and `scroll-down-line`.
-`C-h k` says what a key runs and `C-h f` what a command does.
+`C-h k` says what a key runs and `C-h f` what a command does. `C-h m` shows
+what the mode of the buffer is for with what each of its keys does, and
+`C-h b` adds the keys that hold everywhere; in a buffer that is not typed
+into, such as the file manager, `?` and `h` do what `C-h m` does. `M-x`
+shows each command with its keys. All of it is made from the keymaps and
+from the documentation of the commands. `<f1>` is the same prefix as `C-h`,
+for those who have `C-h` for something else.
 
 The smaller commands of Emacs are there under their names and keys. They
 are written in Scheme, in `runtime/lib/simple.scm`:

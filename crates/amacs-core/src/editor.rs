@@ -1168,6 +1168,44 @@ impl Editor {
         }
     }
 
+    /// Every key sequence that a keymap binds, with the command it runs,
+    /// in the order of the keys as they are written.
+    pub fn keymap_bindings(&self, name: &str) -> Vec<(String, String)> {
+        fn collect(map: &Keymap, prefix: &mut Vec<Key>, out: &mut Vec<(String, String)>) {
+            for (key, shown) in map.entries(prefix) {
+                prefix.push(key);
+                if shown == "+prefix" {
+                    collect(map, prefix, out);
+                } else {
+                    out.push((describe_keys(prefix), shown));
+                }
+                prefix.pop();
+            }
+        }
+        let mut found = Vec::new();
+        if let Some(map) = self.keymaps.get(name) {
+            collect(map, &mut Vec::new(), &mut found);
+        }
+        found.sort();
+        found
+    }
+
+    /// The keys that run each command in the current buffer: what
+    /// [`Editor::keys_for`] gives, for all commands at once.
+    pub fn keys_by_command(&self) -> HashMap<String, Vec<String>> {
+        let mut seen = std::collections::HashSet::new();
+        let mut keys: HashMap<String, Vec<String>> = HashMap::new();
+        for name in self.active_keymaps() {
+            for (sequence, command) in self.keymap_bindings(name) {
+                // An earlier keymap's binding hides a later one's.
+                if seen.insert(sequence.clone()) {
+                    keys.entry(command).or_default().push(sequence);
+                }
+            }
+        }
+        keys
+    }
+
     /// The key sequences that run a command in the current buffer.
     pub fn keys_for(&self, command: &str) -> Vec<String> {
         fn collect(map: &Keymap, prefix: &mut Vec<Key>, command: &str, out: &mut Vec<Vec<Key>>) {
@@ -1454,6 +1492,17 @@ fn new_window(buffer: &mut Buffer, id: BufferId, serial: u32) -> Window {
         rect: Rect::default(),
         border: false,
         serial,
+    }
+}
+
+/// What help shows of a command's documentation: its first sentence, on
+/// one line. A sentence ends with a full stop before a space or at the end
+/// of a line; documentation without one is shown whole.
+pub fn doc_summary(doc: &str) -> String {
+    let flat = doc.split_whitespace().collect::<Vec<_>>().join(" ");
+    match flat.find(". ") {
+        Some(end) => flat[..=end].to_owned(),
+        None => flat,
     }
 }
 

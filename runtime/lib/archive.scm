@@ -312,8 +312,9 @@ file), archive-member-size, archive-member-changed and archive-member-link."
     (dired-refresh target)))
 
 (define-command (dired-do-compress)
-  "Compress or uncompress the marked files, or the file on this line, each
-where it is. A compressed file is uncompressed and an archive is unpacked:
+  "Compress or uncompress the marked files, or the file on this line. The
+result is put where each file is. A compressed file is uncompressed and an
+archive is unpacked:
 into the directory if it holds one thing whose name is free, else into a
 new directory with the archive's name; the archive stays. Any other file is
 compressed the way the archive-compress-extension option says, and a
@@ -353,8 +354,8 @@ directory is packed into a tar archive compressed that way and stays."
                ", "))
 
 (define-command (dired-do-compress-to)
-  "Pack the marked files, or the file on this line, into one archive whose
-name is asked for. How the name ends says what kind: .tar.zst, .tar.gz,
+  "Pack the marked files, or the file on this line, into one archive. Its
+name is asked for, and how the name ends says what kind: .tar.zst, .tar.gz,
 .tgz, .tar.xz, .tar.bz2, .tar or .zip. One file that is no directory can
 also go to a name that ends in .zst, .gz, .xz or .bz2. The files stay."
   (let* ((paths (dired-marked-files))
@@ -425,12 +426,10 @@ error if the buffer lists none."
   (or (hash-table-ref %archive-buffers (buffer-name))
       (error "This buffer does not list an archive")))
 
-(define-major-mode archive-mode #f "Archive"
-  "What is in an archive, one member per line with its size and time. RET
-shows a member that is text, without a way to save it back. m, u and U
-mark; C copies the marked members, or the one on the line, out to a
-directory; Z unpacks the whole archive next to itself; g lists again, ^
-shows the directory that the archive is in and q leaves."
+(define-major-mode archive-mode special-mode "Archive"
+  "Major mode of the listing of an archive: the members of a tar archive
+or a zip file, one on each line with its size and time. A member that is
+text can be read but not saved back; members can be copied out."
   (set-buffer-read-only! #t))
 
 ;; Writes the members into the current buffer and puts point on the row
@@ -590,8 +589,8 @@ selected window."
   (%archive-redraw))
 
 (define-command (archive-find-member)
-  "Show the member on this line in a buffer of its own, in the mode that
-its name asks for. The buffer has no file: it cannot be saved back into
+  "Show the member on this line in a buffer of its own. The mode is the
+one that its name asks for. The buffer has no file: it cannot be saved back into
 the archive. A member that is not text is not shown; C copies it out."
   (let* ((path (archive-state-path (archive-state)))
          (member (archive-member-at-point))
@@ -622,8 +621,8 @@ the archive. A member that is not text is not shown; C copies it out."
       [else (loop (cdr windows))])))
 
 (define-command (archive-copy-out)
-  "Copy the marked members, or the member on this line, out of the archive
-into a directory that is asked for. A directory comes with what is in it,
+  "Copy the marked members, or the member on this line, out of the archive.
+They go into a directory that is asked for. A directory comes with what is in it,
 and each member keeps the directories of its name."
   (let* ((state (archive-state))
          (path (archive-state-path state))
@@ -658,9 +657,9 @@ and each member keeps the directories of its name."
     (message "Copied " label " to " (abbreviate-file-name directory))))
 
 (define-command (archive-unpack)
-  "Unpack the whole archive next to itself and show the result in the file
-manager: into the directory if the archive holds one thing whose name is
-free, else into a new directory with the archive's name."
+  "Unpack the whole archive next to itself. The result is shown in the file
+manager: it is in the directory if the archive holds one thing whose name
+is free, else in a new directory with the archive's name."
   (let* ((path (archive-state-path (archive-state)))
          (result (%archive-unpack path)))
     (%dired-refresh-all)

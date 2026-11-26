@@ -104,7 +104,7 @@ not one of git's."
     (set-buffer-directory! root))
   (hash-table-ref %git-views name))
 
-(define-major-mode git-mode #f "Git"
+(define-major-mode git-mode special-mode "Git"
   "Major mode of the git buffers: the status of a repository, a log, a
 commit. Start with M-x git-status.")
 

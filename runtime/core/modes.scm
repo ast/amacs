@@ -130,6 +130,14 @@ extension such as \".rs\" or a whole name such as \"/Makefile\"."
 (define-major-mode conf-mode #f "Conf"
   "Parent of the major modes for configuration files.")
 
+(define-major-mode special-mode #f "Special"
+  "Parent of the major modes of buffers that are not typed into, such as
+lists that the editor makes, where a key alone runs a command. ? and h
+show what the keys of the mode do.")
+
+(define-key 'special-mode "?" 'describe-mode)
+(define-key 'special-mode "h" 'describe-mode)
+
 (add-auto-mode! ".txt" 'text-mode)
 
 ;;; Built-in minor modes. Their behaviour is part of the editor; these

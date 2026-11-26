@@ -617,6 +617,8 @@ pub const API: &[ApiFn] = api! {
         |ed, args| Ok(ed.command(name(args, 0)?).is_some().into());
     "command-documentation" (1, Some(1)) "Documentation of a command, or #f." =>
         |ed, args| Ok(ed.command(name(args, 0)?).map(|command| command.doc.as_str()).into());
+    "command-summary" (1, Some(1)) "What help shows of a command: the first sentence of its documentation, on one line, or #f if there is no such command." =>
+        |ed, args| Ok(ed.command(name(args, 0)?).map(|command| amacs_core::doc_summary(&command.doc)).into());
     "prefix-arg" (0, Some(0)) "Numeric prefix argument of the running command; 1 if none was given." =>
         |ed, _| Ok(Value::Int(ed.arg()));
     "prefix-arg-given?" (0, Some(0)) "Whether the running command was given a prefix argument." =>
@@ -648,6 +650,26 @@ pub const API: &[ApiFn] = api! {
         |ed, _| Ok(ed.last_key().map(|key| key.to_string()).into());
     "last-paste" (0, Some(0)) "The text last pasted into a buffer whose keymap binds <paste>, which the command bound to it takes from here. #f before any." =>
         |ed, _| Ok(ed.last_paste().map(str::to_owned).into());
+    "keymap-bindings" (1, Some(1)) "Every key sequence that a keymap binds: lists of the keys, as a string such as \"C-x C-f\", and the name of the command, in the order of the keys. A keymap has the name of its mode; the keys that hold everywhere are in global." =>
+        |ed, args| {
+            let bindings = ed.keymap_bindings(name(args, 0)?);
+            Ok(Value::List(
+                bindings
+                    .into_iter()
+                    .map(|(keys, command)| Value::List(vec![keys.into(), command.into()]))
+                    .collect(),
+            ))
+        };
+    "active-keymaps" (0, Some(0)) "The names of the keymaps that a key is looked up in, in the current buffer, the first one first: those of the minor modes, of the major mode and of its parents, and then global." =>
+        |ed, _| {
+            let names: Vec<Value> = ed.active_keymaps().into_iter().map(Value::from).collect();
+            Ok(Value::List(names))
+        };
+    "command-keys" (1, Some(1)) "The key sequences that run a command in the current buffer, as strings." =>
+        |ed, args| {
+            let keys = ed.keys_for(name(args, 0)?);
+            Ok(Value::List(keys.into_iter().map(Value::from).collect()))
+        };
     "key-binding" (1, Some(1)) "Name of the command a key sequence runs in the current buffer, or #f." =>
         |ed, args| {
             let keys = keys(args, 0)?;

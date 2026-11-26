@@ -866,7 +866,7 @@ impl Editor {
     /// Names of the keymaps that apply in the current buffer, most specific
     /// first: minor modes (newest first), the major mode and its ancestors,
     /// then the global map.
-    pub(crate) fn active_keymaps(&self) -> Vec<&str> {
+    pub fn active_keymaps(&self) -> Vec<&str> {
         let buffer = self.buffer();
         let mut names: Vec<&str> = Vec::new();
         if self.in_minibuffer() {
