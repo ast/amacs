@@ -265,5 +265,8 @@ installed or changed outside the editor."
   (spell-load-project-words)
   (message "Spelling: " (string-join (spell-dictionaries) ", ")))
 
+;; C-. is the key of flyspell, and easier to reach than M-$ where $ is on
+;; a layer of the keyboard. In the minibuffer it acts on a candidate.
 (global-set-key "M-$" 'spell-correct)
+(global-set-key "C-." 'spell-correct)
 (global-set-key "C-M-$" 'spell-correct-all)

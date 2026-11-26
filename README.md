@@ -776,7 +776,7 @@ Code's own terminal interface, such as going back to a checkpoint.
 ## Spelling
 
 The misspelled words on screen have a wave under them: all of the text in
-prose, and the comments and strings in code. `M-$` corrects the one at
+prose, and the comments and strings in code. `M-$` or `C-.` corrects the one at
 point, or else the nearest: choose among what the dictionaries suggest, or
 type what it should be. `C-M-$` goes through all of the buffer.
 

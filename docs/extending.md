@@ -452,7 +452,7 @@ its own.
 
 | Key or command | Does |
 |---|---|
-| `M-$` | Correct the misspelled word at point, or the nearest in the window |
+| `M-$`, `C-.` | Correct the misspelled word at point, or the nearest in the window |
 | `C-M-$` | Correct every misspelled word of the buffer in turn |
 | `M-x spell-next` / `spell-previous` | Move to the next or the previous one |
 | `M-x spell-set-languages` | Choose the languages of this buffer; with a prefix argument, of all |
