@@ -176,7 +176,16 @@ impl FileSystem for Local {
             writer.flush()?;
             drop(writer);
             file.sync_all()?;
-            fs::rename(&temp, &target)
+            fs::rename(&temp, &target)?;
+            // The new name is an entry of the directory, and is on the disk
+            // only when the directory is: without this, a power failure
+            // just after a save can bring the old file back. The file is
+            // in place whatever comes of it, and some file systems cannot
+            // do it, so a failure here is not one of the save.
+            if let Ok(dir) = File::open(dir) {
+                let _ = dir.sync_all();
+            }
+            Ok(())
         })();
         if result.is_err() {
             // Best effort: the write error is what the user needs to see.
