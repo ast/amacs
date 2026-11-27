@@ -230,6 +230,14 @@ impl Editor {
         self.set_window_buffer(self.selected(), buffer);
     }
 
+    /// The buffer of the current frame's minibuffer, if that is its name.
+    /// It is in no list of buffers, and code that works in another buffer
+    /// for a moment while a prompt is open has to come back to it.
+    pub fn minibuffer_named(&self, name: &str) -> Option<BufferId> {
+        let buffer = self.frame().minibuffer_buffer;
+        (self.buffers[buffer].name == name).then_some(buffer)
+    }
+
     /// Shows lines under the echo area until the next key, as the keys
     /// that can follow a prefix are shown.
     pub fn show_hint(&mut self, lines: Vec<String>) {

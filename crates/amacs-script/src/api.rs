@@ -1559,7 +1559,12 @@ pub const API: &[ApiFn] = api! {
         |ed, _| Ok(ed.in_minibuffer().into());
     "%set-buffer" (1, Some(1)) "Make the selected window show the named buffer for a moment, without what goes with switching to it." =>
         |ed, args| {
-            let id = buffer_arg(ed, args, 0)?;
+            // The way back from a buffer can be to the minibuffer, which
+            // is not among the buffers that have names to find them by.
+            let id = match ed.minibuffer_named(name(args, 0)?) {
+                Some(id) => id,
+                None => buffer_arg(ed, args, 0)?,
+            };
             ed.set_current_buffer(id);
             Ok(Value::Void)
         };
