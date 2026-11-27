@@ -14,6 +14,10 @@
 //! of the room with what it told last ([`room_changes`]). That is simple,
 //! can not go out of step, and costs little: a few reads of memory for each
 //! room.
+//!
+//! Spaces are rooms too, and are told as such, with `space` true. Which
+//! spaces a room is in comes from the SDK's service for spaces, which reads
+//! it from the spaces and the rooms that the user has joined.
 
 use std::collections::HashMap;
 use std::pin::pin;
@@ -25,10 +29,16 @@ use matrix_sdk::Client;
 use matrix_sdk_ui::eyeball_im::Vector;
 use matrix_sdk_ui::room_list_service::filters::new_filter_joined;
 use matrix_sdk_ui::room_list_service::{RoomListItem, RoomListService};
+use matrix_sdk_ui::spaces::SpaceService;
 use matrix_sdk_ui::sync_service::{State as SyncState, SyncService};
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::Task;
 use crate::protocol::{Output, RoomInfo, State, explain, log};
+
+/// How long the rooms are left to settle after a change before the editor
+/// is told of them.
+const SETTLE: Duration = Duration::from_millis(250);
 
 /// How many rooms the list gives at once: all of them. The SDK's list is
 /// made for a view that shows a page and asks for more.
@@ -149,18 +159,59 @@ async fn watch_rooms(service: Arc<SyncService>, client: Client, out: Output) {
     controller.set_filter(Box::new(new_filter_joined()));
     let mut stream = pin!(stream);
 
+    // The spaces and what is in them. The service keeps this up to date
+    // by itself, after each answer of the server that changes a room.
+    let spaces = SpaceService::new(client.clone()).await;
+    let mut updates = client.subscribe_to_all_room_updates();
+
     let mut rooms: Vector<RoomListItem> = Vector::new();
     let mut told: HashMap<String, RoomInfo> = HashMap::new();
-    while let Some(diffs) = stream.next().await {
-        for diff in diffs {
-            diff.apply(&mut rooms);
+    loop {
+        tokio::select! {
+            diffs = stream.next() => {
+                let Some(diffs) = diffs else { break };
+                for diff in diffs {
+                    diff.apply(&mut rooms);
+                }
+            }
+            // Something changed in a room, which may be what a space has
+            // in it: the list does not tell of that.
+            update = updates.recv() => {
+                if matches!(update, Err(RecvError::Closed)) {
+                    break;
+                }
+            }
         }
+        // Changes come in bursts, most of all at the start. A moment is
+        // waited for the rest of the burst, in which the service of the
+        // spaces also takes in what changed.
+        let pause = tokio::time::sleep(SETTLE);
+        let mut pause = pin!(pause);
+        loop {
+            tokio::select! {
+                () = &mut pause => break,
+                diffs = stream.next() => {
+                    let Some(diffs) = diffs else { break };
+                    for diff in diffs {
+                        diff.apply(&mut rooms);
+                    }
+                }
+            }
+        }
+
         let mut now = Vec::with_capacity(rooms.len());
         for room in &rooms {
             if !told.contains_key(room.room_id().as_str()) {
                 listen_to_latest_event(&client, room).await;
             }
-            now.push(room_info(room).await);
+            let mut parents: Vec<String> = spaces
+                .joined_parent_ids_of_child(room.room_id())
+                .await
+                .into_iter()
+                .map(String::from)
+                .collect();
+            parents.sort();
+            now.push(room_info(room, parents).await);
         }
         for change in room_changes(&mut told, now) {
             match change {
@@ -184,7 +235,7 @@ async fn listen_to_latest_event(client: &Client, room: &RoomListItem) {
 }
 
 /// What the editor is told of a room.
-async fn room_info(room: &RoomListItem) -> RoomInfo {
+async fn room_info(room: &RoomListItem, parents: Vec<String>) -> RoomInfo {
     let name = match room.cached_display_name() {
         Some(name) => name.to_string(),
         // The name was never worked out: do that, from what the store has.
@@ -211,6 +262,7 @@ async fn room_info(room: &RoomListItem) -> RoomInfo {
             .map_or(0, |time| time.as_secs().into()),
         direct: room.is_direct().await.unwrap_or(false),
         space: room.is_space(),
+        parents,
     }
 }
 
@@ -259,6 +311,7 @@ mod tests {
             activity: 100,
             direct: false,
             space: false,
+            parents: Vec::new(),
         }
     }
 

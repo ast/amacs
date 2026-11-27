@@ -17,10 +17,13 @@
 // by default. The SDK's own crates set the same limit.
 #![recursion_limit = "256"]
 
+mod media;
+mod notify;
 mod protocol;
 mod rooms;
 mod session;
 mod timeline;
+mod verify;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -28,15 +31,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use matrix_sdk::Client;
-use matrix_sdk::ruma::{OwnedRoomId, OwnedUserId, RoomId, UserId};
+use matrix_sdk::ruma::{EventId, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UserId};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use protocol::{Output, PaginateParams, Request, RoomParams, SendParams, StartParams, State, log};
+use media::{Cache, Thumbnailer};
+use protocol::{
+    BodyParams, ConfirmParams, MessageParams, Output, PaginateParams, ReactParams, RecoverParams,
+    Request, RoomParams, SendParams, StartParams, State, UploadParams, log,
+};
 use session::{Keeper, Paths, SessionEnd, Stored};
 use timeline::OpenTimeline;
+use verify::Verifier;
 
 /// A task that stops when its owner lets go of it.
 pub struct Task(JoinHandle<()>);
@@ -58,6 +66,9 @@ struct App {
     out: Output,
     /// Where the state of all users is kept, or why there is no such place.
     state_root: Result<PathBuf, String>,
+    /// Where the files that are fetched are kept, or why there is no such
+    /// place.
+    cache_root: Result<PathBuf, String>,
     /// The user that "start" named, and nothing before that.
     account: Mutex<Option<Account>>,
 }
@@ -82,9 +93,23 @@ struct Account {
 struct Live {
     client: Client,
     syncing: rooms::Syncing,
-    timelines: HashMap<OwnedRoomId, OpenTimeline>,
-    _session: Task,
+    /// The lists that are open, by room and by the name that the editor
+    /// has for the thread, if it is the list of a thread.
+    timelines: HashMap<View, OpenTimeline>,
+    /// Counts the lists that were opened: each has the number at the start
+    /// of the ids of its items, so that an id names one item of one list
+    /// for as long as the program runs.
+    opened: u64,
+    verifier: Verifier,
+    thumbnailer: Thumbnailer,
+    /// Where the files of this user are kept, or why there is no such
+    /// place.
+    cache: Result<Cache, String>,
+    _tasks: Vec<Task>,
 }
+
+/// A room, or a thread in it by the name that the editor has for it.
+type View = (OwnedRoomId, Option<String>);
 
 type Outcome = Result<Value, String>;
 
@@ -113,6 +138,7 @@ async fn serve() {
     let app = Arc::new(App {
         out: Output::stdout(),
         state_root: session::state_root_of_environment(),
+        cache_root: media::cache_root_of_environment(),
         account: Mutex::new(None),
     });
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -150,20 +176,47 @@ async fn dispatch(app: &Arc<App>, request: Request) {
         },
         "timeline-open" => timeline_open(app, &request).await,
         "timeline-close" => timeline_close(app, &request).await,
-        "paginate-back" => {
-            // The server can take long to answer, and the user may want to
-            // write a message meanwhile.
+        "send" => send(app, &request).await,
+        "reply" => reply(app, &request).await,
+        "edit" => edit(app, &request).await,
+        "react" => react(app, &request).await,
+        "redact" => redact(app, &request).await,
+        // These wait for the server, which can take long, and the user may
+        // want to write a message meanwhile: they run beside the rest.
+        "paginate-back" | "mark-read" | "upload" | "download" | "verify-start"
+        | "verify-accept" | "verify-cancel" | "verify-confirm" | "recover" => {
             let app = app.clone();
             tokio::spawn(async move {
-                let outcome = paginate_back(&app, &request).await;
+                let outcome = beside(&app, &request).await;
                 app.out.answer(&request.id, &outcome);
             });
             return;
         }
-        "send" => send(app, &request).await,
         other => Err(format!("This program has no method “{other}”.")),
     };
     app.out.answer(&request.id, &outcome);
+}
+
+/// The handlers that run beside the rest.
+async fn beside(app: &Arc<App>, request: &Request) -> Outcome {
+    match request.method.as_str() {
+        "paginate-back" => paginate_back(app, request).await,
+        "mark-read" => mark_read(app, request).await,
+        "upload" => upload(app, request).await,
+        "download" => download(app, request).await,
+        "verify-start" => verifier(app).await?.request().await,
+        "verify-accept" => verifier(app).await?.accept().await,
+        "verify-cancel" => verifier(app).await?.cancel().await,
+        "verify-confirm" => {
+            let params: ConfirmParams = request.params()?;
+            verifier(app).await?.confirm(params.matches).await
+        }
+        "recover" => {
+            let params: RecoverParams = request.params()?;
+            verifier(app).await?.recover(&params.key).await
+        }
+        other => Err(format!("This program has no method “{other}”.")),
+    }
 }
 
 /// "start": names the user and opens the store. With a session from an
@@ -257,12 +310,37 @@ async fn go_live(
             }
         })
     };
+    // Whether the device is verified is known, as far as it is, before
+    // the first "syncing" is said, which carries it.
+    let (verifier, verified) = Verifier::start(&client, &app.out);
+    notify::start(&client, &app.out).await;
+
+    let cache = match (&app.cache_root, client.user_id()) {
+        (Ok(root), Some(user)) => Ok(Cache::new(root, user)),
+        (Err(error), _) => Err(error.clone()),
+        (_, None) => Err(NOT_LOGGED_IN.to_owned()),
+    };
+    let (thumbnailer, thumbnails) = match &cache {
+        Ok(cache) => {
+            let (thumbnailer, task) = Thumbnailer::start(client.clone(), cache.clone());
+            (thumbnailer, Some(task))
+        }
+        // Without a place for them, messages have no pictures.
+        Err(_) => (Thumbnailer::idle(), None),
+    };
+
     let syncing = rooms::start(&client, &app.out).await?;
+    let mut tasks = vec![session, verified];
+    tasks.extend(thumbnails);
     Ok(Live {
         client,
         syncing,
         timelines: HashMap::new(),
-        _session: session,
+        opened: 0,
+        verifier,
+        thumbnailer,
+        cache,
+        _tasks: tasks,
     })
 }
 
@@ -277,6 +355,8 @@ async fn session_revoked(app: &Arc<App>) {
         return;
     }
     log("the server ended the session");
+    // What was known of the device is of a session that is no more.
+    app.out.set_verified(None);
     account.paths.retire();
     app.out.state(
         State::Login,
@@ -342,62 +422,200 @@ fn room_id(room: &str) -> Result<OwnedRoomId, String> {
     RoomId::parse(room).map_err(|_| format!("“{room}” is not the id of a room."))
 }
 
-/// "timeline-open": the editor wants the messages of a room, now and as
-/// they change.
+/// The event that a thread starts with, from the name that the editor has
+/// for the thread: the id of that event, or the id of its item in a list
+/// that is open (see `timeline`).
+async fn thread_root(
+    live: &Live,
+    room: &OwnedRoomId,
+    thread: &str,
+) -> Result<OwnedEventId, String> {
+    if thread.starts_with('$') {
+        return EventId::parse(thread)
+            .map_err(|_| format!("“{thread}” is not the id of an event."));
+    }
+    for ((of_room, _), open) in &live.timelines {
+        if of_room == room
+            && let Some(event_id) = timeline::event_id(&open.timeline(), thread).await
+        {
+            return Ok(event_id);
+        }
+    }
+    Err("The message that the thread starts with is not in a list that is open.".to_owned())
+}
+
+/// The list of a room or of a thread, which must be open.
+fn open_timeline(
+    live: &Live,
+    room: OwnedRoomId,
+    thread: Option<String>,
+) -> Result<Arc<matrix_sdk_ui::Timeline>, String> {
+    let view = (room, thread);
+    match live.timelines.get(&view) {
+        Some(open) => Ok(open.timeline()),
+        None if view.1.is_some() => Err("This thread is not open.".to_owned()),
+        None => Err("This room is not open.".to_owned()),
+    }
+}
+
+/// The list that a request names, without the state held: what is done with
+/// it may wait for the server.
+async fn timeline_of(
+    app: &Arc<App>,
+    room: &str,
+    thread: Option<String>,
+) -> Result<(Client, Arc<matrix_sdk_ui::Timeline>), String> {
+    let room = room_id(room)?;
+    let mut guard = app.account.lock().await;
+    let live = live(&mut guard)?;
+    Ok((live.client.clone(), open_timeline(live, room, thread)?))
+}
+
+/// "timeline-open": the editor wants the messages of a room or of a thread,
+/// now and as they change.
 async fn timeline_open(app: &Arc<App>, request: &Request) -> Outcome {
     let params: RoomParams = request.params()?;
     let room = room_id(&params.room)?;
     let mut guard = app.account.lock().await;
     let live = live(&mut guard)?;
-    // A room that is open already is opened anew, so that the editor gets
+    let root = match &params.thread {
+        Some(thread) => Some(thread_root(live, &room, thread).await?),
+        None => None,
+    };
+    // A list that is open already is opened anew, so that the editor gets
     // its "reset" and both sides agree.
-    live.timelines.remove(&room);
-    let open = timeline::open(&live.client, &live.syncing.room_list(), &room, &app.out).await?;
-    live.timelines.insert(room, open);
+    let view = (room, params.thread);
+    live.timelines.remove(&view);
+    live.opened += 1;
+    let target = timeline::Target {
+        room: &view.0,
+        thread: view.1.as_deref().zip(root),
+        id_prefix: format!("{}.", live.opened),
+    };
+    let open = timeline::open(
+        &live.client,
+        &live.syncing.room_list(),
+        target,
+        &live.thumbnailer,
+        &app.out,
+    )
+    .await?;
+    live.timelines.insert(view, open);
     Ok(Value::Null)
 }
 
-/// "timeline-close": the editor no longer shows the room.
+/// "timeline-close": the editor no longer shows the room or the thread.
 async fn timeline_close(app: &Arc<App>, request: &Request) -> Outcome {
     let params: RoomParams = request.params()?;
     let room = room_id(&params.room)?;
     let mut guard = app.account.lock().await;
     let live = live(&mut guard)?;
-    if live.timelines.remove(&room).is_some() {
-        timeline::close(&live.syncing.room_list(), &room);
+    let view = (room, params.thread);
+    let closed = live.timelines.remove(&view).is_some();
+    // The server is asked for all of the room for as long as one of its
+    // lists is open.
+    if closed && !live.timelines.keys().any(|(room, _)| room == &view.0) {
+        timeline::close(&live.syncing.room_list(), &view.0);
     }
     Ok(Value::Null)
 }
 
-/// "paginate-back": the editor wants earlier messages of an open room.
+/// "paginate-back": the editor wants earlier messages of an open list.
 async fn paginate_back(app: &Arc<App>, request: &Request) -> Outcome {
     let params: PaginateParams = request.params()?;
-    let room = room_id(&params.room)?;
-    let timeline = {
-        let mut guard = app.account.lock().await;
-        let live = live(&mut guard)?;
-        live.timelines
-            .get(&room)
-            .ok_or("This room is not open.")?
-            .timeline()
-    };
-    // The state is free again while the server is asked.
+    let (_, timeline) = timeline_of(app, &params.room, params.thread).await?;
     timeline::paginate_back(&timeline, params.count).await
 }
 
-/// "send": a message of plain text to a room.
+/// "send": a message of plain text to a room, or to a thread whose list is
+/// open.
 async fn send(app: &Arc<App>, request: &Request) -> Outcome {
     let params: SendParams = request.params()?;
     let room = room_id(&params.room)?;
     let (client, open) = {
         let mut guard = app.account.lock().await;
         let live = live(&mut guard)?;
-        (
-            live.client.clone(),
-            live.timelines.get(&room).map(OpenTimeline::timeline),
-        )
+        let open = match params.thread {
+            // Only the list of a thread knows how to answer in the thread.
+            Some(thread) => Some(open_timeline(live, room.clone(), Some(thread))?),
+            None => live
+                .timelines
+                .get(&(room.clone(), None))
+                .map(OpenTimeline::timeline),
+        };
+        (live.client.clone(), open)
     };
     timeline::send(&client, open, &room, &params.body).await
+}
+
+/// "reply": an answer to a message of an open list.
+async fn reply(app: &Arc<App>, request: &Request) -> Outcome {
+    let params: BodyParams = request.params()?;
+    let (_, timeline) = timeline_of(app, &params.room, params.thread).await?;
+    timeline::reply(&timeline, &params.id, &params.body).await
+}
+
+/// "edit": another text for a message of the user's own.
+async fn edit(app: &Arc<App>, request: &Request) -> Outcome {
+    let params: BodyParams = request.params()?;
+    let (_, timeline) = timeline_of(app, &params.room, params.thread).await?;
+    timeline::edit(&timeline, &params.id, &params.body).await
+}
+
+/// "react": a reaction to a message, or the end of the user's own.
+async fn react(app: &Arc<App>, request: &Request) -> Outcome {
+    let params: ReactParams = request.params()?;
+    if params.key.trim().is_empty() {
+        return Err("A reaction can not be empty.".to_owned());
+    }
+    let (_, timeline) = timeline_of(app, &params.room, params.thread).await?;
+    timeline::react(&timeline, &params.id, &params.key).await
+}
+
+/// "redact": deletes a message for everybody.
+async fn redact(app: &Arc<App>, request: &Request) -> Outcome {
+    let params: MessageParams = request.params()?;
+    let (_, timeline) = timeline_of(app, &params.room, params.thread).await?;
+    timeline::redact(&timeline, &params.id).await
+}
+
+/// "mark-read": the user has read the room to its end.
+async fn mark_read(app: &Arc<App>, request: &Request) -> Outcome {
+    let params: RoomParams = request.params()?;
+    let (_, timeline) = timeline_of(app, &params.room, None).await?;
+    timeline::mark_read(&timeline).await
+}
+
+/// "upload": sends a file to a room or a thread whose list is open.
+async fn upload(app: &Arc<App>, request: &Request) -> Outcome {
+    let params: UploadParams = request.params()?;
+    let (_, timeline) = timeline_of(app, &params.room, params.thread).await?;
+    timeline::upload(&timeline, &params.path).await
+}
+
+/// "download": fetches the file of a message, unless it is on disk. The
+/// result is where it is.
+async fn download(app: &Arc<App>, request: &Request) -> Outcome {
+    let params: MessageParams = request.params()?;
+    let room = room_id(&params.room)?;
+    let (client, timeline, cache) = {
+        let mut guard = app.account.lock().await;
+        let live = live(&mut guard)?;
+        (
+            live.client.clone(),
+            open_timeline(live, room, params.thread)?,
+            live.cache.clone()?,
+        )
+    };
+    let attachment = timeline::attachment(&timeline, &params.id).await?;
+    let path = media::download(&client, &cache, &attachment).await?;
+    Ok(Value::String(path.to_string_lossy().into_owned()))
+}
+
+/// The verifier of the user who is logged in.
+async fn verifier(app: &Arc<App>) -> Result<Verifier, String> {
+    let mut guard = app.account.lock().await;
+    Ok(live(&mut guard)?.verifier.clone())
 }
 
 /// What there is of a user who is logged in, or why there is nothing.
@@ -484,7 +702,8 @@ mod tests {
         let lines = Lines::default();
         let app = Arc::new(App {
             out: Output::to(Box::new(lines.clone())),
-            state_root: Ok(dir.clone()),
+            state_root: Ok(dir.join("state")),
+            cache_root: Ok(dir.join("cache")),
             account: Mutex::new(None),
         });
         (app, lines, Scratch(dir))
@@ -541,6 +760,40 @@ mod tests {
         )
         .await;
         assert_eq!(lines.answer(4).await["error"], NOT_LOGGED_IN);
+        for (number, method) in [
+            "reply",
+            "edit",
+            "react",
+            "redact",
+            "mark-read",
+            "upload",
+            "download",
+            "paginate-back",
+            "timeline-open",
+            "timeline-close",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = 100 + number as u64;
+            let params = json!({"room": "!a:example.org", "id": "1.0", "body": "x", "key": "+1", "path": "/a"});
+            request(&app, json!({"id": id, "method": method, "params": params})).await;
+            assert_eq!(lines.answer(id).await["error"], NOT_LOGGED_IN, "{method}");
+        }
+        for (number, method) in ["verify-start", "verify-accept", "verify-cancel"]
+            .into_iter()
+            .enumerate()
+        {
+            let id = 200 + number as u64;
+            request(&app, json!({"id": id, "method": method})).await;
+            assert_eq!(lines.answer(id).await["error"], NOT_LOGGED_IN, "{method}");
+        }
+        request(
+            &app,
+            json!({"id": 210, "method": "recover", "params": {"key": "EsTc 1234"}}),
+        )
+        .await;
+        assert_eq!(lines.answer(210).await["error"], NOT_LOGGED_IN);
         request(&app, json!({"id": 5, "method": "fly"})).await;
         assert_eq!(
             lines.answer(5).await["error"],
@@ -561,7 +814,7 @@ mod tests {
     async fn with_a_session_the_sync_starts() {
         let (app, lines, scratch) = app("restore");
         let user = user_id!("@nobody:example.org");
-        let paths = Paths::make(&scratch.0, user).unwrap();
+        let paths = Paths::make(&scratch.0.join("state"), user).unwrap();
         let stored = Stored {
             homeserver: "http://127.0.0.1:9/".to_owned(),
             sliding_sync: SlidingSync::Unstable,
@@ -629,6 +882,120 @@ mod tests {
         request(&app, json!({"id": 6, "method": "login"})).await;
         assert_eq!(lines.answer(6).await["error"], "You are logged in already.");
 
+        // The methods that are about a message or a file need an open
+        // list, and say so.
+        let not_open = [
+            json!({"method": "reply", "params": {"room": "!a:example.org", "id": "1.0", "body": "x"}}),
+            json!({"method": "edit", "params": {"room": "!a:example.org", "id": "1.0", "body": "x"}}),
+            json!({"method": "react", "params": {"room": "!a:example.org", "id": "1.0", "key": "+1"}}),
+            json!({"method": "redact", "params": {"room": "!a:example.org", "id": "1.0"}}),
+            json!({"method": "mark-read", "params": {"room": "!a:example.org"}}),
+            json!({"method": "upload", "params": {"room": "!a:example.org", "path": "/nowhere/a.png"}}),
+            json!({"method": "download", "params": {"room": "!a:example.org", "id": "1.0"}}),
+        ];
+        for (number, mut line) in not_open.into_iter().enumerate() {
+            let id = 100 + number as u64;
+            line["id"] = json!(id);
+            request(&app, line.clone()).await;
+            assert_eq!(
+                lines.answer(id).await["error"],
+                "This room is not open.",
+                "{line}"
+            );
+        }
+        let in_thread = [
+            json!({"method": "send", "params": {"room": "!a:example.org", "thread": "1.0", "body": "x"}}),
+            json!({"method": "paginate-back", "params": {"room": "!a:example.org", "thread": "$e", "count": 3}}),
+            json!({"method": "upload", "params": {"room": "!a:example.org", "thread": "1.0", "path": "/a"}}),
+        ];
+        for (number, mut line) in in_thread.into_iter().enumerate() {
+            let id = 200 + number as u64;
+            line["id"] = json!(id);
+            request(&app, line.clone()).await;
+            assert_eq!(
+                lines.answer(id).await["error"],
+                "This thread is not open.",
+                "{line}"
+            );
+        }
+        // A thread is named by an item of an open list, or by an event.
+        request(&app, json!({"id": 300, "method": "timeline-open", "params": {"room": "!a:example.org", "thread": "1.0"}})).await;
+        assert_eq!(
+            lines.answer(300).await["error"],
+            "The message that the thread starts with is not in a list that is open."
+        );
+        request(&app, json!({"id": 301, "method": "timeline-open", "params": {"room": "!a:example.org", "thread": "$root"}})).await;
+        assert_eq!(lines.answer(301).await["error"], "This room is not known.");
+        request(&app, json!({"id": 302, "method": "timeline-close", "params": {"room": "!a:example.org", "thread": "$root"}})).await;
+        assert_eq!(lines.answer(302).await, json!({"id": 302, "result": null}));
+
+        // What is wrong with the parameters is said before anything else.
+        request(&app, json!({"id": 310, "method": "react", "params": {"room": "!a:example.org", "id": "1.0", "key": " "}})).await;
+        assert_eq!(
+            lines.answer(310).await["error"],
+            "A reaction can not be empty."
+        );
+        request(&app, json!({"id": 311, "method": "reply", "params": {"room": "!a:example.org", "body": "x"}})).await;
+        assert!(
+            lines.answer(311).await["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("The parameters of “reply”")
+        );
+        request(
+            &app,
+            json!({"id": 312, "method": "download", "params": {"room": "nothing", "id": "1.0"}}),
+        )
+        .await;
+        assert_eq!(
+            lines.answer(312).await["error"],
+            "“nothing” is not the id of a room."
+        );
+
+        // No verification is going on.
+        request(&app, json!({"id": 320, "method": "verify-accept"})).await;
+        assert_eq!(
+            lines.answer(320).await["error"],
+            "No device asks to verify this one."
+        );
+        request(
+            &app,
+            json!({"id": 321, "method": "verify-confirm", "params": {"match": true}}),
+        )
+        .await;
+        assert_eq!(
+            lines.answer(321).await["error"],
+            "No emojis are waiting for an answer."
+        );
+        request(
+            &app,
+            json!({"id": 322, "method": "verify-confirm", "params": {}}),
+        )
+        .await;
+        assert!(
+            lines.answer(322).await["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("The parameters of “verify-confirm”")
+        );
+        request(&app, json!({"id": 323, "method": "verify-cancel"})).await;
+        assert_eq!(lines.answer(323).await, json!({"id": 323, "result": null}));
+        request(
+            &app,
+            json!({"id": 324, "method": "recover", "params": {"key": "  "}}),
+        )
+        .await;
+        assert_eq!(
+            lines.answer(324).await["error"],
+            "The recovery key is empty."
+        );
+        request(&app, json!({"id": 325, "method": "recover", "params": {}})).await;
+        let error = lines.answer(325).await["error"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(error.starts_with("The parameters of “recover”"), "{error}");
+
         // The server does not answer, which the editor is told.
         lines
             .wait_for(|value| value["event"] == "state" && value["state"] == "offline")
@@ -639,7 +1006,8 @@ mod tests {
             let lines = Lines::default();
             let app = Arc::new(App {
                 out: Output::to(Box::new(lines.clone())),
-                state_root: Ok(scratch.0.clone()),
+                state_root: Ok(scratch.0.join("state")),
+                cache_root: Ok(scratch.0.join("cache")),
                 account: Mutex::new(None),
             });
             (app, lines, ())

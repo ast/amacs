@@ -31,6 +31,7 @@ use matrix_sdk::authentication::oauth::registration::{
     ApplicationType, ClientMetadata, Localized, OAuthGrantType,
 };
 use matrix_sdk::authentication::oauth::{ClientRegistrationData, OAuthSession};
+use matrix_sdk::encryption::{BackupDownloadStrategy, EncryptionSettings};
 use matrix_sdk::reqwest::Url;
 use matrix_sdk::ruma::UserId;
 use matrix_sdk::ruma::serde::Raw;
@@ -40,7 +41,7 @@ use matrix_sdk::utils::UrlOrQuery;
 use matrix_sdk::utils::local_server::{
     LocalServerBuilder, LocalServerIpAddress, LocalServerResponse,
 };
-use matrix_sdk::{Client, SessionChange};
+use matrix_sdk::{Client, SessionChange, ThreadingSupport};
 use matrix_sdk_store_encryption::StoreCipher;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
@@ -356,6 +357,22 @@ pub async fn build_client(
     let builder = Client::builder()
         .sqlite_store(paths.store(), Some(passphrase))
         .handle_refresh_tokens()
+        // The answers in threads have lists of their own, and do not count
+        // as messages of the room that are not read. Whether the server
+        // keeps track of the threads that the user follows is not asked.
+        .with_threading_support(ThreadingSupport::Enabled {
+            with_subscriptions: false,
+        })
+        // When a message can not be decrypted, its key is looked for in
+        // the account's backup of room keys, which works once the device
+        // has the key of the backup: after a verification or a recovery.
+        // This program does not make an identity or a backup for an
+        // account that has none: that is for the user to do, knowingly.
+        .with_encryption_settings(EncryptionSettings {
+            auto_enable_cross_signing: false,
+            backup_download_strategy: BackupDownloadStrategy::AfterDecryptionFailure,
+            auto_enable_backups: false,
+        })
         .sliding_sync_version_builder(
             sliding_sync.map_or(VersionBuilder::None, SlidingSync::builder),
         );

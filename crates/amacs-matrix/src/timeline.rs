@@ -30,24 +30,59 @@
 //!
 //! The unique ids are only good while the room is open: a room that is
 //! opened again gets a "reset" with new ids.
+//!
+//! # Threads
+//!
+//! The answers in a thread are not in the list of the room: they are in a
+//! list of the thread, which the SDK has too, and the message that the
+//! thread starts with says in the room how many there are (`thread`). This
+//! is how Element shows threads.
+//!
+//! The editor names a thread by what it gives as `thread` when it opens it,
+//! and this program gives the same back with every "timeline" event of the
+//! thread, and as the `thread_root` of the answers in the thread's list.
+//! What the editor gives is the id of an item, in the room's list or in a
+//! thread's, of the message that the thread starts with; or a `thread_root`
+//! that it was told. This program finds the event behind an item's id in
+//! the lists that are open (the ids of all open lists differ: those of
+//! threads have a prefix). Where an item is an answer in a thread outside
+//! that thread's list, its `thread_root` is the id of the event that the
+//! thread starts with, which begins with `$` and is taken as it is.
+//!
+//! # Pictures
+//!
+//! An item of a picture is told at once, without a picture to show. The
+//! picture is fetched beside the list (`media`), and when it is on disk
+//! the item is told again, as an "update", with `file.thumbnail`.
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use futures_util::StreamExt as _;
 use matrix_sdk::Client;
-use matrix_sdk::ruma::events::room::message::{MessageType, RoomMessageEventContent};
-use matrix_sdk::ruma::{OwnedRoomId, UserId};
+use matrix_sdk::room::edit::EditedContent;
+use matrix_sdk::ruma::api::client::receipt::create_receipt::v3::ReceiptType;
+use matrix_sdk::ruma::events::room::MediaSource;
+use matrix_sdk::ruma::events::room::message::{
+    MessageType, RoomMessageEventContent, RoomMessageEventContentWithoutRelation,
+};
+use matrix_sdk::ruma::{OwnedEventId, OwnedRoomId, OwnedUserId, UserId};
 use matrix_sdk_ui::RoomListService;
 use matrix_sdk_ui::eyeball_im::VectorDiff;
 use matrix_sdk_ui::timeline::{
-    AnyOtherStateEventContentChange, EventSendState, EventTimelineItem, MemberProfileChange,
-    MembershipChange, MsgLikeContent, MsgLikeKind, RoomExt as _, Timeline, TimelineDetails,
-    TimelineItem, TimelineItemContent,
+    AnyOtherStateEventContentChange, AttachmentConfig, EventSendState, EventTimelineItem,
+    MemberProfileChange, MembershipChange, MsgLikeContent, MsgLikeKind, RoomExt as _, Timeline,
+    TimelineDetails, TimelineFocus, TimelineItem, TimelineItemContent,
 };
 use serde_json::{Value, json};
+use tokio::sync::{broadcast, mpsc};
 
 use crate::Task;
-use crate::protocol::{Item, Kind, Op, Output, Reaction, ReplyTo, explain, log};
+use crate::media::{self, Thumbnailer};
+use crate::protocol::{
+    FileInfo, Item, Kind, Op, Output, Reaction, ReplyTo, ThreadInfo, explain, log,
+};
 
 /// A room that shows fewer messages than this when it is opened asks the
 /// server for earlier ones at once. Without that, a room that the store
@@ -92,6 +127,27 @@ impl Mirror {
             ops.push(Op::Prepend(vec![item]));
         } else {
             *reset = true;
+        }
+    }
+
+    /// Gives the items that wait for a picture to show the pictures that
+    /// are on disk now, by `picture`, and says which items changed.
+    pub fn show_pictures(&mut self, picture: impl Fn(&str) -> Option<PathBuf>) -> Vec<Op> {
+        let mut changed = Vec::new();
+        for item in self.slots.iter_mut().flatten() {
+            let Some(file) = &mut item.file else { continue };
+            if file.thumbnail.is_some() {
+                continue;
+            }
+            if let Some(path) = file.thumbnail_key.as_deref().and_then(&picture) {
+                file.thumbnail = Some(path.to_string_lossy().into_owned());
+                changed.push(item.clone());
+            }
+        }
+        if changed.is_empty() {
+            Vec::new()
+        } else {
+            vec![Op::Update(changed)]
         }
     }
 
@@ -374,13 +430,15 @@ fn reply_to(content: &TimelineItemContent) -> Option<ReplyTo> {
             event_id,
             sender: Some(event.sender.to_string()),
             sender_name: display_name(&event.sender_profile),
-            body: Some(content_parts(&event.content, &event.sender).1),
+            body: content_parts(&event.content, &event.sender).1,
         },
+        // The editor shows a line for the answered message all the same,
+        // and gets the rest when the message is fetched.
         _ => ReplyTo {
             event_id,
             sender: None,
             sender_name: None,
-            body: None,
+            body: String::new(),
         },
     })
 }
@@ -392,51 +450,178 @@ fn display_name(profile: &TimelineDetails<matrix_sdk_ui::timeline::Profile>) -> 
     }
 }
 
-/// What the editor is told of an event of the SDK's list. `id` is the
-/// unique id of the item in the list, and `own` is the user of this
-/// program.
-fn event_item(id: &str, event: &EventTimelineItem, own: &UserId) -> Item {
-    let content = event.content();
-    let (kind, body, edited) = content_parts(content, event.sender());
-    let reactions = event
-        .reactions()
-        .iter()
-        .map(|(key, senders)| Reaction {
-            key: key.clone(),
-            count: senders.len() as u64,
-            mine: senders.contains_key(own),
-        })
-        .collect();
-    let send_state = match event.send_state() {
-        Some(EventSendState::NotSentYet { .. }) => Some("sending"),
-        Some(EventSendState::SendingFailed { .. }) => Some("failed"),
-        Some(EventSendState::Sent { .. }) | None => None,
-    };
-    Item {
-        id: id.to_owned(),
-        sender: event.sender().to_string(),
-        sender_name: display_name(event.sender_profile()),
-        time: event.timestamp().as_secs().into(),
-        kind,
-        body,
-        edited,
-        event_id: event.event_id().map(ToString::to_string),
-        send_state,
-        reply_to: reply_to(content),
-        reactions,
-        thread_root: content.thread_root().map(|id| id.to_string()),
+/// The answers that a message has in a thread of its own, if it has some.
+/// The SDK counts them when threads have lists of their own.
+fn thread_info(num_replies: Option<u32>) -> Option<ThreadInfo> {
+    match num_replies {
+        Some(count) if count > 0 => Some(ThreadInfo {
+            count: count.into(),
+        }),
+        _ => None,
     }
 }
 
-/// What the editor is told of an item of the SDK's list: nothing, for the
-/// items that are no events.
-fn item(item: &TimelineItem, own: &UserId) -> Option<Item> {
-    item.as_event()
-        .map(|event| event_item(&item.unique_id().0, event, own))
+/// What an item says of the thread that it is an answer in: in the list of
+/// a thread, the name that the editor has for that thread, so that the
+/// editor finds the buffer that it has; elsewhere the id of the event that
+/// the thread starts with. Either can be given as `thread` in a request.
+fn thread_root(root: Option<String>, thread: Option<&str>) -> Option<String> {
+    let root = root?;
+    Some(thread.map_or(root, ToOwned::to_owned))
 }
 
-/// A room that is open: its list of the SDK, and the task that tells the
-/// editor of changes. The telling stops when this is dropped.
+/// Turns the items of one of the SDK's lists into what the editor is told.
+pub struct Mapper {
+    /// The user of this program.
+    own: OwnedUserId,
+    /// The name that the editor has for the thread, in the list of a
+    /// thread.
+    thread: Option<String>,
+    thumbnailer: Thumbnailer,
+    /// The answers whose answered messages were asked for, and where to
+    /// ask.
+    details: Mutex<HashSet<OwnedEventId>>,
+    fetch_details: mpsc::UnboundedSender<OwnedEventId>,
+}
+
+impl Mapper {
+    /// A mapper, and the events for which it wants the SDK to fetch the
+    /// message that they answer.
+    pub fn new(
+        own: OwnedUserId,
+        thread: Option<String>,
+        thumbnailer: Thumbnailer,
+    ) -> (Self, mpsc::UnboundedReceiver<OwnedEventId>) {
+        let (fetch_details, receiver) = mpsc::unbounded_channel();
+        let mapper = Self {
+            own,
+            thread,
+            thumbnailer,
+            details: Mutex::default(),
+            fetch_details,
+        };
+        (mapper, receiver)
+    }
+
+    /// The file of a message with a file, and the picture to show for it.
+    /// A picture that is not on disk is asked for.
+    pub fn file_info(&self, message: &MessageType) -> Option<FileInfo> {
+        let attachment = media::attachment(message)?;
+        let picture = match message {
+            MessageType::Image(image) => {
+                media::picture_to_show(&image.source, image.info.as_deref())
+            }
+            _ => None,
+        };
+        Some(self.file_with_picture(attachment.name, picture))
+    }
+
+    fn file_with_picture(&self, name: String, picture: Option<MediaSource>) -> FileInfo {
+        let thumbnail_key = picture.as_ref().map(media::media_key);
+        let thumbnail = match (&thumbnail_key, &picture) {
+            (Some(key), Some(source)) => self
+                .thumbnailer
+                .get_or_ask(key, source)
+                .map(|path| path.to_string_lossy().into_owned()),
+            _ => None,
+        };
+        FileInfo {
+            name,
+            thumbnail,
+            thumbnail_key,
+        }
+    }
+
+    fn file(&self, content: &TimelineItemContent) -> Option<FileInfo> {
+        match content {
+            TimelineItemContent::MsgLike(MsgLikeContent { kind, .. }) => match kind {
+                MsgLikeKind::Message(message) => self.file_info(message.msgtype()),
+                MsgLikeKind::Sticker(sticker) => {
+                    let content = sticker.content();
+                    let source = MediaSource::from(content.source.clone());
+                    let picture = media::picture_to_show(&source, Some(&content.info));
+                    Some(self.file_with_picture(content.body.clone(), picture))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Asks for the message that an event answers, once, if it is not
+    /// known. When it comes, the SDK changes the item, which is an
+    /// "update".
+    fn want_details(&self, event: &EventTimelineItem) {
+        let Some(details) = event.content().in_reply_to() else {
+            return;
+        };
+        let Some(event_id) = event.event_id() else {
+            return;
+        };
+        if matches!(details.event, TimelineDetails::Unavailable)
+            && self
+                .details
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(event_id.to_owned())
+        {
+            let _ = self.fetch_details.send(event_id.to_owned());
+        }
+    }
+
+    /// What the editor is told of an event of the SDK's list. `id` is the
+    /// unique id of the item in the list.
+    fn event_item(&self, id: &str, event: &EventTimelineItem) -> Item {
+        let content = event.content();
+        let (kind, body, edited) = content_parts(content, event.sender());
+        let reactions = event
+            .reactions()
+            .iter()
+            .map(|(key, senders)| Reaction {
+                key: key.clone(),
+                count: senders.len() as u64,
+                mine: senders.contains_key(&self.own),
+            })
+            .collect();
+        let send_state = match event.send_state() {
+            Some(EventSendState::NotSentYet { .. }) => Some("sending"),
+            Some(EventSendState::SendingFailed { .. }) => Some("failed"),
+            Some(EventSendState::Sent { .. }) | None => None,
+        };
+        self.want_details(event);
+        Item {
+            id: id.to_owned(),
+            sender: event.sender().to_string(),
+            sender_name: display_name(event.sender_profile()),
+            time: event.timestamp().as_secs().into(),
+            kind,
+            body,
+            edited,
+            own: event.is_own(),
+            reply_to: reply_to(content),
+            reactions,
+            thread: thread_info(content.thread_summary().map(|summary| summary.num_replies)),
+            thread_root: thread_root(
+                content.thread_root().map(|id| id.to_string()),
+                self.thread.as_deref(),
+            ),
+            file: self.file(content),
+            event_id: event.event_id().map(ToString::to_string),
+            send_state,
+        }
+    }
+
+    /// What the editor is told of an item of the SDK's list: nothing, for
+    /// the items that are no events.
+    pub fn item(&self, item: &TimelineItem) -> Option<Item> {
+        item.as_event()
+            .map(|event| self.event_item(&item.unique_id().0, event))
+    }
+}
+
+/// A room, or a thread of one, that is open: its list of the SDK, and the
+/// tasks that tell the editor of changes. The telling stops when this is
+/// dropped.
 pub struct OpenTimeline {
     timeline: Arc<Timeline>,
     _tasks: Vec<Task>,
@@ -448,73 +633,135 @@ impl OpenTimeline {
     }
 }
 
-/// Opens a room: the editor gets a "reset" with the messages that are known
-/// now, and then every change.
+/// What to open: a room, or a thread in it.
+pub struct Target<'a> {
+    pub room: &'a OwnedRoomId,
+    /// The name that the editor has for the thread, and the event that the
+    /// thread starts with.
+    pub thread: Option<(&'a str, OwnedEventId)>,
+    /// What the ids of the items start with, so that no two lists that are
+    /// open have an id in common.
+    pub id_prefix: String,
+}
+
+/// Opens a room or a thread: the editor gets a "reset" with the messages
+/// that are known now, and then every change.
 pub async fn open(
     client: &Client,
     room_list: &RoomListService,
-    room_id: &OwnedRoomId,
+    target: Target<'_>,
+    thumbnailer: &Thumbnailer,
     out: &Output,
 ) -> Result<OpenTimeline, String> {
-    let room = client.get_room(room_id).ok_or("This room is not known.")?;
+    let room = client
+        .get_room(target.room)
+        .ok_or("This room is not known.")?;
     let own = room.own_user_id().to_owned();
+    let label = target.thread.as_ref().map(|(label, _)| (*label).to_owned());
+    let focus = match target.thread {
+        Some((_, root)) => TimelineFocus::Thread { thread_id: root },
+        // The answers in threads are shown in the lists of their threads,
+        // and counted on the messages that the threads start with.
+        None => TimelineFocus::Live {
+            hide_threaded_events: true,
+        },
+    };
     let timeline = room
-        .timeline()
+        .timeline_builder()
+        .with_focus(focus)
+        .with_internal_id_prefix(target.id_prefix)
+        .build()
         .await
-        .map_err(|error| explain("The messages of the room could not be read", error))?;
+        .map_err(|error| explain("The messages could not be read", error))?;
     let timeline = Arc::new(timeline);
 
     // The list of rooms asks the server for little of each room. A room
     // that is open wants all that happens in it.
-    room_list.set_room_subscriptions(&[room_id.as_ref()]).await;
+    room_list
+        .set_room_subscriptions(&[target.room.as_ref()])
+        .await;
 
+    let (mapper, mut wanted_details) = Mapper::new(own, label.clone(), thumbnailer.clone());
+    // Those who listen for pictures do so before the first item asks for
+    // one.
+    let mut pictures = thumbnailer.listen();
     let (items, mut stream) = timeline.subscribe().await;
     let mut mirror = Mirror::default();
     let initial = VectorDiff::Reset {
-        values: items.iter().map(|i| item(i, &own)).collect(),
+        values: items.iter().map(|i| mapper.item(i)).collect(),
     };
-    let name = room_id.to_string();
+    let name = target.room.to_string();
     for op in mirror.apply(vec![initial]) {
-        out.timeline(&name, &op);
+        out.timeline(&name, label.as_deref(), &op);
     }
     let shown = mirror.items().len();
 
     let watch = {
         let out = out.clone();
+        let thumbnailer = thumbnailer.clone();
         Task::spawn(async move {
-            while let Some(diffs) = stream.next().await {
-                let diffs = diffs
-                    .into_iter()
-                    .map(|diff| diff.map(|i| item(&i, &own)))
-                    .collect();
-                for op in mirror.apply(diffs) {
-                    out.timeline(&name, &op);
+            loop {
+                let ops = tokio::select! {
+                    diffs = stream.next() => {
+                        let Some(diffs) = diffs else { break };
+                        let diffs = diffs
+                            .into_iter()
+                            .map(|diff| diff.map(|i| mapper.item(&i)))
+                            .collect();
+                        mirror.apply(diffs)
+                    }
+                    // A picture is on disk, or some are and the word of
+                    // them was missed: the items that wait for one get it.
+                    picture = pictures.recv() => match picture {
+                        Err(broadcast::error::RecvError::Closed) => break,
+                        _ => mirror.show_pictures(|key| thumbnailer.get(key)),
+                    },
+                };
+                for op in ops {
+                    out.timeline(&name, label.as_deref(), &op);
                 }
             }
         })
     };
-    let mut tasks = vec![watch];
 
-    if shown < FILL_BELOW {
+    let details = {
         let timeline = timeline.clone();
-        tasks.push(Task::spawn(async move {
+        Task::spawn(async move {
+            while let Some(event_id) = wanted_details.recv().await {
+                if let Err(error) = timeline.fetch_details_for_event(&event_id).await {
+                    log(format!(
+                        "the message that another answers did not come: {error}"
+                    ));
+                }
+            }
+        })
+    };
+
+    let fill = {
+        let timeline = timeline.clone();
+        Task::spawn(async move {
             // If this fails, as without a connection, the room shows what
             // it has and the user can ask for earlier messages later.
-            if let Err(error) = timeline.paginate_backwards(FILL_COUNT).await {
+            if shown < FILL_BELOW
+                && let Err(error) = timeline.paginate_backwards(FILL_COUNT).await
+            {
                 log(format!(
                     "no earlier messages for a room that was opened: {error}"
                 ));
             }
-        }));
-    }
+            // The names of those who wrote, where the server was not asked
+            // for them yet.
+            timeline.fetch_members().await;
+        })
+    };
     Ok(OpenTimeline {
         timeline,
-        _tasks: tasks,
+        _tasks: vec![watch, details, fill],
     })
 }
 
 /// Closes a room: the server is no longer asked for all that happens in
-/// it. The caller drops the [`OpenTimeline`].
+/// it. The caller drops the [`OpenTimeline`]s of the room.
 pub fn close(room_list: &RoomListService, room_id: &OwnedRoomId) {
     room_list.remove_room_subscriptions(&[room_id.as_ref()]);
 }
@@ -532,10 +779,11 @@ pub async fn paginate_back(timeline: &Timeline, count: Option<u64>) -> Result<Va
     Ok(json!(!reached_start))
 }
 
-/// Sends a message of plain text. In a room that is open it goes through
-/// the room's list, and so is in the list at once; in another room it goes
-/// to the same queue of the SDK directly. Either way the SDK encrypts it if
-/// the room is encrypted, and tries again when the server did not answer.
+/// Sends a message of plain text. In a list that is open it goes through
+/// the list, and so is in the list at once, and in a thread's list it is an
+/// answer in the thread; in a room that is not open it goes to the same
+/// queue of the SDK directly. Either way the SDK encrypts it if the room is
+/// encrypted, and tries again when the server did not answer.
 pub async fn send(
     client: &Client,
     open: Option<Arc<Timeline>>,
@@ -560,6 +808,137 @@ pub async fn send(
         }
     }
     Ok(Value::Null)
+}
+
+/// The event of a list that the editor names by the id of its item.
+pub async fn find(timeline: &Timeline, id: &str) -> Result<EventTimelineItem, String> {
+    timeline
+        .items()
+        .await
+        .iter()
+        .find(|item| item.unique_id().0 == id)
+        .and_then(|item| item.as_event().cloned())
+        .ok_or_else(|| "This message is no longer in the list.".to_owned())
+}
+
+/// The id of the event of an item, which only a message that the server
+/// has, has.
+fn event_id_of(event: &EventTimelineItem) -> Result<OwnedEventId, String> {
+    event
+        .event_id()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| "This message is not sent yet. Try again in a moment.".to_owned())
+}
+
+/// The id of the event of the item with an id, if the list has it.
+pub async fn event_id(timeline: &Timeline, id: &str) -> Option<OwnedEventId> {
+    find(timeline, id)
+        .await
+        .ok()?
+        .event_id()
+        .map(ToOwned::to_owned)
+}
+
+/// Sends an answer to a message.
+pub async fn reply(timeline: &Timeline, id: &str, body: &str) -> Result<Value, String> {
+    let event = find(timeline, id).await?;
+    if !event.can_be_replied_to() {
+        return Err("This message can not be answered.".to_owned());
+    }
+    timeline
+        .send_reply(
+            RoomMessageEventContentWithoutRelation::text_plain(body),
+            event_id_of(&event)?,
+        )
+        .await
+        .map_err(|error| explain("The answer could not be sent", error))?;
+    Ok(Value::Null)
+}
+
+/// Gives a message of the user's own another text.
+pub async fn edit(timeline: &Timeline, id: &str, body: &str) -> Result<Value, String> {
+    let event = find(timeline, id).await?;
+    if !event.is_editable() {
+        return Err("You can change only your own messages of text.".to_owned());
+    }
+    let content =
+        EditedContent::RoomMessage(RoomMessageEventContentWithoutRelation::text_plain(body));
+    timeline
+        .edit(&event.identifier(), content)
+        .await
+        .map_err(|error| explain("The message could not be changed", error))?;
+    Ok(Value::Null)
+}
+
+/// Puts the user's reaction of a key on a message, or takes it off if it
+/// is there.
+pub async fn react(timeline: &Timeline, id: &str, key: &str) -> Result<Value, String> {
+    let event = find(timeline, id).await?;
+    timeline
+        .toggle_reaction(&event.identifier(), key)
+        .await
+        .map_err(|error| explain("The reaction could not be changed", error))?;
+    Ok(Value::Null)
+}
+
+/// Deletes a message for everybody. A message that is still being sent is
+/// not sent.
+pub async fn redact(timeline: &Timeline, id: &str) -> Result<Value, String> {
+    let event = find(timeline, id).await?;
+    timeline
+        .redact(&event.identifier(), None)
+        .await
+        .map_err(|error| explain("The message could not be deleted", error))?;
+    Ok(Value::Null)
+}
+
+/// Tells the server, and so the others in the room, that the user has read
+/// the room to its end.
+pub async fn mark_read(timeline: &Timeline) -> Result<Value, String> {
+    timeline
+        .mark_as_read(ReceiptType::Read)
+        .await
+        .map_err(|error| explain("The room could not be marked as read", error))?;
+    Ok(Value::Null)
+}
+
+/// Sends a file: a picture as a picture, and so on, by the extension of
+/// its name. The SDK encrypts the file if the room is encrypted. This
+/// returns when the server has the file and the message, so the answer to
+/// the request says that the file is sent.
+pub async fn upload(timeline: &Timeline, path: &str) -> Result<Value, String> {
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err("The path of the file must be absolute.".to_owned());
+    }
+    if !path.is_file() {
+        return Err(format!("There is no file {}.", path.display()));
+    }
+    let media_type = media::media_type(&path);
+    timeline
+        .send_attachment(path, media_type, AttachmentConfig::default())
+        .await
+        .map_err(|error| explain("The file could not be sent", error))?;
+    Ok(Value::Null)
+}
+
+/// The file of the message with an id, if it has one.
+pub async fn attachment(timeline: &Timeline, id: &str) -> Result<media::Attachment, String> {
+    let event = find(timeline, id).await?;
+    let no_file = || "This message has no file.".to_owned();
+    match event.content() {
+        TimelineItemContent::MsgLike(MsgLikeContent { kind, .. }) => match kind {
+            MsgLikeKind::Message(message) => {
+                media::attachment(message.msgtype()).ok_or_else(no_file)
+            }
+            MsgLikeKind::Sticker(sticker) => Ok(media::Attachment {
+                source: MediaSource::from(sticker.content().source.clone()),
+                name: sticker.content().body.clone(),
+            }),
+            _ => Err(no_file()),
+        },
+        _ => Err(no_file()),
+    }
 }
 
 #[cfg(test)]
@@ -916,6 +1295,115 @@ mod tests {
             content_parts(&TimelineItemContent::CallInvite, sender),
             (Kind::Other, "started a call".to_owned(), false)
         );
+    }
+
+    #[test]
+    fn a_picture_that_comes_later_is_an_update() {
+        let mut pair = three();
+        let mut picture = an_item("4", "kettle.jpg");
+        picture.file = Some(FileInfo {
+            name: "kettle.jpg".to_owned(),
+            thumbnail: None,
+            thumbnail_key: Some("example.org%2Fabc".to_owned()),
+        });
+        let mut other = an_item("5", "notes.txt");
+        other.file = Some(FileInfo {
+            name: "notes.txt".to_owned(),
+            thumbnail: None,
+            thumbnail_key: None,
+        });
+        pair.apply(vec![
+            VectorDiff::PushBack {
+                value: Some(picture.clone()),
+            },
+            VectorDiff::PushBack { value: Some(other) },
+        ]);
+
+        // Nothing is on disk yet: nothing to say.
+        assert_eq!(pair.mirror.show_pictures(|_| None), Vec::new());
+        let on_disk = |key: &str| (key == "example.org%2Fabc").then(|| PathBuf::from("/c/abc.png"));
+        let ops = pair.mirror.show_pictures(on_disk);
+        picture.file.as_mut().unwrap().thumbnail = Some("/c/abc.png".to_owned());
+        assert_eq!(ops, vec![Op::Update(vec![picture.clone()])]);
+        // The item is told once, and keeps its picture when the SDK sets
+        // it again with one, as the mapper then gives it.
+        assert_eq!(pair.mirror.show_pictures(on_disk), Vec::new());
+        assert_eq!(pair.mirror.items()[3], picture);
+    }
+
+    #[test]
+    fn a_thread_is_counted_on_its_first_message() {
+        assert_eq!(thread_info(None), None);
+        assert_eq!(thread_info(Some(0)), None);
+        assert_eq!(thread_info(Some(2)), Some(ThreadInfo { count: 2 }));
+    }
+
+    #[test]
+    fn an_answer_in_a_thread_names_the_thread_as_the_editor_does() {
+        // In the list of a thread: the name that the editor opened it with.
+        assert_eq!(
+            thread_root(Some("$root".to_owned()), Some("1.4")),
+            Some("1.4".to_owned())
+        );
+        // Elsewhere: the event, which can be given as `thread` too.
+        assert_eq!(
+            thread_root(Some("$root".to_owned()), None),
+            Some("$root".to_owned())
+        );
+        // The message that the thread starts with is no answer in it.
+        assert_eq!(thread_root(None, Some("1.4")), None);
+        assert_eq!(thread_root(None, None), None);
+    }
+
+    #[test]
+    fn a_message_with_a_file_says_so() {
+        use matrix_sdk::ruma::events::room::ImageInfo;
+        use matrix_sdk::ruma::events::room::message::{
+            FileMessageEventContent, ImageMessageEventContent,
+        };
+        use matrix_sdk::ruma::{mxc_uri, uint};
+
+        let (mapper, _details) = Mapper::new(
+            user_id!("@me:example.org").to_owned(),
+            None,
+            Thumbnailer::idle(),
+        );
+        assert_eq!(mapper.file_info(&MessageType::text_plain("hello")), None);
+
+        let file = MessageType::File(FileMessageEventContent::plain(
+            "minutes.pdf".to_owned(),
+            mxc_uri!("mxc://example.org/def").to_owned(),
+        ));
+        assert_eq!(
+            mapper.file_info(&file),
+            Some(FileInfo {
+                name: "minutes.pdf".to_owned(),
+                thumbnail: None,
+                thumbnail_key: None
+            })
+        );
+
+        // A picture of which nothing is known has no picture to show.
+        let mut image = ImageMessageEventContent::plain(
+            "kettle.jpg".to_owned(),
+            mxc_uri!("mxc://example.org/abc").to_owned(),
+        );
+        let bare = mapper
+            .file_info(&MessageType::Image(image.clone()))
+            .unwrap();
+        assert_eq!(
+            (bare.name.as_str(), bare.thumbnail_key),
+            ("kettle.jpg", None)
+        );
+
+        // A small one is asked for, and is not there yet.
+        let mut info = ImageInfo::new();
+        info.mimetype = Some("image/jpeg".to_owned());
+        info.size = Some(uint!(40_000));
+        image.info = Some(Box::new(info));
+        let small = mapper.file_info(&MessageType::Image(image)).unwrap();
+        assert_eq!(small.thumbnail_key.as_deref(), Some("example.org%2Fabc"));
+        assert_eq!(small.thumbnail, None);
     }
 
     #[test]

@@ -121,5 +121,29 @@ A message: `id`, `sender`, `sender_name`, `time`, `kind` (`text`, `notice`,
 (`count`, on the message that a thread starts with), `thread_root`, `file`
 (`name`, and `thumbnail`, a picture on disk to show).
 
+Some finer points of what `amacs-matrix` does:
+
+- The id of a message names it in the list that it came in, a room's or a
+  thread's, while the program runs: it is not the id that the server has for
+  it, which is in `event_id`. A `thread` is the id of a message of the room,
+  as the editor passes it, or an id of the server's that starts with `$`;
+  the program gives the same back in the `timeline` events of the thread and
+  in `thread_root`.
+- The methods about one message, `reply`, `edit`, `react`, `redact` and
+  `download`, take `thread` too, for a message in a thread, and need the
+  room or the thread to be open. So do `mark-read` and `upload`. `send` to a
+  room works without.
+- Earlier messages can come as a `reset` in place of a `prepend`.
+- `verified` is left out of `state` while it is not known, and `state` is
+  sent again when it changes. A `start` that fails says so in a `state` of
+  `error` as well as in its answer.
+- A file is fetched to `$XDG_CACHE_HOME/amacs/matrix/<user>/files/`, and the
+  pictures to show to `thumbnails/` beside it. A message with a picture
+  comes without `thumbnail` first, and an `update` brings it.
+- `notify` follows the rules of the account, without the user's own
+  messages, invitations, and what was written before the program started.
+- A device is verified with emojis, and only by another device of the same
+  account.
+
 `crates/amacs-script/examples/fake-matrix.rs` speaks this to no server, for
 the tests in `crates/amacs-script/tests/matrix.rs`.
