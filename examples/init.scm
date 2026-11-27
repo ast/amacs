@@ -9,7 +9,8 @@
 ;;;
 ;;; It ports the parts of an Emacs configuration that amacs can express so
 ;;; far. Key sequences use Emacs notation. `H-` stands for Hyper, which is
-;;; sent as Ctrl+Meta+Super.
+;;; sent as Ctrl+Meta+Super, and by some keyboards with Shift as well: see
+;;; `hyper-set-key` below.
 
 ;;; Appearance
 
@@ -369,32 +370,44 @@
 
 (global-set-key "C-w" 'kill-region-or-backward-kill-word)
 (global-set-key "C-h" 'delete-backward-char)
-;; With C-h deleting, help is on Hyper-h, and on <f1> as always. The
-;; Hyper key of this keyboard sends Ctrl, Meta, Shift and Super together.
-(help-prefix! "C-M-S-s-h")
+
+;; The Hyper key is a key that holds several modifiers at once, and which
+;; ones depends on the keyboard: Ctrl, Meta and Super, which is what `H-`
+;; stands for, or those and Shift, as the Hyper of QMK sends. A key with
+;; Hyper is bound for both.
+(define (hyper-keys key)
+  "The two key sequences that Hyper with a key can arrive as."
+  (list (string-append "H-" key) (string-append "C-M-S-s-" key)))
+
+(define (hyper-set-key key command)
+  "Binds Hyper with a key to a command in every buffer."
+  (for-each (lambda (keys) (global-set-key keys command)) (hyper-keys key)))
+
+;; With C-h deleting, help is on Hyper-h, and on <f1> as always.
+(for-each help-prefix! (hyper-keys "h"))
 (global-set-key "C-x C-m" 'execute-extended-command)
 
-(global-set-key "H-c" 'switch-to-buffer)
-(global-set-key "H-a" 'backward-paragraph)
-(global-set-key "H-e" 'forward-paragraph)
-(global-set-key "H-v" 'beginning-of-buffer)
-(global-set-key "H-o" 'find-file-other-window)
-(global-set-key "H-y" 'toggle-theme)
-(global-set-key "H-f" 'forward-sexp)
-(global-set-key "H-b" 'backward-sexp)
-(global-set-key "H-u" 'backward-up-list)
-(global-set-key "H-d" 'down-list)
-(global-set-key "H-k" 'kill-sexp)
-(global-set-key "H-j" 'bookmark-jump)
-(global-set-key "H-m" 'bookmark-set)
-(global-set-key "H-!" 'shell-command-on-region)
-(global-set-key "H-r" 'read-only-mode)
-(global-set-key "H-p" 'scroll-down-some)
-(global-set-key "H-n" 'scroll-up-some)
-(global-set-key "H-<left>" 'shrink-window-horizontally)
-(global-set-key "H-<right>" 'enlarge-window-horizontally)
-(global-set-key "H-<down>" 'shrink-window)
-(global-set-key "H-<up>" 'enlarge-window)
+(hyper-set-key "c" 'switch-to-buffer)
+(hyper-set-key "a" 'backward-paragraph)
+(hyper-set-key "e" 'forward-paragraph)
+(hyper-set-key "v" 'beginning-of-buffer)
+(hyper-set-key "o" 'find-file-other-window)
+(hyper-set-key "y" 'toggle-theme)
+(hyper-set-key "f" 'forward-sexp)
+(hyper-set-key "b" 'backward-sexp)
+(hyper-set-key "u" 'backward-up-list)
+(hyper-set-key "d" 'down-list)
+(hyper-set-key "k" 'kill-sexp)
+(hyper-set-key "j" 'bookmark-jump)
+(hyper-set-key "m" 'bookmark-set)
+(hyper-set-key "!" 'shell-command-on-region)
+(hyper-set-key "r" 'read-only-mode)
+(hyper-set-key "p" 'scroll-down-some)
+(hyper-set-key "n" 'scroll-up-some)
+(hyper-set-key "<left>" 'shrink-window-horizontally)
+(hyper-set-key "<right>" 'enlarge-window-horizontally)
+(hyper-set-key "<down>" 'shrink-window)
+(hyper-set-key "<up>" 'enlarge-window)
 
 (global-set-key "C-c -" 'comment-or-uncomment-region)
 (global-set-key "C-c h k" 'describe-key)
