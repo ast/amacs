@@ -83,6 +83,53 @@
 (add-hook! 'scheme-mode-hook (lambda () (enable-mode! 'paredit-mode)))
 (add-hook! 'emacs-lisp-mode-hook (lambda () (enable-mode! 'paredit-mode)))
 
+;;; Org
+;;;
+;;; Files that end in .org are notes under headings. TAB on a heading folds
+;;; what is under it and S-TAB the whole file, C-c C-t gives a heading its
+;;; next state, C-c C-o follows a link and C-c C-c runs a source block.
+
+;; The states of a heading: what is still to do, and what is done.
+(set-option! 'org-todo-keywords
+             '(("TODO" "FEEDBACK" "VERIFY") ("DONE" "DELEGATED")))
+
+;; A file is shown whole when it is visited. 'overview shows its headings
+;; of the highest level and 'content all its headings; a line #+STARTUP:
+;; in a file says it for that file.
+(set-option! 'org-startup-folded #f)
+
+;; Read the text as it is meant: without the marks around emphasis and the
+;; targets of links, but on the line that point is on, and with the text
+;; under a heading moved in as far as the text of the heading. Only what is
+;; shown changes, not the file.
+(add-hook! 'org-mode-hook
+  (lambda ()
+    (enable-mode! 'hide-markup-mode)
+    (enable-mode! 'org-indent-mode)))
+
+;; C-c x writes something down without leaving what you do: it asks for one
+;; of these by its key and puts the entry in its file, under its heading,
+;; with C-c C-c. The files are in the directory of the org-directory
+;; option; they and their headings are made if they are missing. In the
+;; text, %? is where point goes, %U the date and time, %i the text of the
+;; region and %a a link to where the capture started.
+(set-option! 'org-directory "~/org")
+(set-option! 'org-capture-templates
+  '(("t" "Todo" (file+headline "tasks/inbox.org" "Inbox")
+     "* TODO %?\n  %i\n  %a" prepend #t)
+    ("j" "Journal" (file+datetree "journal.org")
+     "* %?\nEntered on %U\n  %i")
+    ("m" "Meeting" (file+headline "tasks/inbox.org" "Meetings")
+     "* MEETING with %? :MEETING:\n  %U\n  - Participants: \n  - Notes: ")
+    ("p" "Project idea" (file+headline "tasks/inbox.org" "Projects")
+     "* %?\n  %i\n  %a")))
+
+;; C-c j starts an entry with the time in the journal, a file for each day.
+(set-option! 'org-journal-dir "~/org/journal")
+
+;; A source block is run only after a question. To run blocks without it:
+;; (set-option! 'org-confirm-run #f)
+
 ;;; Files and other hosts
 ;;;
 ;;; A file on another host is named as tramp names it and needs nothing set
