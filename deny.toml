@@ -9,6 +9,10 @@ ignore = [
     # Unmaintained, no known vulnerability. Used by cosmic-text's font database
     # to read font files. Revisit when cosmic-text is upgraded.
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser, via cosmic-text (fontdb)" },
+    # Unmaintained, no known vulnerability. The Matrix SDK logs in with the
+    # oauth2 crate, which has its times from it. Revisit when the SDK is
+    # upgraded.
+    { id = "RUSTSEC-2026-0543", reason = "chrono, via matrix-sdk (oauth2)" },
 ]
 
 [licenses]
@@ -17,6 +21,13 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
+    # The curves of Matrix's encryption (curve25519-dalek and those around
+    # it, under vodozemac), and AWS-LC, which its TLS is done with.
+    "BSD-3-Clause",
+    # A hash for the Matrix SDK's filters (xxhash-rust).
+    "BSL-1.0",
+    # The certificates of the web's authorities, as data (webpki-root-certs).
+    "CDLA-Permissive-2.0",
     # libloading, through which Vulkan and libwayland are loaded.
     "ISC",
     "MIT",

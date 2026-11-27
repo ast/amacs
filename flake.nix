@@ -3,7 +3,7 @@
 
   # What this repository is built and checked with. A flake that takes
   # this one as an input sets `inputs.nixpkgs.follows`, and then this is not
-  # in its lock; the package needs Rust 1.95 or later of the nixpkgs it is
+  # in its lock; the package needs Rust 1.96 or later of the nixpkgs it is
   # built with.
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 

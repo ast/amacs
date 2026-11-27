@@ -13,6 +13,8 @@
   libxkbcommon,
   wayland,
   vulkan-loader,
+  aws-lc,
+  sqlite,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
@@ -44,9 +46,14 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   # The Wayland client reads keymaps with libxkbcommon, and talks to the
   # compositor through libwayland, as the drivers of GPUs do.
+  # The program for Matrix speaks TLS with AWS-LC and keeps what it knows
+  # in SQLite. nixpkgs has the crates take both from the system and not
+  # build them.
   buildInputs = [
     libxkbcommon
     wayland
+    aws-lc
+    sqlite
   ];
 
   # The tests are a check of the flake, `checks.tests`, built in the dev

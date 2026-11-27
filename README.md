@@ -129,7 +129,7 @@ installing anything, `nix run github:ast/amacs -- FILE` runs the editor.
 
 In the flake of a NixOS configuration, take it as an input that follows
 your nixpkgs, so that it is built with the Rust and the libraries of your
-system and no second nixpkgs comes into the lock. It needs Rust 1.95 or
+system and no second nixpkgs comes into the lock. It needs Rust 1.96 or
 later, which nixos-26.05 has:
 
 ```nix
