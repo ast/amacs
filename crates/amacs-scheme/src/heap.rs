@@ -18,6 +18,10 @@ const FIRST_THRESHOLD: usize = 64 * 1024;
 pub struct Heap {
     slots: Vec<Option<Object>>,
     free: Vec<u32>,
+    /// The slots that hold objects, in no order. The collector goes
+    /// through these and not through all slots, so that what it costs
+    /// goes by the objects there are, not by how many there once were.
+    used: Vec<u32>,
     marks: Vec<bool>,
     /// Objects allocated since the last collection.
     allocated: usize,
@@ -126,17 +130,19 @@ impl Heap {
 
     pub fn alloc(&mut self, object: Object) -> Handle {
         self.allocated += 1;
-        match self.free.pop() {
+        let index = match self.free.pop() {
             Some(index) => {
                 self.slots[index as usize] = Some(object);
-                Handle(index)
+                index
             }
             None => {
                 self.slots.push(Some(object));
                 self.marks.push(false);
-                Handle(self.slots.len() as u32 - 1)
+                self.slots.len() as u32 - 1
             }
-        }
+        };
+        self.used.push(index);
+        Handle(index)
     }
 
     /// The object a handle refers to.
@@ -160,10 +166,10 @@ impl Heap {
         self.allocated >= self.threshold
     }
 
-    /// Number of live objects, as of the last collection plus what has been
-    /// allocated since.
+    /// Number of objects: those alive at the last collection and what has
+    /// been allocated since.
     pub fn len(&self) -> usize {
-        self.slots.len() - self.free.len()
+        self.used.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -184,17 +190,56 @@ impl Heap {
         mark_roots(&mut marker);
         marker.trace();
 
-        let mut live = 0;
-        for index in 0..self.slots.len() {
-            if std::mem::take(&mut self.marks[index]) {
-                live += 1;
-            } else if self.slots[index].take().is_some() {
-                self.free.push(index as u32);
+        let Self {
+            slots,
+            free,
+            used,
+            marks,
+            ..
+        } = self;
+        used.retain(|index| {
+            let live = std::mem::take(&mut marks[*index as usize]);
+            if !live {
+                slots[*index as usize] = None;
+                free.push(*index);
             }
-        }
+            live
+        });
+        let live = used.len();
         self.allocated = 0;
         // Collect again when twice as much as is alive has been allocated,
         // so that the work of collecting stays in proportion.
         self.threshold = (live * 2).max(FIRST_THRESHOLD);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_collection_frees_what_is_not_reached_and_keeps_the_rest() {
+        let mut heap = Heap::new();
+        let kept = heap.alloc(Object::Str("kept".into()));
+        let pair = heap.alloc(Object::Pair(Value::Obj(kept), Value::Nil));
+        for _ in 0..1000 {
+            heap.alloc(Object::Pair(Value::Nil, Value::Nil));
+        }
+        assert_eq!(heap.len(), 1002);
+        heap.collect(|marker| marker.handle(pair));
+        assert_eq!(heap.len(), 2);
+        assert!(matches!(heap.get(kept), Object::Str(text) if text == "kept"));
+
+        // The freed slots are used again, and a second collection finds
+        // the same.
+        let slots = heap.slots.len();
+        for _ in 0..1000 {
+            heap.alloc(Object::Pair(Value::Nil, Value::Nil));
+        }
+        assert_eq!(heap.slots.len(), slots);
+        heap.collect(|marker| marker.handle(pair));
+        assert_eq!(heap.len(), 2);
+        heap.collect(|_| {});
+        assert!(heap.is_empty());
     }
 }

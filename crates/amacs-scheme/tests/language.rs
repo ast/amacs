@@ -770,6 +770,30 @@ fn lists() {
 }
 
 #[test]
+fn lists_that_do_not_end() {
+    assert_eq!(
+        run("(list (length '()) (length '(1 2 3)) (reverse '()) (reverse '(1 2 3)))"),
+        "(0 3 () (3 2 1))"
+    );
+    assert_eq!(
+        run("(list (list? '(1 2)) (list? '(1 . 2)) (list? 5))"),
+        "(#t #f #f)"
+    );
+    assert_eq!(
+        run("(length '(1 2 . 3))"),
+        "error: test.scm:1:1: length: expected a list, got (1 2 . 3)"
+    );
+    assert_eq!(
+        run("(reverse '(1 2 . 3))"),
+        "error: test.scm:1:1: reverse: expected a list, got (1 2 . 3)"
+    );
+    let circle = "(define circle (list 1 2 3)) (set-cdr! (cddr circle) circle)";
+    assert_eq!(run(&format!("{circle} (list? circle)")), "#f");
+    assert!(run(&format!("{circle} (length circle)")).contains("length: expected a list"));
+    assert!(run(&format!("{circle} (reverse circle)")).contains("reverse: expected a list"));
+}
+
+#[test]
 fn strings_and_chars() {
     assert_eq!(
         run(

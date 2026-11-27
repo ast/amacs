@@ -115,7 +115,13 @@ removed, on the machine this was written on:
 on the interpreter as it is now, and `--example micro` single features of
 the machine.
 
-A loop costs no calls: where a named `let`, a `do` or a definition inside a
-body calls itself last, the compiled code gives the parameters their new
-values and jumps to the start. The same holds for any procedure that calls
-itself last, which the machine sees when the call is made.
+A loop costs no calls. A named `let` or a `do` whose name is only called as
+the last thing its body does is part of the procedure around it: its
+variables are that procedure's, and going round is a jump. Any other
+procedure that calls itself last starts over in the call it is in. The
+common built-in procedures, such as `+`, `car` and `null?`, are instructions
+of their own for as long as their names mean what they did at first; a name
+that is given another meaning has it at once, also in code compiled before.
+
+The collector's work goes by the number of objects there are, not by how
+many there were at most.

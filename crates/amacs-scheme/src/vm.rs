@@ -356,6 +356,21 @@ impl Core {
         }
     }
 
+    /// The number of elements of a list, or `None` if it does not end in
+    /// the empty list (which includes going round in a circle).
+    pub fn list_length(&self, mut list: Value) -> Option<usize> {
+        let most = self.heap.len();
+        let mut count = 0;
+        while list != Value::Nil {
+            list = self.as_pair(list)?.1;
+            count += 1;
+            if count > most {
+                return None;
+            }
+        }
+        Some(count)
+    }
+
     /// The elements of a list, or `None` if it does not end in the empty
     /// list (which includes going round in a circle).
     pub fn list_to_vec(&self, mut list: Value) -> Option<Vec<Value>> {

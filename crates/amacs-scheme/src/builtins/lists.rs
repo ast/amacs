@@ -179,7 +179,7 @@ pub(super) fn install(core: &mut Core) {
         1,
         Some(1),
         "(list? x) Whether x is a list that ends.",
-        |core, args| Ok(Value::Bool(core.list_to_vec(args[0]).is_some())),
+        |core, args| Ok(Value::Bool(core.list_length(args[0]).is_some())),
     );
     core.define_native(
         "list",
@@ -214,7 +214,10 @@ pub(super) fn install(core: &mut Core) {
         1,
         Some(1),
         "(length list) The number of items.",
-        |core, args| Ok(Value::from(list(core, "length", args[0])?.len())),
+        |core, args| match core.list_length(args[0]) {
+            Some(count) => Ok(Value::from(count)),
+            None => Err(wrong(core, "length", "a list", args[0])),
+        },
     );
     core.define_native(
         "append",
@@ -238,9 +241,18 @@ pub(super) fn install(core: &mut Core) {
         Some(1),
         "(reverse list) A list of the items in the opposite order.",
         |core, args| {
-            let mut items = list(core, "reverse", args[0])?;
-            items.reverse();
-            Ok(core.list(&items))
+            // Straight from one list to the other, once it is known that
+            // the list ends.
+            if core.list_length(args[0]).is_none() {
+                return Err(wrong(core, "reverse", "a list", args[0]));
+            }
+            let mut reversed = Value::Nil;
+            let mut rest = args[0];
+            while let Some((car, cdr)) = core.as_pair(rest) {
+                reversed = core.cons(car, reversed);
+                rest = cdr;
+            }
+            Ok(reversed)
         },
     );
     core.define_native(
