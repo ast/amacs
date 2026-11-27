@@ -156,6 +156,71 @@ fn a_loop_that_calls_itself_starts_afresh() {
 }
 
 #[test]
+fn loops_inside_expressions_and_each_other() {
+    // A loop whose value something still waits for.
+    assert_eq!(
+        run("(define (f n) (+ 1000 (let loop ((i 0) (sum 0)) (if (= i n) sum (loop (+ i 1) (+ sum i))))))
+             (list (f 4) (list 'a (do ((i 0 (+ i 1))) ((= i 3) i)) 'b))"),
+        "(1006 (a 3 b))"
+    );
+    // One inside the other, the inner one using and leaving for the outer.
+    assert_eq!(
+        run("(define (pairs n)
+               (let outer ((i 0) (found '()))
+                 (if (= i n)
+                     (reverse found)
+                     (let inner ((j 0) (found found))
+                       (cond ((= j n) (outer (+ i 1) found))
+                             ((< i j) (inner (+ j 1) (cons (cons i j) found)))
+                             (else (inner (+ j 1) found)))))))
+             (pairs 3)"),
+        "((0 . 1) (0 . 2) (1 . 2))"
+    );
+    assert_eq!(
+        run("(define (table n)
+               (do ((i 0 (+ i 1)) (rows '() (cons (do ((j 0 (+ j 1)) (row '() (cons (* i j) row)))
+                                                      ((= j n) (reverse row)))
+                                                  rows)))
+                   ((= i n) (reverse rows))))
+             (table 3)"),
+        "((0 0 0) (0 1 2) (0 2 4))"
+    );
+    // The name used in other ways makes an ordinary procedure of the loop.
+    assert_eq!(
+        run("(let loop ((i 0)) (if (= i 3) '() (cons i (loop (+ i 1)))))"),
+        "(0 1 2)"
+    );
+    assert_eq!(
+        run("(let loop ((x '(1 (2 3) 4))) (if (pair? x) (apply + (map loop x)) x))"),
+        "10"
+    );
+    assert_eq!(
+        run("(let loop ((i 0)) (if (procedure? loop) (if (< i 2) (loop (+ i 1)) i) 'no))"),
+        "2"
+    );
+    // The variables around a loop, assigned to in it and after it.
+    assert_eq!(
+        run("(define (f)
+               (let ((count 0) (made '()))
+                 (let loop ((i 0))
+                   (when (< i 3)
+                     (set! count (+ count i))
+                     (set! made (cons (lambda () (* i count)) made))
+                     (loop (+ i 1))))
+                 (set! count 10)
+                 (map (lambda (g) (g)) made)))
+             (f)"),
+        "(20 10 0)"
+    );
+    // An error in a loop says where.
+    let report = run(
+        "(define (f items)\n  (let loop ((rest items))\n    (if (null? rest) 'done (loop (cdr (car rest))))))\n(f '(1))",
+    );
+    assert!(report.starts_with("error: test.scm:3:"), "{report}");
+    assert!(report.ends_with("cdr: expected a pair, got 1"), "{report}");
+}
+
+#[test]
 fn built_in_procedures_with_instructions_of_their_own() {
     // The tests that are part of a conditional.
     assert_eq!(

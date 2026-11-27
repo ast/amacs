@@ -23,6 +23,14 @@ const PROGRAMS: &[(&str, &str)] = &[
         "(do ((i 0 (+ i 1)) (sum 0 (+ sum i))) ((= i 3000000) sum))",
     ),
     (
+        "a loop of 3 turns, entered 1M times",
+        "(define (sum-to n) (let loop ((i 0) (sum 0)) (if (= i n) sum (loop (+ i 1) (+ sum i))))) (let enter ((k 0) (total 0)) (if (= k 1000000) total (enter (+ k 1) (+ total (sum-to 3)))))",
+    ),
+    (
+        "a loop over a list of 3 that uses the variables around it, 1M times",
+        "(define (count-in items low high) (let loop ((rest items) (n 0)) (cond ((null? rest) n) ((and (>= (car rest) low) (< (car rest) high)) (loop (cdr rest) (+ n 1))) (else (loop (cdr rest) n))))) (define three '(1 5 9)) (do ((k 0 (+ k 1)) (total 0 (+ total (count-in three 2 8)))) ((= k 1000000) total))",
+    ),
+    (
         "a procedure of the top level that calls itself last, 3M times",
         "(define (count i sum) (if (= i 3000000) sum (count (+ i 1) (+ sum i)))) (count 0 0)",
     ),

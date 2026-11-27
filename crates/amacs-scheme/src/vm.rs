@@ -1510,6 +1510,24 @@ impl Vm {
                             self.attend()?;
                         }
                     }
+                    Op::Loop {
+                        target,
+                        first,
+                        count,
+                    } => {
+                        let stack = &mut self.fiber.stack;
+                        let values = stack.len() - usize::from(count);
+                        stack.copy_within(values.., base + usize::from(first));
+                        stack.truncate(values);
+                        pc = target as usize;
+                        if !self.calm() {
+                            self.save_pc(pc);
+                            self.attend()?;
+                        }
+                    }
+                    Op::ClearLocal(slot) => {
+                        self.fiber.stack[base + usize::from(slot)] = Value::Unbound;
+                    }
                     Op::Return => {
                         if let [.., _, frame] = &self.fiber.frames[..]
                             && matches!(frame.cleanup, Cleanup::None)

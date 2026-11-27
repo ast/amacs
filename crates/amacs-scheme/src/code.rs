@@ -54,6 +54,17 @@ pub enum Op {
     /// For a loop, where the compiler can tell that the call is of the
     /// procedure itself.
     TailSelf,
+    /// Go round a loop that is part of the running procedure: the `count`
+    /// values on top of the stack go to the local variables from `first`
+    /// on, and the code goes on at `target`.
+    Loop {
+        target: u32,
+        first: u16,
+        count: u8,
+    },
+    /// Take a local variable's value away, for a variable that comes into
+    /// being anew in each turn of a loop.
+    ClearLocal(u16),
     Return,
     /// Make a closure of one of the code's inner pieces of code.
     Closure(u32),

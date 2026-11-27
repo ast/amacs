@@ -16,9 +16,10 @@ use crate::vm::Core;
 #[derive(Debug)]
 pub struct Var {
     pub name: Symbol,
-    /// The function whose frame holds the variable.
-    pub func: u32,
-    pub slot: u16,
+    /// The function whose frame holds the variable. It changes when a
+    /// loop becomes part of the function around it.
+    pub func: Cell<u32>,
+    pub slot: Cell<u16>,
     /// Whether an inner function refers to it.
     pub captured: Cell<bool>,
     /// Whether `set!` assigns to it.
@@ -201,6 +202,8 @@ pub struct Lambda {
     /// assigns to the variable, a call of it from the function's own body
     /// is a call of the function itself.
     pub self_var: Option<Rc<Var>>,
+    /// Every local variable of the function, the parameters first.
+    pub vars: Vec<Rc<Var>>,
 }
 
 #[derive(Debug)]
@@ -226,12 +229,23 @@ pub enum Expr {
     Let(Vec<(Rc<Var>, Expr)>, Box<Expr>),
     /// Brings recursive variables into being, without values yet.
     Letrec(Vec<Rc<Var>>, Box<Expr>),
+    /// A named `let` or a `do` that needs no function of its own: its
+    /// variables are variables of the function around it, and a call of
+    /// its name, which is `var`, gives them new values and goes back to
+    /// the start of the body.
+    Loop {
+        var: Rc<Var>,
+        params: Vec<Rc<Var>>,
+        inits: Vec<Expr>,
+        body: Box<Expr>,
+    },
 }
 
 struct FuncCtx {
     id: u32,
     captures: Vec<Rc<Var>>,
     next_slot: u16,
+    vars: Vec<Rc<Var>>,
 }
 
 pub struct Compiler<'a> {
@@ -259,6 +273,47 @@ fn init_local(var: Rc<Var>, mut value: Expr) -> Expr {
         lambda.self_var = Some(var.clone());
     }
     Expr::InitLocal(var, Box::new(value))
+}
+
+/// Whether every use of `var` in an expression is a call of it with
+/// `count` arguments that is the last thing the expression does, given
+/// that the expression is (`last`) or is not the last thing itself. Then
+/// nothing is left to do after such a call, and nothing but the call can
+/// get at the variable.
+fn ends_with_every_call(expr: &Expr, var: &Rc<Var>, count: usize, last: bool) -> bool {
+    crate::deep(|| {
+        let inner = |expr: &Expr| ends_with_every_call(expr, var, count, false);
+        let outer = |expr: &Expr| ends_with_every_call(expr, var, count, last);
+        let sequence = |exprs: &[Expr]| match exprs.split_last() {
+            Some((end, before)) => before.iter().all(inner) && outer(end),
+            None => true,
+        };
+        match expr {
+            Expr::Const(_) | Expr::Global(..) => true,
+            Expr::Local(used) | Expr::LocalAt(used, _) => !Rc::ptr_eq(used, var),
+            Expr::SetLocal(target, value) | Expr::InitLocal(target, value) => {
+                !Rc::ptr_eq(target, var) && inner(value)
+            }
+            Expr::SetGlobal(_, value, _) | Expr::DefineGlobal(_, value) => inner(value),
+            Expr::If(test, then, otherwise) => inner(test) && outer(then) && outer(otherwise),
+            Expr::Begin(exprs) | Expr::And(exprs) | Expr::Or(exprs) => sequence(exprs),
+            Expr::Lambda(lambda) => !lambda.captures.iter().any(|seen| Rc::ptr_eq(seen, var)),
+            Expr::Call(callee, args, _) => {
+                let itself = matches!(&**callee, Expr::Local(used) | Expr::LocalAt(used, _)
+                    if Rc::ptr_eq(used, var));
+                if itself {
+                    last && args.len() == count && args.iter().all(inner)
+                } else {
+                    inner(callee) && args.iter().all(inner)
+                }
+            }
+            Expr::Let(bindings, body) => {
+                bindings.iter().all(|(_, value)| inner(value)) && outer(body)
+            }
+            Expr::Letrec(_, body) => outer(body),
+            Expr::Loop { inits, body, .. } => inits.iter().all(inner) && outer(body),
+        }
+    })
 }
 
 fn error(message: &str, at: &Syntax) -> Error {
@@ -317,6 +372,7 @@ impl<'a> Compiler<'a> {
             id,
             captures: Vec::new(),
             next_slot: 0,
+            vars: Vec::new(),
         });
     }
 
@@ -327,13 +383,14 @@ impl<'a> Compiler<'a> {
         }
         let var = Rc::new(Var {
             name,
-            func: func.id,
-            slot: func.next_slot,
+            func: Cell::new(func.id),
+            slot: Cell::new(func.next_slot),
             captured: Cell::new(false),
             mutated: Cell::new(false),
             recursive,
         });
         func.next_slot += 1;
+        func.vars.push(var.clone());
         Ok(var)
     }
 
@@ -341,12 +398,12 @@ impl<'a> Compiler<'a> {
     /// every function in between captures it.
     fn refer(&mut self, var: &Rc<Var>) {
         let current = self.funcs.last().expect("inside a function").id;
-        if var.func == current {
+        if var.func.get() == current {
             return;
         }
         var.captured.set(true);
         for func in self.funcs.iter_mut().rev() {
-            if func.id == var.func {
+            if func.id == var.func.get() {
                 break;
             }
             if !func.captures.iter().any(|seen| Rc::ptr_eq(seen, var)) {
@@ -375,6 +432,7 @@ impl<'a> Compiler<'a> {
             locals: func.next_slot,
             toplevel: true,
             self_var: None,
+            vars: func.vars,
         })
     }
 
@@ -1000,6 +1058,7 @@ impl<'a> Compiler<'a> {
             locals: func.next_slot,
             toplevel: false,
             self_var: None,
+            vars: func.vars,
         })))
     }
 
@@ -1134,11 +1193,7 @@ impl<'a> Compiler<'a> {
                 let lambda =
                     self.lambda(&params, None, body, &inner, Some(name.name), form.span)?;
                 self.refer(&var);
-                let call = Expr::Call(Box::new(Expr::Local(var.clone())), values, form.span);
-                Ok(Expr::Letrec(
-                    vec![var.clone()],
-                    Box::new(Expr::Begin(vec![init_local(var, lambda), call])),
-                ))
+                Ok(self.make_loop(var, lambda, values, form.span))
             }
             [_, bindings, body @ ..] => {
                 let bindings = self.parse_bindings(bindings)?;
@@ -1359,11 +1414,45 @@ impl<'a> Compiler<'a> {
                     Box::new(Expr::Begin(round)),
                 ))
             })?;
-        let call = Expr::Call(Box::new(Expr::Local(loop_var.clone())), inits, span);
-        Ok(Expr::Letrec(
-            vec![loop_var.clone()],
-            Box::new(Expr::Begin(vec![init_local(loop_var, lambda), call])),
-        ))
+        Ok(self.make_loop(loop_var, lambda, inits, span))
+    }
+
+    /// A loop: `var` is the name that the body, a function, calls to go
+    /// round again, and `inits` are the values of the first turn. Where
+    /// every use of the name is a call that the body ends with, the loop
+    /// needs no function: its variables join those of the function around
+    /// it, and going round is a jump.
+    fn make_loop(&mut self, var: Rc<Var>, lambda: Expr, inits: Vec<Expr>, span: Span) -> Expr {
+        let func = self.funcs.last_mut().expect("inside a function");
+        let lambda = match lambda {
+            Expr::Lambda(lambda)
+                if !lambda.rest
+                    && lambda.required == inits.len()
+                    && inits.len() <= usize::from(u8::MAX)
+                    && !var.mutated.get()
+                    && usize::from(func.next_slot) + lambda.vars.len() < usize::from(u16::MAX)
+                    && ends_with_every_call(&lambda.body, &var, inits.len(), true) =>
+            {
+                for moved in &lambda.vars {
+                    moved.func.set(func.id);
+                    moved.slot.set(func.next_slot);
+                    func.next_slot += 1;
+                }
+                func.vars.extend(lambda.vars);
+                return Expr::Loop {
+                    var,
+                    params: lambda.params,
+                    inits,
+                    body: Box::new(lambda.body),
+                };
+            }
+            other => other,
+        };
+        let call = Expr::Call(Box::new(Expr::Local(var.clone())), inits, span);
+        Expr::Letrec(
+            vec![var.clone()],
+            Box::new(Expr::Begin(vec![init_local(var, lambda), call])),
+        )
     }
 
     /// `(guard (e clause ...) body ...)`: run the body, and if it raises

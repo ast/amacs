@@ -21,6 +21,10 @@ struct Gen<'a> {
     constants: Vec<Value>,
     protos: Vec<Rc<Proto>>,
     spans: Vec<(u32, Span)>,
+    /// The loops that the code being compiled is inside of, innermost
+    /// last: the variable that names the loop, and the instruction that
+    /// goes round it.
+    loops: Vec<(Rc<Var>, Op)>,
 }
 
 /// Compiles a function, and the functions inside it.
@@ -36,12 +40,13 @@ fn generate_here(lambda: &Lambda, intrinsics: &Intrinsics) -> Result<Rc<Proto>, 
         constants: Vec::new(),
         protos: Vec::new(),
         spans: Vec::new(),
+        loops: Vec::new(),
     };
     // A parameter that closures share and someone assigns to moves to a
     // cell before anything else.
     for param in &lambda.params {
         if param.in_cell() {
-            generator.code.push(Op::MakeCell(param.slot));
+            generator.code.push(Op::MakeCell(param.slot.get()));
         }
     }
     if lambda.toplevel {
@@ -54,7 +59,7 @@ fn generate_here(lambda: &Lambda, intrinsics: &Intrinsics) -> Result<Rc<Proto>, 
     let captures = lambda
         .captures
         .iter()
-        .map(|var| var.slot)
+        .map(|var| var.slot.get())
         .map(Capture::Local)
         .collect();
     Ok(Rc::new(Proto {
@@ -146,7 +151,7 @@ impl Gen<'_> {
     }
 
     fn is_local(&self, var: &Var) -> bool {
-        var.func == self.lambda.func
+        var.func.get() == self.lambda.func
     }
 
     /// Whether a call of `callee` with that many arguments is a call of
@@ -165,9 +170,9 @@ impl Gen<'_> {
 
     fn load(&mut self, var: &Rc<Var>) {
         let op = match (self.is_local(var), var.in_cell()) {
-            (true, true) => Op::LocalCell(var.slot),
-            (true, false) if var.recursive => Op::LocalChecked(var.slot),
-            (true, false) => Op::Local(var.slot),
+            (true, true) => Op::LocalCell(var.slot.get()),
+            (true, false) if var.recursive => Op::LocalChecked(var.slot.get()),
+            (true, false) => Op::Local(var.slot.get()),
             (false, true) => Op::CapturedCell(self.captured(var)),
             (false, false) => Op::Captured(self.captured(var)),
         };
@@ -176,8 +181,8 @@ impl Gen<'_> {
 
     fn store(&mut self, var: &Rc<Var>) {
         let op = match (self.is_local(var), var.in_cell()) {
-            (true, true) => Op::SetLocalCell(var.slot),
-            (true, false) => Op::SetLocal(var.slot),
+            (true, true) => Op::SetLocalCell(var.slot.get()),
+            (true, false) => Op::SetLocal(var.slot.get()),
             // A variable that is assigned to from an inner function is
             // always in a cell.
             (false, _) => Op::SetCapturedCell(self.captured(var)),
@@ -217,6 +222,14 @@ impl Gen<'_> {
                 self.expr(value, false)?;
                 self.emit(Op::DefineGlobal(*slot));
                 self.emit(Op::Void);
+            }
+            // A test that is known beforehand, as macros make them.
+            Expr::If(test, then, otherwise) if matches!(**test, Expr::Const(_)) => {
+                let chosen = match **test {
+                    Expr::Const(Value::Bool(false)) => otherwise,
+                    _ => then,
+                };
+                return self.expr(chosen, tail);
             }
             Expr::If(test, then, otherwise) => {
                 let to_else = self.test(test)?;
@@ -273,7 +286,7 @@ impl Gen<'_> {
                     .iter()
                     .map(|var| {
                         if self.is_local(var) {
-                            Capture::Local(var.slot)
+                            Capture::Local(var.slot.get())
                         } else {
                             Capture::Captured(self.captured(var))
                         }
@@ -310,6 +323,22 @@ impl Gen<'_> {
                 self.note(*span);
                 self.emit(fused.unwrap_or(kind.op()));
             }
+            Expr::Call(callee, args, span)
+                if let Expr::Local(var) | Expr::LocalAt(var, _) = &**callee
+                    && let Some((_, round)) = self
+                        .loops
+                        .iter()
+                        .rev()
+                        .find(|(name, _)| Rc::ptr_eq(name, var)) =>
+            {
+                let round = *round;
+                for arg in args {
+                    self.expr(arg, false)?;
+                }
+                self.note(*span);
+                self.emit(round);
+                return Ok(());
+            }
             Expr::Call(callee, args, span) if tail && self.calls_itself(callee, args.len()) => {
                 for arg in args {
                     self.expr(arg, false)?;
@@ -336,17 +365,53 @@ impl Gen<'_> {
             Expr::Let(bindings, body) => {
                 for (var, value) in bindings {
                     self.expr(value, false)?;
-                    self.emit(Op::SetLocal(var.slot));
+                    self.emit(Op::SetLocal(var.slot.get()));
                     if var.in_cell() {
-                        self.emit(Op::MakeCell(var.slot));
+                        self.emit(Op::MakeCell(var.slot.get()));
                     }
                 }
                 return self.expr(body, tail);
             }
+            Expr::Loop {
+                var,
+                params,
+                inits,
+                body,
+            } => {
+                for init in inits {
+                    self.expr(init, false)?;
+                }
+                for param in params.iter().rev() {
+                    self.emit(Op::SetLocal(param.slot.get()));
+                }
+                let round = Op::Loop {
+                    target: self.code.len() as u32,
+                    first: params.first().map_or(0, |param| param.slot.get()),
+                    count: params.len() as u8,
+                };
+                // Each turn has cells of its own, for the closures made
+                // in it.
+                for param in params {
+                    if param.in_cell() {
+                        self.emit(Op::MakeCell(param.slot.get()));
+                    }
+                }
+                self.loops.push((var.clone(), round));
+                let done = self.expr(body, tail);
+                self.loops.pop();
+                return done;
+            }
             Expr::Letrec(vars, body) => {
+                // In a loop the variables may have values of the turn
+                // before, which are not theirs.
+                if !self.loops.is_empty() {
+                    for var in vars {
+                        self.emit(Op::ClearLocal(var.slot.get()));
+                    }
+                }
                 for var in vars {
                     if var.in_cell() {
-                        self.emit(Op::MakeCell(var.slot));
+                        self.emit(Op::MakeCell(var.slot.get()));
                     }
                 }
                 return self.expr(body, tail);
