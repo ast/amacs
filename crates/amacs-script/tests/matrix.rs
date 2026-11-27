@@ -352,3 +352,53 @@ fn what_comes_while_a_message_is_typed_does_not_touch_it() {
     h.type_text(" and whole").keys("RET");
     h.wait_until(|h| h.screen.text().contains("Me: half and whole"));
 }
+
+#[test]
+fn the_passphrase_is_the_secret_of_the_address_or_is_asked_for() {
+    let mut h = Harness::new(70, 16);
+    let program = amacs_testkit::example_path("fake-matrix");
+    // A source of secrets that has one for the host of the option, and
+    // remembers what it was asked.
+    h.eval(&format!(
+        "(begin (set-option! 'matrix-user-id \"@me:example.org\")
+                (set-option! 'matrix-program '({:?}))
+                (define asked #f)
+                (define-secret-source 'test
+                  (lambda (host user port)
+                    (set! asked (list host user))
+                    (if (equal? host \"amacs-matrix\")
+                        (list (list \"entry\" host user (lambda () \"from the store\")))
+                        '())))
+                (set-option! 'secret-sources '(test)))",
+        program.display().to_string()
+    ));
+    start(&mut h);
+    assert_eq!(h.eval("asked"), "(\"amacs-matrix\" \"@me:example.org\")");
+    assert_eq!(h.prompt(), "");
+    // The password store has such a secret under either of these names.
+    for entry in [
+        "amacs-matrix/@me:example.org",
+        "amacs-matrix",
+        "chat/amacs-matrix",
+    ] {
+        let found = h.eval(&format!(
+            "(and (%pass-match {entry:?} \"amacs-matrix\" \"@me:example.org\" #f) #t)"
+        ));
+        assert_eq!(found, "#t", "{entry}");
+    }
+    assert_eq!(
+        h.eval("(%pass-match \"amacs-matrix/@other:example.org\" \"amacs-matrix\" \"@me:example.org\" #f)"),
+        "#f"
+    );
+
+    // Without a secret, the passphrase is typed, and is not shown.
+    h.keys("M-x").type_text("matrix-quit").keys("RET");
+    h.wait_until(|h| h.screen.text().contains("The Matrix program stopped"));
+    h.eval("(set-option! 'matrix-store-secret \"elsewhere\")");
+    h.keys("g");
+    assert_eq!(h.prompt(), "Passphrase of the Matrix store:");
+    h.type_text("typed");
+    assert!(!h.screen.text().contains("typed"));
+    h.keys("RET");
+    h.wait_until(|h| !h.screen.text().contains("stopped") && h.screen.text().contains("Tea"));
+}

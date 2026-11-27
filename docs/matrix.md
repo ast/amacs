@@ -10,24 +10,76 @@ Calls are not part of it.
 
 ## Setting up
 
+**The program.** `amacs-matrix` is built with the editor, from
+`crates/amacs-matrix`, and the Nix package installs it beside `amacs`. The
+editor runs what the option `matrix-program` names, `amacs-matrix` on the
+`PATH` unless changed. In a checkout, `just build` builds it and the
+development shell has `target/debug` on its `PATH`. It needs the
+certificates of the web's authorities that the system has, as a browser
+does.
+
+**Who you are.** In the init file:
+
 ```scheme
 (set-option! 'matrix-user-id "@name:example.org")
 ```
 
-The program keeps its keys of encryption and your session under
-`$XDG_STATE_HOME/amacs/matrix/`, locked with a passphrase. It takes the
-passphrase from the secret that the option `matrix-store-secret` names,
-`amacs/matrix` unless changed: with the password store, `pass generate
-amacs/matrix` makes one. Without such a secret, `M-x matrix` asks each time.
+The server is found from the address. If yours is somewhere else, name it
+with `matrix-homeserver`, as `"https://matrix.example.org"`. It has to let
+you log in through its own page, with OAuth, which matrix.org does.
 
-The first time, `M-x matrix-login` opens the page of your server in the
-browser. When you have logged in there, the rooms come. The device is new
-to your account, so it cannot read the earlier messages of encrypted rooms
-before it is verified, and the list of rooms says so:
+**A passphrase.** The program keeps its keys of encryption and your session
+on disk, locked with a passphrase that the editor gives it. The editor
+takes it from a secret, asked for as the host `amacs-matrix` with your
+address as the user. With the password store that is one of:
 
-- `M-x matrix-verify` asks another of your devices, such as Element, to
-  verify this one. Accept there, and say whether both show the same emojis.
-- `M-x matrix-recover` takes the recovery key of the account instead.
+```
+pass generate amacs-matrix/@name:example.org
+pass generate amacs-matrix
+```
+
+The option `matrix-store-secret` is that host, if another name suits your
+store. Without such a secret, `M-x matrix` asks for the passphrase each
+time it starts the program. Keep to one passphrase: with another, the
+program cannot open what it wrote.
+
+**The first time.**
+
+1. `M-x matrix` starts the program and shows the list of rooms, which says
+   that you are not logged in.
+2. `M-x matrix-login` opens the page of your server in the browser. Log in
+   there and allow the device. The rooms come when you have.
+3. The device is new to your account, so it cannot read the earlier
+   messages of encrypted rooms yet, and the list of rooms says that it is
+   not verified. Do one of:
+   - `M-x matrix-verify`, which asks another of your devices, such as
+     Element. Accept there, and say in the editor whether both show the
+     same emojis.
+   - `M-x matrix-recover`, which takes the recovery key of the account.
+
+From then on `M-x matrix` is all it takes: the session is kept.
+
+**The editor that you use every day**, if it is one that is pinned, has
+Matrix once its pin is at a commit that has it. The option goes in its own
+init file, not in `examples/init.scm`, which is the development server's.
+
+## When something is wrong
+
+- What the program has to say is in `*Messages*`, each line after
+  `matrix:`. The first line of the list of rooms says what state it is in.
+- `g` in the list of rooms starts the program again if it stopped, and
+  `M-x matrix-quit` stops it.
+- What it keeps is under `$XDG_STATE_HOME/amacs/matrix/`, in a directory
+  named after your address: `store/`, the SDK's, and `session`, both
+  encrypted. `~/.local/state` is where that is unless set. Files and
+  pictures that it fetched are under `$XDG_CACHE_HOME/amacs/matrix/` and
+  can be deleted at any time.
+- To start over, stop the program, move the directory of your address
+  away, and log in again. The device is then a new one and needs to be
+  verified again; the old one can be removed from the account in Element.
+- A server that ends the session, as when the device is removed from the
+  account, puts the program back to "not logged in". It moves the old
+  store aside and deletes nothing.
 
 ## Keys
 

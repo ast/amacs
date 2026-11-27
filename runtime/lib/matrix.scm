@@ -25,11 +25,13 @@ is to find it from the server name of matrix-user-id.")
 (define-option 'matrix-program '("amacs-matrix")
   "The program that speaks Matrix for the editor, and its arguments.")
 
-(define-option 'matrix-store-secret "amacs/matrix"
-  "The name of the secret that locks what the Matrix program keeps on disk:
-its keys of encryption and your session. secret-get finds it by this name
-as the host, so with the password store it is the entry of that name. If
-there is no such secret, M-x matrix asks for a passphrase each time.")
+(define-option 'matrix-store-secret "amacs-matrix"
+  "The host that the secret is kept under which locks what the Matrix
+program has on disk: its keys of encryption and your session. secret-get is
+asked for this host and your Matrix address as the user, so with the
+password store the entry is amacs-matrix/@name:example.org, or amacs-matrix
+alone. If there is no such secret, M-x matrix asks for a passphrase each
+time.")
 
 (define-option 'matrix-notify #t
   "Whether a message that your Matrix account's rules say to tell you of is
@@ -565,7 +567,8 @@ shows its thread.")
 
 (define (%matrix-passphrase)
   ;; The passphrase of the store: the secret of the option, or one typed.
-  (or (guard (e (#t #f)) (secret-get 'host (option 'matrix-store-secret)))
+  (or (guard (e (#t #f))
+        (secret-get 'host (option 'matrix-store-secret) 'user (option 'matrix-user-id)))
       (read-passwd "Passphrase of the Matrix store: ")))
 
 (define (%matrix-start!)

@@ -972,10 +972,28 @@ key each, a thread has a buffer of its own, and pictures show under their
 messages. Encrypted rooms are read and written as others are, once the
 device is verified with `M-x matrix-verify` or `M-x matrix-recover`.
 
+To set it up:
+
+```scheme
+(set-option! 'matrix-user-id "@name:example.org")
+```
+
+```
+pass generate amacs-matrix/@name:example.org
+```
+
+The second is the passphrase that locks what is kept on disk; without it,
+the editor asks for one each time. Then, once: `M-x matrix`, `M-x
+matrix-login`, which opens the page of your server in the browser, and
+`M-x matrix-verify` or `M-x matrix-recover` to make the new device one that
+your account trusts. After that `M-x matrix` is enough.
+
 The editor does not speak Matrix itself. A program beside it does,
-`amacs-matrix`, with the Matrix SDK, and the two talk in lines of JSON.
-`docs/matrix.md` has the setting up, the keys and what the lines say; the
-editor's side is `runtime/lib/matrix.scm`.
+`amacs-matrix`, with the Matrix SDK, and the two talk in lines of JSON. It
+is built and installed with the editor and has to be on the `PATH`.
+`docs/matrix.md` has the setting up at length, what to do when something
+is wrong, the keys and what the lines say; the editor's side is
+`runtime/lib/matrix.scm`.
 
 ## Pictures
 
