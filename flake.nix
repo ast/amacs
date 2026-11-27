@@ -65,6 +65,9 @@
             # zip and unzip are run in a UTF-8 locale, for names that are not
             # ASCII, and a build has no locales unless it is given them.
             LOCALE_ARCHIVE = "${pkgs.glibcLocales}/lib/locale/locale-archive";
+            # The program for Matrix makes no client for the web without the
+            # certificates of its authorities, and a build has none.
+            SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
             # The renderer's tests draw text and need a known font.
             AMACS_TEST_FONTS = "${pkgs.jetbrains-mono}/share/fonts";
             # Some tests expand `~`.
