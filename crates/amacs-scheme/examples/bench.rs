@@ -62,6 +62,18 @@ const PROGRAMS: &[(&str, &str)] = &[
         "hash table: 500k inserts and lookups",
         "(define t (make-hash-table)) (let loop ((i 0)) (when (< i 500000) (hash-table-set! t i (* i 2)) (loop (+ i 1)))) (let loop ((i 0) (sum 0)) (if (= i 500000) sum (loop (+ i 1) (+ sum (hash-table-ref t i)))))",
     ),
+    (
+        "hash table: 1M lookups by string",
+        "(define names (map (lambda (i) (string-append \"the key with number \" (number->string i))) (iota 1000))) (define by-name (make-hash-table)) (for-each (lambda (name) (hash-table-set! by-name name 1)) names) (let loop ((i 0) (sum 0)) (if (= i 1000) sum (loop (+ i 1) (fold (lambda (name sum) (+ sum (hash-table-ref by-name name))) sum names))))",
+    ),
+    (
+        "sort a vector of 200k numbers",
+        "(let ((items (make-vector 200000 0))) (let loop ((i 0)) (when (< i 200000) (vector-set! items i (random 1000000)) (loop (+ i 1)))) (vector-length (sort items <)))",
+    ),
+    (
+        "sort 2000 lists of 100 strings",
+        "(define words (map (lambda (i) (number->string (* i 7919))) (iota 100))) (let loop ((i 0) (n 0)) (if (= i 2000) n (loop (+ i 1) (+ n (length (sort words string<?))))))",
+    ),
 ];
 
 fn main() {

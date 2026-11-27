@@ -117,7 +117,7 @@ pub struct Closure {
 
 /// The key of a hash table entry. Numbers, symbols, chars, booleans and
 /// strings are keys by value; every other object by identity.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Key {
     Nil,
     Bool(bool),
@@ -128,6 +128,63 @@ pub enum Key {
     Sym(Symbol),
     Str(String),
     Obj(Handle),
+}
+
+/// A [`Key`] that borrows its string: for looking a value up without
+/// copying it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KeyRef<'a> {
+    Nil,
+    Bool(bool),
+    Int(i64),
+    Float(u64),
+    Char(char),
+    Sym(Symbol),
+    Str(&'a str),
+    Obj(Handle),
+}
+
+impl Key {
+    pub fn borrowed(&self) -> KeyRef<'_> {
+        match self {
+            Key::Nil => KeyRef::Nil,
+            Key::Bool(value) => KeyRef::Bool(*value),
+            Key::Int(value) => KeyRef::Int(*value),
+            Key::Float(bits) => KeyRef::Float(*bits),
+            Key::Char(c) => KeyRef::Char(*c),
+            Key::Sym(symbol) => KeyRef::Sym(*symbol),
+            Key::Str(text) => KeyRef::Str(text),
+            Key::Obj(handle) => KeyRef::Obj(*handle),
+        }
+    }
+}
+
+impl KeyRef<'_> {
+    pub fn owned(self) -> Key {
+        match self {
+            KeyRef::Nil => Key::Nil,
+            KeyRef::Bool(value) => Key::Bool(value),
+            KeyRef::Int(value) => Key::Int(value),
+            KeyRef::Float(bits) => Key::Float(bits),
+            KeyRef::Char(c) => Key::Char(c),
+            KeyRef::Sym(symbol) => Key::Sym(symbol),
+            KeyRef::Str(text) => Key::Str(text.to_owned()),
+            KeyRef::Obj(handle) => Key::Obj(handle),
+        }
+    }
+}
+
+// A key and what borrows it must hash alike for the lookup to find it.
+impl std::hash::Hash for Key {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.borrowed().hash(state);
+    }
+}
+
+impl indexmap::Equivalent<Key> for KeyRef<'_> {
+    fn equivalent(&self, key: &Key) -> bool {
+        *self == key.borrowed()
+    }
 }
 
 /// A mutable hash table, which remembers the order things were put in.

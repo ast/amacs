@@ -256,6 +256,20 @@ pub(super) fn install(core: &mut Core) {
         },
     );
     core.define_native(
+        "append-reverse!",
+        2,
+        Some(2),
+        "(append-reverse! list tail) The items of the list in the opposite order, followed by the tail. The list is used up: the result is made of its own pairs.",
+        |core, args| Ok(reverse_onto(core, args[0], args[1])),
+    );
+    core.define_native(
+        "reverse!",
+        1,
+        Some(1),
+        "(reverse! list) The items in the opposite order. The list is used up: the result is made of its own pairs. For a list that nothing else refers to, such as one that a loop has built.",
+        |core, args| Ok(reverse_onto(core, args[0], Value::Nil)),
+    );
+    core.define_native(
         "list-copy",
         1,
         Some(1),
@@ -387,4 +401,18 @@ pub(super) fn install(core: &mut Core) {
             move |core, args| assoc(core, assoc_name, args, same),
         );
     }
+}
+
+/// Turns the pairs of a list around, so that they lead to `tail`, and
+/// returns what was the last of them. Stops at what is not a pair.
+fn reverse_onto(core: &mut Core, list: Value, mut tail: Value) -> Value {
+    let mut rest = list;
+    while let Value::Obj(handle) = rest
+        && let Object::Pair(_, cdr) = core.heap.get_mut(handle)
+    {
+        let next = std::mem::replace(cdr, tail);
+        tail = rest;
+        rest = next;
+    }
+    tail
 }

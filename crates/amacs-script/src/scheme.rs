@@ -234,6 +234,9 @@ impl SchemeHost {
         editor: &Rc<RefCell<Editor>>,
         body: impl FnOnce(&mut Vm) -> Result<Outcome, Report>,
     ) -> Result<Ran, Report> {
+        let started = std::time::Instant::now();
+        let collections = self.vm.core.heap.collections;
+        let collecting = self.vm.core.heap.collect_time;
         let outcome = {
             let _current = CurrentEditor::enter(editor);
             // An interrupt that arrived just after the previous run ended
@@ -244,6 +247,16 @@ impl SchemeHost {
             self.running.store(false, Ordering::SeqCst);
             outcome
         };
+        // How much of the time the interpreter spent collecting garbage.
+        let heap = &self.vm.core.heap;
+        let collections = heap.collections - collections;
+        let collecting = heap.collect_time.saturating_sub(collecting);
+        let ran = started.elapsed();
+        {
+            let mut editor = editor.borrow_mut();
+            editor.note_time("scheme", "run", ran);
+            editor.note_times("scheme", "collect", collections, collecting);
+        }
         // What the code wrote with `display` goes to the message log.
         let written = std::mem::take(&mut self.vm.core.output);
         if !written.is_empty() {

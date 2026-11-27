@@ -250,10 +250,19 @@ pub(super) fn install(core: &mut Core) {
         Some(3),
         "(hash-table-set! table key value) Sets the value for a key.",
         |core, args| {
+            // A key that is there is not copied to be found.
             let wanted = key(core, args[1]);
-            table_mut(core, "hash-table-set!", args[0])?
+            let found = table(core, "hash-table-set!", args[0])?
                 .entries
-                .insert(wanted, (args[1], args[2]));
+                .get_index_of(&wanted)
+                .ok_or_else(|| wanted.owned());
+            let entries = &mut table_mut(core, "hash-table-set!", args[0])?.entries;
+            match found {
+                Ok(at) => entries[at] = (args[1], args[2]),
+                Err(new) => {
+                    entries.insert(new, (args[1], args[2]));
+                }
+            }
             Ok(Value::Void)
         },
     );
@@ -264,9 +273,13 @@ pub(super) fn install(core: &mut Core) {
         "(hash-table-delete! table key) Removes a key and its value.",
         |core, args| {
             let wanted = key(core, args[1]);
-            table_mut(core, "hash-table-delete!", args[0])?
+            let at = table(core, "hash-table-delete!", args[0])?
                 .entries
-                .shift_remove(&wanted);
+                .get_index_of(&wanted);
+            let entries = &mut table_mut(core, "hash-table-delete!", args[0])?.entries;
+            if let Some(at) = at {
+                entries.shift_remove_index(at);
+            }
             Ok(Value::Void)
         },
     );

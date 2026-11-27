@@ -226,6 +226,8 @@ pub struct Editor {
     pub(crate) state_directory: Option<PathBuf>,
     pub(crate) kill_ring: KillRing,
     pub(crate) history: History,
+    /// What ran and how long it took.
+    pub(crate) telemetry: crate::telemetry::Telemetry,
     /// Wakes the host's event loop from worker threads.
     pub(crate) waker: Waker,
     /// When to show the keys that can follow the pending prefix.
@@ -301,6 +303,7 @@ impl Editor {
             state_directory: None,
             kill_ring: KillRing::default(),
             history: History::default(),
+            telemetry: crate::telemetry::Telemetry::default(),
             waker: Arc::new(|| {}),
             key_hint_due: None,
             clipboard: None,
@@ -439,10 +442,12 @@ impl Editor {
         let point = self.point();
         self.buffer_mut().begin_command(point);
 
+        let started = Instant::now();
         let result = run(self);
 
         self.finish_command(buffer, tick, true);
         self.report(result);
+        self.note_time("command", name, started.elapsed());
     }
 
     /// The bookkeeping after a command or script call. `is_command` is false

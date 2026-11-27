@@ -68,7 +68,7 @@ applied to every value the parameter gets."
   (let loop ((items items) (mapped '()))
     (if (pair? items)
         (loop (cdr items) (cons (f (car items)) mapped))
-        (reverse mapped))))
+        (reverse! mapped))))
 
 (define (%any-null? lists)
   (and (pair? lists)
@@ -81,7 +81,7 @@ taken together. Stops at the end of the shortest."
       (%map1 f first)
       (let loop ((lists (cons first rest)) (mapped '()))
         (if (%any-null? lists)
-            (reverse mapped)
+            (reverse! mapped)
             (loop (%map1 cdr lists) (cons (apply f (%map1 car lists)) mapped))))))
 
 (define (for-each f first . rest)
@@ -100,7 +100,7 @@ for what it does rather than what it returns."
 (define (filter keep? items)
   "The items for which keep? returns true."
   (let loop ((items items) (kept '()))
-    (cond ((null? items) (reverse kept))
+    (cond ((null? items) (reverse! kept))
           ((keep? (car items)) (loop (cdr items) (cons (car items) kept)))
           (else (loop (cdr items) kept)))))
 
@@ -111,7 +111,7 @@ for what it does rather than what it returns."
 (define (partition in? items)
   "Two values: the items for which in? returns true, and the others."
   (let loop ((items items) (in '()) (out '()))
-    (cond ((null? items) (values (reverse in) (reverse out)))
+    (cond ((null? items) (values (reverse! in) (reverse! out)))
           ((in? (car items)) (loop (cdr items) (cons (car items) in) out))
           (else (loop (cdr items) in (cons (car items) out))))))
 
@@ -150,7 +150,7 @@ an empty list."
   "What f returns for the items, without the #f results."
   (let loop ((items items) (kept '()))
     (if (null? items)
-        (reverse kept)
+        (reverse! kept)
         (let ((mapped (f (car items))))
           (loop (cdr items) (if mapped (cons mapped kept) kept))))))
 
@@ -199,7 +199,7 @@ returns true, or #f."
 (define (delete-duplicates items)
   "The items without those that are equal? to an earlier one."
   (let loop ((items items) (seen '()))
-    (cond ((null? items) (reverse seen))
+    (cond ((null? items) (reverse! seen))
           ((%member (car items) seen) (loop (cdr items) seen))
           (else (loop (cdr items) (cons (car items) seen))))))
 
@@ -225,8 +225,8 @@ key, or #f. Compares with equal? unless another test is given."
 
 (define (%merge less? left right)
   (let loop ((left left) (right right) (merged '()))
-    (cond ((null? left) (append (reverse merged) right))
-          ((null? right) (append (reverse merged) left))
+    (cond ((null? left) (append-reverse! merged right))
+          ((null? right) (append-reverse! merged left))
           ((less? (car right) (car left))
            (loop left (cdr right) (cons (car right) merged)))
           (else (loop (cdr left) right (cons (car left) merged))))))
@@ -235,8 +235,15 @@ key, or #f. Compares with equal? unless another test is given."
   "The items in order, as less? says. Items that are neither less than the
 other keep their order."
   (let sort ((items items) (count (length items)))
+    ;; What comes out shares no pairs with what went in, so that merging
+    ;; can use up what it has made.
     (cond ((= count 0) '())
-          ((= count 1) (list (car items)))
+          ((= count 1) (cons (car items) '()))
+          ((= count 2)
+           (let ((first (car items)) (second (cadr items)))
+             (if (less? second first)
+                 (cons second (cons first '()))
+                 (cons first (cons second '())))))
           (else
            (let ((half (quotient count 2)))
              (%merge less?

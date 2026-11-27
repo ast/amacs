@@ -421,14 +421,50 @@ impl Editor {
         self.state_directory = dir;
     }
 
-    /// Writes input history and the list of recent files to the state
-    /// directory, if they have changed.
+    /// Writes input history, the list of recent files and what is new of
+    /// the telemetry to the state directory, if they have changed.
     pub fn save_state(&mut self) {
-        if let Some(dir) = self.state_directory.clone()
-            && let Err(error) = self.history.save(&dir)
-        {
+        let Some(dir) = self.state_directory.clone() else {
+            return;
+        };
+        if let Err(error) = self.history.save(&dir) {
             self.message(format!("Cannot save history: {error}"));
         }
+        if let Err(error) = self.telemetry.save(&dir) {
+            self.message(format!("Cannot save telemetry: {error}"));
+        }
+    }
+
+    // Telemetry
+
+    /// Notes that something ran and how long it took, unless the
+    /// `telemetry` option is off. The kind says what it is, such as
+    /// "command" or "hook".
+    pub fn note_time(&mut self, kind: &str, name: &str, took: std::time::Duration) {
+        self.note_times(kind, name, 1, took);
+    }
+
+    /// The same for something that ran `count` times.
+    pub fn note_times(&mut self, kind: &str, name: &str, count: u64, took: std::time::Duration) {
+        if !matches!(self.global_option("telemetry"), Some(Value::Bool(false))) {
+            self.telemetry.add(kind, name, count, took);
+        }
+    }
+
+    /// What ran, as (kind, name, numbers): in this session, or with `all`
+    /// in every session that saved to the state directory.
+    pub fn telemetry(&self, all: bool) -> Vec<(String, String, crate::telemetry::Stat)> {
+        match &self.state_directory {
+            Some(dir) if all => self.telemetry.all(dir),
+            _ => self.telemetry.session(),
+        }
+    }
+
+    /// Forgets what ran, in this session and in the state directory.
+    pub fn clear_telemetry(&mut self) -> CmdResult {
+        self.telemetry
+            .clear(self.state_directory.as_deref())
+            .map_err(|error| CmdError::msg(format!("Cannot clear telemetry: {error}")))
     }
 
     fn auto_save_path(&self, file: &Path) -> Option<PathBuf> {

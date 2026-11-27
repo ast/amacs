@@ -297,6 +297,11 @@ impl ScriptState {
                 "Names of the files and directories that mark the root of a project. The nearest one above a file decides.",
             ),
             (
+                "telemetry",
+                Value::Bool(true),
+                "Whether the editor counts what runs and how long it takes: commands, hooks, other calls into Scheme, events and redisplay, by name. The numbers stay on this machine, in the state directory, and hold nothing of what was typed. `show-telemetry` shows them.",
+            ),
+            (
                 PERSISTENT_UNDO,
                 Value::Bool(true),
                 "Whether the undo history of a file is kept on disk, in the state directory: it is there again when the file is next visited, and has what was not saved before a crash. It holds text that was deleted.",

@@ -831,6 +831,28 @@ pub const API: &[ApiFn] = api! {
         |ed, args| ed.set_option(name(args, 0)?, args[1].clone()).map(|()| Value::Void);
     "set-local!" (2, Some(2)) "Set the value of an option in the current buffer only." =>
         |ed, args| ed.set_local_option(name(args, 0)?, args[1].clone()).map(|()| Value::Void);
+    "%telemetry" (1, Some(1)) "What ran and how long it took, as lists of kind, name, count, microseconds in all, microseconds of the longest time, and count of slow times: of this session, or with a true argument of every session." =>
+        |ed, args| {
+            let entries = ed.telemetry(boolean(args, 0));
+            Ok(Value::List(
+                entries
+                    .into_iter()
+                    .map(|(kind, name, stat)| {
+                        let number = |n: u64| Value::Int(i64::try_from(n).unwrap_or(i64::MAX));
+                        Value::List(vec![
+                            Value::Sym(kind),
+                            Value::Str(name),
+                            number(stat.count),
+                            number(stat.total),
+                            number(stat.max),
+                            number(stat.slow),
+                        ])
+                    })
+                    .collect(),
+            ))
+        };
+    "%telemetry-clear!" (0, Some(0)) "Forget what ran, in this session and in the state directory." =>
+        |ed, _| ed.clear_telemetry().map(|()| Value::Void);
     "%hook-active!" (2, Some(2)) "Tell the editor whether a hook has any functions." =>
         |ed, args| {
             ed.set_hook_active(name(args, 0)?, boolean(args, 1));

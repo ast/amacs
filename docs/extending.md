@@ -745,6 +745,38 @@ word right until the editor exits, in one buffer only with a second
 argument, `(spell-save-word "word" file)` adds it to a list of words, and
 `(spell-correct-word start end)` asks the user about one word.
 
+## What takes time
+
+The editor counts what runs and how long it takes: every command, the
+functions of every hook, the other calls into Scheme, each key and other
+event with all it leads to, and redisplay. `M-x show-telemetry` shows the
+numbers of the session, and of every session with a prefix argument;
+`M-x clear-telemetry` forgets them.
+
+`(telemetry-report)` gives the same as text, which is how a program asks,
+and `(telemetry)` gives entries to work on, the one that took most time
+first:
+
+```scheme
+;; The commands that were slow at least once, with their longest time.
+(map (lambda (entry)
+       (cons (telemetry-entry-name entry) (telemetry-entry-max entry)))
+     (filter (lambda (entry) (> (telemetry-entry-slow entry) 0))
+             (telemetry-of 'command)))
+```
+
+An entry has a kind (`event`, `redisplay`, `command`, `hook`, `call`,
+`scheme` or `load`), a name, a count, the milliseconds in all and of the
+longest time, and the count of slow times, those of 16 ms or more. With a
+true argument, `telemetry`, `telemetry-of` and `telemetry-report` give
+the sums of all sessions, which are kept in the file `telemetry` of the
+state directory. Only names and times are kept, nothing of what was typed
+or of any buffer, and nothing leaves the machine. `(set-option! 'telemetry
+#f)` stops the counting.
+
+`(time expression)` logs how long one expression takes, and `(trace!
+'name)` every call of a procedure.
+
 ## Loading code
 
 `(load "file.scm")` runs a file; loading it again after a change replaces

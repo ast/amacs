@@ -29,6 +29,8 @@ pub struct Heap {
     /// Counts collections, to mark shared code only once in each.
     epoch: u64,
     pub collections: u64,
+    /// How long the collections took together.
+    pub collect_time: std::time::Duration,
 }
 
 /// Collects the objects that are reachable, starting from the roots it is
@@ -179,6 +181,7 @@ impl Heap {
     /// Frees every object that cannot be reached from the roots, which
     /// `mark_roots` marks.
     pub fn collect(&mut self, mark_roots: impl FnOnce(&mut Marker)) {
+        let started = std::time::Instant::now();
         self.epoch += 1;
         self.collections += 1;
         let mut marker = Marker {
@@ -210,6 +213,7 @@ impl Heap {
         // Collect again when twice as much as is alive has been allocated,
         // so that the work of collecting stays in proportion.
         self.threshold = (live * 2).max(FIRST_THRESHOLD);
+        self.collect_time += started.elapsed();
     }
 }
 

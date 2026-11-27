@@ -99,17 +99,18 @@ thread, and `Vm::fuel` bounds how long code may run.
 ## Speed
 
 Measured against Steel 0.8.3 with the same programs, before Steel was
-removed, on the machine this was written on:
+removed, on the machine this was written on. The last column is the
+interpreter as it has become since:
 
-| | Steel | own |
-|---|---|---|
-| Start an interpreter | 124 ms | 0.9 ms |
-| `fib 27` | 37 ms | 35 ms |
-| 1M calls of a host procedure | 86 ms | 56 ms |
-| `map` and `filter` over 300k items | 130 ms | 93 ms |
-| 1M calls of a closure that assigns | 160 ms | 86 ms |
-| 200k string appends and comparisons | 35 ms | 23 ms |
-| 100k lookups in an association list | 252 ms | 37 ms |
+| | Steel | own, then | own, now |
+|---|---|---|---|
+| Start an interpreter | 124 ms | 0.9 ms | 0.7 ms |
+| `fib 27` | 37 ms | 35 ms | 21 ms |
+| 1M calls of a host procedure | 86 ms | 56 ms | 35 ms |
+| `map` and `filter` over 300k items | 130 ms | 93 ms | 57 ms |
+| 1M calls of a closure that assigns | 160 ms | 86 ms | 51 ms |
+| 200k string appends and comparisons | 35 ms | 23 ms | 19 ms |
+| 100k lookups in an association list | 252 ms | 37 ms | 30 ms |
 
 `cargo run --release -p amacs-scheme --example bench` times a few programs
 on the interpreter as it is now, and `--example micro` single features of
@@ -125,3 +126,12 @@ that is given another meaning has it at once, also in code compiled before.
 
 The collector's work goes by the number of objects there are, not by how
 many there were at most.
+
+`map`, `filter`, `sort` and their like build a list once: they turn the
+list they have made around in place, with `reverse!`, where they used to
+make a second one. A hash table finds a string without copying it.
+
+In the editor, the interpreter is not what a key press waits for: the
+telemetry (`docs/extending.md`) shows the hooks of a command taking a
+hundredth of a millisecond, and working out what the screen shows a
+hundred times that.

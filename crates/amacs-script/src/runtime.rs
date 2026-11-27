@@ -54,6 +54,7 @@ const FILES: &[(&str, &str)] = &[
     file!("lib/ghost-text.scm"),
     file!("lib/simple.scm"),
     file!("lib/help.scm"),
+    file!("lib/telemetry.scm"),
     file!("core/test.scm"),
     file!("core/debug.scm"),
 ];

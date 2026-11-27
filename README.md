@@ -231,6 +231,11 @@ and `just restart` name the file in the `AMACS_INIT` variable, which the
 server reads where no `--init` is given. Set the variable to another file
 to try that one, or to your own init file to work with it.
 
+The editor counts what it runs and how long that takes, by name:
+commands, hooks, key presses, redisplay. `M-x show-telemetry` shows the
+numbers, and `docs/extending.md` says how code reads them. They stay on the
+machine, in the state directory.
+
 ## Choosing things in the minibuffer
 
 A prompt that has candidates lists them under the input. Typing narrows them:

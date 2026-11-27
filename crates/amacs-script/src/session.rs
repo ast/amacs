@@ -1,6 +1,7 @@
 use std::cell::{Ref, RefCell, RefMut};
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Instant;
 
 use amacs_core::{Editor, FrameId, ScriptCall, ScriptOutcome, ScriptTarget, Value};
 use amacs_proto::{DrawOp, InputEvent};
@@ -25,9 +26,11 @@ impl Session {
         let mut editor = Editor::new(cols, rows);
         editor.attach_script_host();
         let editor = Rc::new(RefCell::new(editor));
+        let started = Instant::now();
         let host = SchemeHost::new(&editor)?;
         let mut session = Self { editor, host };
         session.pump();
+        session.note("load", "runtime", started);
         Ok(session)
     }
 
@@ -45,16 +48,36 @@ impl Session {
     }
 
     pub fn handle_event(&mut self, event: InputEvent) {
+        let (started, name) = (Instant::now(), event_name(&event));
         self.editor.borrow_mut().handle_event(event);
         self.pump();
+        self.note("event", name, started);
+    }
+
+    /// Notes a redisplay that found something to draw.
+    fn note_redisplay(&mut self, ops: &[DrawOp], started: Instant) {
+        if !ops.is_empty() {
+            self.note("redisplay", "frame", started);
+        }
+    }
+
+    /// Notes for the telemetry that something ran from `started` to now.
+    fn note(&mut self, kind: &str, name: &str, started: Instant) {
+        self.editor
+            .borrow_mut()
+            .note_time(kind, name, started.elapsed());
     }
 
     /// Does the editor's work that is due now and takes in results from its
     /// worker threads. The host calls this when woken and when the time
     /// from [`Session::next_deadline`] has come.
     pub fn poll(&mut self) {
-        self.editor.borrow_mut().poll(std::time::Instant::now());
-        self.pump();
+        let started = Instant::now();
+        self.editor.borrow_mut().poll(started);
+        // Most of the time nothing is due, and that is not worth counting.
+        if self.pump() {
+            self.note("event", "poll", started);
+        }
     }
 
     /// When [`Session::poll`] next has something to do, if it does.
@@ -63,17 +86,25 @@ impl Session {
     }
 
     pub fn redisplay(&mut self) -> Vec<DrawOp> {
-        self.editor.borrow_mut().redisplay()
+        let started = Instant::now();
+        let ops = self.editor.borrow_mut().redisplay();
+        self.note_redisplay(&ops, started);
+        ops
     }
 
     /// Handles input from one of several frames.
     pub fn handle_frame_event(&mut self, frame: FrameId, event: InputEvent) {
+        let (started, name) = (Instant::now(), event_name(&event));
         self.editor.borrow_mut().handle_frame_event(frame, event);
         self.pump();
+        self.note("event", name, started);
     }
 
     pub fn redisplay_frame(&mut self, frame: FrameId) -> Vec<DrawOp> {
-        self.editor.borrow_mut().redisplay_frame(frame)
+        let started = Instant::now();
+        let ops = self.editor.borrow_mut().redisplay_frame(frame);
+        self.note_redisplay(&ops, started);
+        ops
     }
 
     /// Runs the Scheme calls queued by work done directly on the editor,
@@ -142,17 +173,18 @@ impl Session {
     /// in the echo area and logged, and is also returned.
     pub fn load_file(&mut self, path: &Path) -> Result<(), EvalError> {
         let shown = path.display();
+        let started = Instant::now();
         let source = std::fs::read_to_string(path).map_err(|error| {
             let summary = format!("Cannot read {shown}: {error}");
             self.editor.borrow_mut().message(summary.clone());
             EvalError::plain(summary)
         })?;
-        self.eval_top_level(&source, Some(path))
-            .map(drop)
-            .inspect_err(|error| {
-                let summary = format!("Error in {shown}: {}", error.summary);
-                self.editor.borrow_mut().message(summary);
-            })
+        let result = self.eval_top_level(&source, Some(path)).map(drop);
+        self.note("load", "file", started);
+        result.inspect_err(|error| {
+            let summary = format!("Error in {shown}: {}", error.summary);
+            self.editor.borrow_mut().message(summary);
+        })
     }
 
     /// Evaluates source as one unit of work for the editor, with its own
@@ -185,20 +217,61 @@ impl Session {
     /// When they are done, what was typed while a command waited for a
     /// program is handled, a piece at a time, each with the calls that it
     /// queues: the next piece may be for what the one before brought up.
-    fn pump(&mut self) {
+    ///
+    /// Returns whether there was anything to run.
+    fn pump(&mut self) -> bool {
+        let mut ran = false;
         loop {
             let call = self.editor.borrow_mut().take_script_call();
             if let Some(call) = call {
+                ran = true;
+                let started = Instant::now();
                 self.editor.borrow_mut().begin_script();
                 let outcome = self.host.run(&self.editor, &call);
                 self.editor.borrow_mut().end_script(&call, outcome);
+                let (kind, name) = call_name(&call);
+                self.note(kind, name, started);
                 continue;
             }
             let held = self.editor.borrow_mut().take_held_input();
             let Some((frame, event)) = held else {
                 break;
             };
+            ran = true;
             self.editor.borrow_mut().handle_frame_event(frame, event);
         }
+        ran
+    }
+}
+
+/// What an event is called in the telemetry.
+fn event_name(event: &InputEvent) -> &'static str {
+    match event {
+        InputEvent::Key(_) => "key",
+        InputEvent::Resize { .. } => "resize",
+        InputEvent::Paste(_) => "paste",
+        InputEvent::Mouse(_) => "mouse",
+    }
+}
+
+/// The kind and name of a call in the telemetry: a command or a hook by
+/// its name, anything else by the procedure of the runtime that it goes
+/// through.
+fn call_name(call: &ScriptCall) -> (&'static str, &str) {
+    if let Some(command) = &call.command {
+        return ("command", command);
+    }
+    match &call.target {
+        ScriptTarget::Named(name @ ("%run-hook" | "%run-hook-in")) => {
+            let hook = call.args.iter().find_map(|arg| match arg {
+                Value::Sym(hook) => Some(hook.as_str()),
+                _ => None,
+            });
+            ("hook", hook.unwrap_or(name))
+        }
+        ScriptTarget::Named("%promise-resolve" | "%promise-reject") => ("call", "resume"),
+        ScriptTarget::Named(name) => ("call", name),
+        ScriptTarget::Func(_) => ("call", "procedure"),
+        ScriptTarget::Eval(_) => ("call", "eval"),
     }
 }

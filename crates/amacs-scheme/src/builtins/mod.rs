@@ -9,7 +9,7 @@ mod text;
 
 use crate::deep;
 use crate::error::Error;
-use crate::value::{Key, Object, Symbol, Value};
+use crate::value::{KeyRef, Object, Symbol, Value};
 use crate::vm::Core;
 
 pub(crate) type Outcome = Result<Value, Error>;
@@ -134,17 +134,17 @@ pub(crate) fn equal(core: &Core, mut a: Value, mut b: Value) -> bool {
 }
 
 /// What a value is as the key of a hash table.
-pub(crate) fn key(core: &Core, value: Value) -> Key {
+pub(crate) fn key(core: &Core, value: Value) -> KeyRef<'_> {
     match value {
-        Value::Nil | Value::Void | Value::Unbound | Value::Eof => Key::Nil,
-        Value::Bool(value) => Key::Bool(value),
-        Value::Int(value) => Key::Int(value),
-        Value::Float(value) => Key::Float(value.to_bits()),
-        Value::Char(c) => Key::Char(c),
-        Value::Sym(symbol) => Key::Sym(symbol),
+        Value::Nil | Value::Void | Value::Unbound | Value::Eof => KeyRef::Nil,
+        Value::Bool(value) => KeyRef::Bool(value),
+        Value::Int(value) => KeyRef::Int(value),
+        Value::Float(value) => KeyRef::Float(value.to_bits()),
+        Value::Char(c) => KeyRef::Char(c),
+        Value::Sym(symbol) => KeyRef::Sym(symbol),
         Value::Obj(handle) => match core.heap.get(handle) {
-            Object::Str(text) => Key::Str(text.clone()),
-            _ => Key::Obj(handle),
+            Object::Str(text) => KeyRef::Str(text),
+            _ => KeyRef::Obj(handle),
         },
     }
 }

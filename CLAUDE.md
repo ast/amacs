@@ -34,6 +34,9 @@ init file in `~/.config`. Use it instead of guessing:
   what they would see; `screen` with `image` for colours and faces.
 - `messages` for the full report of an error in a command, and for the
   output of `(trace! 'name)`.
+- `eval` of `(display (telemetry-report))` for what ran and how long it
+  took: commands, hooks, events, redisplay. With `#t` as its argument the
+  report is of every session, the user's own among them.
 
 Only changes to Rust need `just restart`. After a restart the MCP server
 reconnects by itself on the next call.

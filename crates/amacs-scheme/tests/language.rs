@@ -996,3 +996,52 @@ fn deep_nesting_is_handled() {
         "error: test.scm:1:85: eval: this code is nested too deeply"
     );
 }
+
+#[test]
+fn lists_turned_around_in_place() {
+    assert_eq!(
+        run("(list (reverse! '()) (reverse! (list 1)) (reverse! (list 1 2 3)))"),
+        "(() (1) (3 2 1))"
+    );
+    assert_eq!(
+        run(
+            "(list (append-reverse! (list 3 2 1) '(4 5)) (append-reverse! '() '(1)) (append-reverse! (list 1) 2))"
+        ),
+        "((1 2 3 4 5) (1) (1 . 2))"
+    );
+    // The result is made of the pairs of the list.
+    assert_eq!(
+        run(
+            "(define items (list 1 2 3)) (define turned (reverse! items)) (list (eq? items (cddr turned)) items)"
+        ),
+        "(#t (1))"
+    );
+    // What sort and its like are given is left as it was.
+    assert_eq!(
+        run("(define items (list 3 1 2 5 4))
+             (list (sort items <) (map - items) (filter odd? items) (delete-duplicates items) items)"),
+        "((1 2 3 4 5) (-3 -1 -2 -5 -4) (3 1 5) (3 1 2 5 4) (3 1 2 5 4))"
+    );
+    assert_eq!(
+        run("(call-with-values (lambda () (partition even? '(1 2 3 4 5))) list)"),
+        "((2 4) (1 3 5))"
+    );
+}
+
+#[test]
+fn strings_as_keys_of_a_hash_table() {
+    assert_eq!(
+        run("(define t (make-hash-table))
+             (define name (string-append \"a\" \"b\"))
+             (hash-table-set! t name 1)
+             (hash-table-set! t \"ab\" 2)
+             (hash-table-set! t 'ab 3)
+             (hash-table-set! t \"c\" 4)
+             (define before (list (hash-table-count t) (hash-table-ref t (string #\\a #\\b))
+                                  (hash-table-ref t 'ab) (hash-table-contains? t \"c\")))
+             (hash-table-delete! t (string-append \"a\" \"b\"))
+             (hash-table-delete! t \"not there\")
+             (list before (hash-table-keys t) (hash-table-ref t \"ab\" 'none))"),
+        "((3 2 3 #t) (ab \"c\") none)"
+    );
+}
