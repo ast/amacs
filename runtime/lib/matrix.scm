@@ -528,8 +528,9 @@ is of messages that name you. RET shows the room of the line.")
 
 (define-major-mode matrix-room-mode special-mode "Matrix-Room"
   "Major mode of a Matrix room or of a thread in one: its messages, the
-newest last. RET writes a message, p shows earlier messages and u sends a
-file. On a message, r answers it, e changes it if it is yours, a puts a
+newest last. RET writes a message of a line and c one of more lines, p
+shows earlier messages and u sends a file. R and E answer and change in a
+buffer too. On a message, r answers it, e changes it if it is yours, a puts a
 reaction on it or takes yours off, d deletes it, o opens its file and t
 shows its thread.")
 
@@ -753,6 +754,78 @@ message that the thread starts with and the answers to it."
          (root (or (%matrix-get item 'thread_root) (json-ref item 'id))))
     (%matrix-show-view! (%matrix-current-room) root)))
 
+;;; Messages of more than one line
+
+(define-minor-mode matrix-compose-mode "Compose"
+  "Writing a Matrix message of as many lines as it takes. C-c C-c sends it
+and C-c C-k gives it up.")
+
+;; What each buffer of a message that is being written is for, by its
+;; name: a list of the buffer to go back to, the method and its parameters
+;; without the text.
+(define %matrix-composing (make-hash-table))
+
+(define (%matrix-compose! method params initial)
+  ;; Opens a buffer to write the text of a request in.
+  (let* ((back (buffer-name))
+         (name (string-append "*matrix compose: " (%matrix-room-name (%matrix-current-room)) "*")))
+    (when (member name (buffer-list)) (kill-buffer name))
+    (switch-to-buffer name)
+    (insert initial)
+    (enable-mode! 'matrix-compose-mode)
+    (hash-table-set! %matrix-composing name (list back method params))
+    (message "C-c C-c sends the message, C-c C-k gives it up.")))
+
+(define (%matrix-compose-leave!)
+  ;; Closes the buffer of the message and goes back to where it came from.
+  (let* ((name (buffer-name))
+         (pending (or (hash-table-ref %matrix-composing name #f)
+                      (error "This buffer is not a Matrix message."))))
+    (hash-table-delete! %matrix-composing name)
+    (kill-buffer name)
+    (when (member (car pending) (buffer-list))
+      (switch-to-buffer (car pending)))
+    pending))
+
+(define-command (matrix-compose)
+  "Write a message to the room, or the thread, of this buffer in a buffer
+of its own, for a message of more than one line."
+  (%matrix-compose! "send" (%matrix-view-params (%matrix-current-view)) ""))
+
+(define-command (matrix-compose-reply)
+  "Answer the message at point in a buffer of its own."
+  (let ((item (%matrix-item-at-point)))
+    (%matrix-compose! "reply"
+                      (%matrix-view-params (%matrix-current-view) 'id (json-ref item 'id))
+                      "")))
+
+(define-command (matrix-compose-edit)
+  "Change the message at point, which must be yours, in a buffer of its own."
+  (let ((item (%matrix-item-at-point)))
+    (unless (eq? (json-ref item 'own) #t)
+      (error "You can change only your own messages."))
+    (%matrix-compose! "edit"
+                      (%matrix-view-params (%matrix-current-view) 'id (json-ref item 'id))
+                      (json-ref item 'body ""))))
+
+(define-command (matrix-compose-send)
+  "Send the message that this buffer holds."
+  (let ((text (string-trim (buffer-string))))
+    (when (string-null? text)
+      (error "The message is empty."))
+    (let ((pending (%matrix-compose-leave!)))
+      (%matrix-request (cadr pending)
+                       (append (caddr pending) (json-object 'body text))
+                       %matrix-reporting))))
+
+(define-command (matrix-compose-cancel)
+  "Give up the message that this buffer holds."
+  (%matrix-compose-leave!)
+  (message "The message was not sent."))
+
+(define-key 'matrix-compose-mode "C-c C-c" 'matrix-compose-send)
+(define-key 'matrix-compose-mode "C-c C-k" 'matrix-compose-cancel)
+
 (define (%matrix-mark-read)
   ;; A room is read when its buffer is the one in use and point is at its
   ;; end: the program is told, once, while messages are not read.
@@ -794,4 +867,5 @@ longer kept up to date here."
  '(("RET" matrix-send) ("p" matrix-load-earlier) ("l" matrix) ("k" matrix-close-room)
    ("r" matrix-reply) ("e" matrix-edit) ("a" matrix-react) ("d" matrix-delete)
    ("o" matrix-open-attachment) ("u" matrix-upload) ("t" matrix-open-thread)
-   ("s" matrix-switch-room)))
+   ("s" matrix-switch-room) ("c" matrix-compose) ("R" matrix-compose-reply)
+   ("E" matrix-compose-edit)))

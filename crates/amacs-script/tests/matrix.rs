@@ -306,3 +306,49 @@ fn a_new_device_is_verified_by_emojis_or_by_the_recovery_key() {
     h.type_text("EsTc 1234").keys("RET");
     h.wait_until(|h| h.screen.row(1).is_empty());
 }
+
+#[test]
+fn a_message_of_more_lines_is_written_in_a_buffer() {
+    let mut h = harness("@me:example.org");
+    open_tea(&mut h);
+    h.keys("c");
+    assert!(
+        h.mode_line().contains("*matrix compose: Tea*"),
+        "{}",
+        h.mode_line()
+    );
+    h.type_text("First line")
+        .keys("RET")
+        .type_text("second line");
+    h.keys("C-c C-c");
+    h.wait_until(|h| h.screen.text().contains("Me: First line"));
+    assert!(h.mode_line().contains("*matrix: Tea*"), "{}", h.mode_line());
+    assert_eq!(h.screen.row(6), "second line");
+
+    // A message that is given up is not sent, and an empty one is not either.
+    h.keys("c").type_text("never mind").keys("C-c C-k");
+    assert!(h.mode_line().contains("*matrix: Tea*"), "{}", h.mode_line());
+    h.keys("c C-c C-c");
+    assert!(h.echo().contains("empty"), "{}", h.echo());
+    h.keys("C-c C-k");
+    assert!(!h.screen.text().contains("never mind"));
+
+    // One's own message is changed with its text to start from.
+    h.keys("M-> C-p C-p E");
+    assert!(h.screen.text().contains("First line\nsecond line"));
+    h.keys("M->").type_text(", changed").keys("C-c C-c");
+    h.wait_until(|h| h.screen.text().contains("second line, changed (edited)"));
+}
+
+#[test]
+fn what_comes_while_a_message_is_typed_does_not_touch_it() {
+    let mut h = harness("@me:example.org");
+    open_tea(&mut h);
+    h.keys("RET").type_text("half");
+    // Everything is drawn again, as when a message comes.
+    h.eval("(%matrix-redraw!)");
+    h.redisplay();
+    assert_eq!(h.prompt(), "To Tea: half");
+    h.type_text(" and whole").keys("RET");
+    h.wait_until(|h| h.screen.text().contains("Me: half and whole"));
+}

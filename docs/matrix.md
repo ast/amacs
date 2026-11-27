@@ -43,7 +43,9 @@ In a room, or a thread:
 
 | Key | |
 |---|---|
-| `RET` | Write a message |
+| `RET` | Write a message of one line |
+| `c` | Write a message of more lines in a buffer: `C-c C-c` sends it, `C-c C-k` gives it up |
+| `R`, `E` | Answer and change in such a buffer |
 | `r` | Answer the message at point |
 | `e` | Change the message at point, if it is yours |
 | `a` | Put a reaction on it, or take yours off |
