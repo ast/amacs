@@ -1,8 +1,23 @@
 //! What the server said to show: faces, panes, their lines and the cursor.
 
-use amacs_proto::{Color, DisplayLine, DrawOp, FaceAttrs, PaneId, PaneRect};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use amacs_proto::{Color, DisplayLine, DrawOp, FaceAttrs, ImageId, PaneId, PaneRect};
 
 use super::{DEFAULT_BG, DEFAULT_FG};
+
+/// A picture that rows show bands of: pixels of four bytes each, red,
+/// green, blue and opacity, by rows from the top.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// The pictures that the server has sent.
+pub type Images = HashMap<ImageId, Arc<Image>>;
 
 /// A pane and the lines it shows.
 pub struct Pane {
@@ -17,6 +32,7 @@ pub struct Scene {
     /// In the order of the layout.
     panes: Vec<Pane>,
     cursor: Option<(PaneId, u16, u16)>,
+    images: Images,
     /// Everything must be drawn afresh, as after a resize.
     stale: bool,
 }
@@ -27,6 +43,7 @@ impl Default for Scene {
             faces: Vec::new(),
             panes: Vec::new(),
             cursor: None,
+            images: Images::new(),
             stale: true,
         }
     }
@@ -81,10 +98,35 @@ impl Scene {
                     }
                 }
                 DrawOp::Cursor { pane, row, col, .. } => self.cursor = Some((*pane, *row, *col)),
+                DrawOp::DefineImage {
+                    id,
+                    width,
+                    height,
+                    rgba,
+                } => {
+                    // A picture that is not of its size is not drawn.
+                    if rgba.len() == *width as usize * *height as usize * 4 {
+                        let image = Image {
+                            width: *width,
+                            height: *height,
+                            rgba: rgba.clone(),
+                        };
+                        self.images.insert(*id, Arc::new(image));
+                    }
+                }
+                DrawOp::DropImages(ids) => {
+                    for id in ids {
+                        self.images.remove(id);
+                    }
+                }
                 DrawOp::Flush => flushed = true,
             }
         }
         (flushed, shapes_changed)
+    }
+
+    pub fn images(&self) -> &Images {
+        &self.images
     }
 
     pub fn panes(&self) -> &[Pane] {

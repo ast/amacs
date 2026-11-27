@@ -9,9 +9,12 @@ mod key;
 mod screen;
 mod wire;
 
-pub use draw::{Color, CursorShape, DisplayLine, DrawOp, FaceAttrs, FaceId, PaneId, PaneRect, Run};
+pub use draw::{
+    Color, CursorShape, DisplayLine, DrawOp, FaceAttrs, FaceId, ImageId, ImageSlice, PaneId,
+    PaneRect, Run,
+};
 pub use key::{Key, KeyCode, Mods, NamedKey, ParseKeyError, parse_keys};
-pub use screen::Screen;
+pub use screen::{Band, Screen};
 pub use wire::{
     Answer, Ask, ClientMsg, EvalFailure, FileSpec, FrameRequest, PROTOCOL_VERSION, ServerMsg,
     SubpixelOrder, pid_path, read_msg, socket_path, write_msg,
@@ -23,10 +26,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputEvent {
     Key(Key),
-    /// The frame now has this many character cells.
+    /// The frame now has this many character cells. A frontend that draws
+    /// pictures says how wide and high a cell is in pixels, by which the
+    /// server knows how many cells a picture takes; one that does not say
+    /// is sent no pictures.
     Resize {
         cols: u16,
         rows: u16,
+        cell: Option<(u16, u16)>,
     },
     /// Text pasted by the terminal or compositor, to be inserted verbatim.
     Paste(String),

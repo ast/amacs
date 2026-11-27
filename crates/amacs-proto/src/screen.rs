@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use unicode_width::UnicodeWidthChar;
 
-use crate::{DisplayLine, DrawOp, FaceAttrs, FaceId, PaneId, PaneRect};
+use crate::{DisplayLine, DrawOp, FaceAttrs, FaceId, ImageId, PaneId, PaneRect};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Cell {
@@ -24,6 +24,17 @@ impl Default for Cell {
     }
 }
 
+/// A band of a picture on a row of the frame: the picture, the column
+/// that it starts at, and which band of how many.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Band {
+    pub id: ImageId,
+    pub col: usize,
+    pub cols: usize,
+    pub band: usize,
+    pub bands: usize,
+}
+
 /// The frame as a frontend would draw it.
 #[derive(Debug, Default)]
 pub struct Screen {
@@ -33,6 +44,10 @@ pub struct Screen {
     panes: HashMap<PaneId, PaneRect>,
     faces: Vec<FaceAttrs>,
     cursor: Option<(usize, usize)>,
+    /// The pictures defined, with their sizes in pixels.
+    images: HashMap<ImageId, (u32, u32)>,
+    /// The band of a picture that each row shows, by row of the frame.
+    bands: HashMap<usize, Vec<Band>>,
     /// Number of rows redrawn by the last batch of operations.
     pub rows_drawn: usize,
 }
@@ -48,6 +63,25 @@ impl Screen {
                     self.rows = usize::from(*rows);
                     self.cells = vec![Cell::default(); self.cols * self.rows];
                     self.panes = panes.iter().map(|pane| (pane.id, *pane)).collect();
+                    self.bands.clear();
+                }
+                DrawOp::DefineImage {
+                    id,
+                    width,
+                    height,
+                    rgba,
+                } => {
+                    assert_eq!(
+                        rgba.len(),
+                        *width as usize * *height as usize * 4,
+                        "picture {id:?} is not of its size"
+                    );
+                    self.images.insert(*id, (*width, *height));
+                }
+                DrawOp::DropImages(ids) => {
+                    for id in ids {
+                        self.images.remove(id);
+                    }
                 }
                 DrawOp::Lines {
                     pane,
@@ -81,6 +115,34 @@ impl Screen {
     fn draw_line(&mut self, rect: PaneRect, row: usize, line: &DisplayLine) {
         let y = usize::from(rect.y) + row;
         let (x0, width) = (usize::from(rect.x), usize::from(rect.w));
+        let bands: Vec<Band> = line
+            .images
+            .iter()
+            .map(|slice| {
+                assert!(
+                    self.images.contains_key(&slice.id),
+                    "picture {:?} is shown and not defined",
+                    slice.id
+                );
+                assert!(
+                    usize::from(slice.col + slice.cols) <= width,
+                    "picture overflows pane {:?}",
+                    rect.id
+                );
+                Band {
+                    id: slice.id,
+                    col: x0 + usize::from(slice.col),
+                    cols: usize::from(slice.cols),
+                    band: usize::from(slice.band),
+                    bands: usize::from(slice.bands),
+                }
+            })
+            .collect();
+        if bands.is_empty() {
+            self.bands.remove(&y);
+        } else {
+            self.bands.insert(y, bands);
+        }
         let mut col = 0;
         for (segment, face) in line.segments() {
             for c in segment.chars() {
@@ -143,6 +205,16 @@ impl Screen {
     /// The face of a cell.
     pub fn face_at(&self, row: usize, col: usize) -> FaceAttrs {
         self.faces[self.cells[row * self.cols + col].face.0 as usize]
+    }
+
+    /// The bands of pictures that a row of the frame shows.
+    pub fn bands(&self, row: usize) -> &[Band] {
+        self.bands.get(&row).map_or(&[], Vec::as_slice)
+    }
+
+    /// The size in pixels of a picture that is defined.
+    pub fn image_size(&self, id: ImageId) -> Option<(u32, u32)> {
+        self.images.get(&id).copied()
     }
 
     pub fn size(&self) -> (usize, usize) {

@@ -95,6 +95,8 @@ pub struct Buffer {
     line_signs: HashMap<usize, String>,
     /// The lines that are not shown.
     folds: Folds,
+    /// The pictures shown under lines, in the order of their anchors.
+    images: Vec<crate::image::BufferImage>,
     /// Copied from the `tab-width` option whenever options change.
     pub tab_width: usize,
     /// Copied from the `line-numbers` option.
@@ -159,6 +161,7 @@ impl Buffer {
             mode_line: None,
             default_face: None,
             text_faces: Vec::new(),
+            images: Vec::new(),
             spans: Vec::new(),
             line_signs: HashMap::new(),
             folds: Folds::new(),
@@ -202,6 +205,7 @@ impl Buffer {
                 _ => &[],
             },
             folds: &self.folds,
+            images: &self.images,
             hidden: match &self.syntax {
                 Some(syntax) if hide_markup => syntax.markup(),
                 _ => &[],
@@ -478,6 +482,7 @@ impl Buffer {
         self.unsaved_state = None;
         self.pending = None;
         self.text_faces.clear();
+        self.images.clear();
         self.spans.clear();
         self.line_signs.clear();
         self.folds.clear();
@@ -525,6 +530,15 @@ impl Buffer {
         }
         self.parts().insert(pos, s);
         self.tick += 1;
+        if !self.images.is_empty() {
+            // A picture stays with the char that it is anchored at.
+            let added = s.chars().count();
+            for image in &mut self.images {
+                if image.pos >= pos {
+                    image.pos += added;
+                }
+            }
+        }
         if !self.text_faces.is_empty() || !self.spans.is_empty() {
             let added = s.chars().count();
             for (range, _) in &mut self.text_faces {
@@ -560,6 +574,16 @@ impl Buffer {
                     .collect();
             }
         }
+        if !self.images.is_empty() {
+            // A picture goes with the char that it is anchored at.
+            self.images
+                .retain(|image| !(range.start <= image.pos && image.pos < range.end));
+            for image in &mut self.images {
+                if image.pos >= range.end {
+                    image.pos -= range.len();
+                }
+            }
+        }
         if !self.text_faces.is_empty() {
             // A position in what is deleted ends up where that started.
             let moved = |pos: usize| {
@@ -591,6 +615,33 @@ impl Buffer {
             self.spans.retain(|(span, _)| !span.is_empty());
         }
         self.parts().delete(range)
+    }
+
+    // Pictures
+
+    /// The pictures shown under lines, in the order of their anchors.
+    pub fn images(&self) -> &[crate::image::BufferImage] {
+        &self.images
+    }
+
+    pub(crate) fn add_image(&mut self, image: crate::image::BufferImage) {
+        let index = self.images.partition_point(|other| other.pos <= image.pos);
+        self.images.insert(index, image);
+    }
+
+    /// Takes a picture away. Returns whether there was one of that number.
+    pub fn remove_image(&mut self, id: u64) -> bool {
+        let before = self.images.len();
+        self.images.retain(|image| image.id != id);
+        self.images.len() != before
+    }
+
+    pub fn clear_images(&mut self) {
+        self.images.clear();
+    }
+
+    pub(crate) fn place_image(&mut self, index: usize, placed: Option<crate::image::Placed>) {
+        self.images[index].placed = placed;
     }
 
     // Lines that are not shown

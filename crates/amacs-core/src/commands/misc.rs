@@ -11,7 +11,7 @@ use amacs_text::Text;
 
 use crate::buffer::Buffer;
 use crate::completion::{Candidate, Completion};
-use crate::display::{rows_back, rows_forward};
+use crate::display::{first_text, row_at, rows_back, rows_forward};
 use crate::editor::Editor;
 use crate::editor::KeyMeaning;
 use crate::env::EnvState;
@@ -25,7 +25,7 @@ use crate::files::{abbreviate_path, expand_typed_path};
 pub(crate) fn scroll_rows(ed: &mut Editor, rows: i64) -> CmdResult {
     let width = ed.text_width(ed.selected());
     let tab = ed.window_flow(ed.selected());
-    let start = ed.buffer().marker(ed.window().start);
+    let start = (ed.buffer().marker(ed.window().start), ed.window().skip);
     let count = rows.unsigned_abs() as usize;
     let new_start = if rows >= 0 {
         rows_forward(ed.text(), start, count, width, tab)
@@ -33,19 +33,22 @@ pub(crate) fn scroll_rows(ed: &mut Editor, rows: i64) -> CmdResult {
         rows_back(ed.text(), start, count, width, tab)
     };
     let marker = ed.window().start;
-    ed.buffer_mut().set_marker(marker, new_start);
-    // Keep point on a row that is shown.
+    ed.buffer_mut().set_marker(marker, new_start.0);
+    ed.window_mut().skip = new_start.1;
+    // Keep point on a row that is shown. The last row of the window can
+    // be one of pictures: then the row of text that they are under.
     let tab = ed.window_flow(ed.selected());
     let height = ed.window().text_rows().max(1);
     let last = rows_forward(ed.text(), new_start, height - 1, width, tab);
     let point = ed.point();
-    if point < new_start {
-        ed.set_point(new_start);
-    } else if point >= rows_forward(ed.text(), last, 1, width, tab) && last != new_start {
-        let beyond = rows_forward(ed.text(), last, 1, width, tab);
-        if beyond > last {
-            ed.set_point(last);
-        }
+    let first = first_text(ed.text(), new_start, width, tab);
+    if point < first {
+        ed.set_point(first);
+    } else if last != new_start
+        && let Some(beyond) = row_at(ed.text(), last.0, width, tab).next
+        && point >= beyond
+    {
+        ed.set_point(last.0);
     }
     Ok(())
 }

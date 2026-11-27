@@ -219,6 +219,8 @@ struct App {
     size: Option<(u32, u32)>,
     /// Columns and rows last reported to the server.
     grid: (u16, u16),
+    /// The size of a cell in pixels that the server was last told.
+    cell: Option<(u16, u16)>,
     /// A frame has been committed and the compositor has not yet said that
     /// it is time for the next.
     frame_pending: bool,
@@ -259,11 +261,20 @@ impl App {
         };
         self.output.resize(width, height);
         let grid = self.output.grid_size(width, height);
-        if grid != self.grid {
+        // The size of a cell goes with it, for the pictures that the
+        // server sends: it changes with the scale of the output.
+        let cell = self.output.cell_size();
+        let cell = (
+            u16::try_from(cell.0).unwrap_or(u16::MAX),
+            u16::try_from(cell.1).unwrap_or(u16::MAX),
+        );
+        if grid != self.grid || Some(cell) != self.cell {
             self.grid = grid;
+            self.cell = Some(cell);
             self.send(InputEvent::Resize {
                 cols: grid.0,
                 rows: grid.1,
+                cell: Some(cell),
             });
         }
         self.request_draw();
@@ -496,6 +507,7 @@ fn run() -> Result<ExitCode> {
         scale: SCALE_DENOMINATOR,
         size: None,
         grid: INITIAL_GRID,
+        cell: None,
         frame_pending: false,
         needs_draw: false,
         server: writer,

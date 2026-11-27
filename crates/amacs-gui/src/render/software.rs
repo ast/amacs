@@ -6,7 +6,8 @@
 
 use amacs_proto::Color;
 
-use super::list::{Frame, Row};
+use super::list::{Frame, ImageQuad, Row};
+use super::scene::{Image, Images};
 use super::text::{GlyphContent, GlyphKey, GlyphSource};
 use super::{Backend, DEFAULT_BG, Rect};
 
@@ -120,9 +121,47 @@ impl Software {
         }
     }
 
-    fn paint_row(&mut self, row: &Row, glyphs: &mut dyn GlyphSource) {
+    /// Draws the part of a picture that is in `clip`, over what is there.
+    fn draw_image(&mut self, quad: &ImageQuad, image: &Image, clip: Rect) {
+        let clip_x1 = (clip.x + clip.w).min(self.width) as i32;
+        let clip_y1 = (clip.y + clip.h).min(self.height) as i32;
+        let (x0, y0) = (quad.x.max(clip.x as i32), quad.y.max(clip.y as i32));
+        let x1 = (quad.x + quad.w as i32).min(clip_x1);
+        let y1 = (quad.y + quad.h as i32).min(clip_y1);
+        let (width, height) = (image.width as usize, image.height as usize);
+        for py in y0..y1 {
+            // The pixel of the picture that is nearest, where the picture
+            // is drawn at another size than its own.
+            let sy = ((py - quad.y) as usize * height / quad.h as usize).min(height - 1);
+            for px in x0..x1 {
+                let sx = ((px - quad.x) as usize * width / quad.w as usize).min(width - 1);
+                let source = (sy * width + sx) * 4;
+                let data = &image.rgba[source..source + 4];
+                let alpha = u32::from(data[3]);
+                if alpha == 0 {
+                    continue;
+                }
+                let index = py as usize * self.width as usize + px as usize;
+                let dest = self.pixels[index];
+                let blend = |source: u8, dest: u32| {
+                    (u32::from(source) * alpha + dest * (255 - alpha)) / 255
+                };
+                self.pixels[index] = 0xff00_0000
+                    | blend(data[0], dest >> 16 & 0xff) << 16
+                    | blend(data[1], dest >> 8 & 0xff) << 8
+                    | blend(data[2], dest & 0xff);
+            }
+        }
+    }
+
+    fn paint_row(&mut self, row: &Row, images: &Images, glyphs: &mut dyn GlyphSource) {
         for quad in &row.backgrounds {
             self.fill(quad.rect, pixel(quad.color));
+        }
+        for quad in &row.images {
+            if let Some(image) = images.get(&quad.id) {
+                self.draw_image(quad, image, row.area);
+            }
         }
         for glyph in &row.glyphs {
             self.draw_glyph(
@@ -181,7 +220,7 @@ impl Backend for Software {
             if !(frame.full || is_changed || holds_old_cursor) {
                 continue;
             }
-            self.paint_row(row, glyphs);
+            self.paint_row(row, frame.images, glyphs);
             add(row.area);
             cursor_row_painted |= frame.cursor.is_some_and(|cell| cell.y == row.area.y);
         }

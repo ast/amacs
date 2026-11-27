@@ -220,6 +220,8 @@ impl Tty {
                         self.cursor_color = *color;
                     }
                 }
+                // A terminal draws no pictures and is sent none.
+                DrawOp::DefineImage { .. } | DrawOp::DropImages(_) => {}
                 DrawOp::Flush => {
                     if let Some((x, y, shape)) = self.cursor {
                         let style = match shape {

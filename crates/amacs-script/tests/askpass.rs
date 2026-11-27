@@ -147,6 +147,7 @@ fn questions_of_yes_or_no_and_words_without_a_question() {
         .handle_event(amacs_proto::InputEvent::Resize {
             cols: 100,
             rows: 10,
+            cell: None,
         });
     asked.h.screen = Default::default();
     asked.h.redisplay();

@@ -82,7 +82,11 @@ pub fn run(options: &Options) -> Result<ExitCode> {
                         // Trust the current size rather than replaying each.
                         InputEvent::Resize { .. } => {
                             let (cols, rows) = tty.size()?;
-                            InputEvent::Resize { cols, rows }
+                            InputEvent::Resize {
+                                cols,
+                                rows,
+                                cell: None,
+                            }
                         }
                         other => other,
                     };

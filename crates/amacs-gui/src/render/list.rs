@@ -2,11 +2,11 @@
 //! list that every backend draws from. How text looks is decided here and
 //! nowhere else.
 
-use amacs_proto::{Color, DisplayLine, PaneRect};
+use amacs_proto::{Color, DisplayLine, ImageId, PaneRect};
 use unicode_width::UnicodeWidthChar;
 
 use super::Rect;
-use super::scene::Scene;
+use super::scene::{Images, Scene};
 use super::text::{Fonts, GlyphKey};
 
 /// A rectangle filled with one colour.
@@ -26,6 +26,17 @@ pub struct GlyphQuad {
     pub color: Color,
 }
 
+/// A picture and where the whole of it is, in pixels. A row shows the part
+/// of it that is in the row's area: its top can be above that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageQuad {
+    pub id: ImageId,
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+}
+
 /// One row of a pane. It is drawn in the order of its fields, and nothing
 /// of it shows outside its area.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +44,8 @@ pub struct Row {
     pub area: Rect,
     /// What is behind the text. Together they cover the area.
     pub backgrounds: Vec<Quad>,
+    /// The pictures that the row shows a band of.
+    pub images: Vec<ImageQuad>,
     pub glyphs: Vec<GlyphQuad>,
     /// What is over the text: underlines, the lines of a box.
     pub overlays: Vec<Quad>,
@@ -49,6 +62,8 @@ pub struct Frame<'a> {
     pub full: bool,
     /// Every row of every pane.
     pub rows: &'a [Row],
+    /// The pictures that rows show.
+    pub images: &'a Images,
     /// Which of them changed since the last paint, in rising order. In a
     /// full frame, all.
     pub changed: &'a [usize],
@@ -118,6 +133,35 @@ pub fn build_row(
         boxes.push((rest, color));
     }
 
+    // A picture is as large as fits in its cells, and no larger than it is.
+    let images = line
+        .images
+        .iter()
+        .filter_map(|slice| {
+            let image = scene.images().get(&slice.id)?;
+            let room_w = u64::from(slice.cols) * u64::from(cell_w);
+            let room_h = u64::from(slice.bands) * u64::from(cell_h);
+            let (width, height) = (u64::from(image.width), u64::from(image.height));
+            if width == 0 || height == 0 || room_w == 0 || room_h == 0 {
+                return None;
+            }
+            let (w, h) = if width <= room_w && height <= room_h {
+                (width, height)
+            } else if width * room_h > height * room_w {
+                (room_w, (height * room_w / width).max(1))
+            } else {
+                ((width * room_h / height).max(1), room_h)
+            };
+            Some(ImageQuad {
+                id: slice.id,
+                x: (area.x + u32::from(slice.col) * cell_w) as i32,
+                y: area.y as i32 - (u32::from(slice.band) * cell_h) as i32,
+                w: w as u32,
+                h: h as u32,
+            })
+        })
+        .collect();
+
     let baseline = area.y as i32 + fonts.baseline();
     let glyphs = fonts
         .shape(line, scene.faces())
@@ -184,6 +228,7 @@ pub fn build_row(
     Row {
         area,
         backgrounds,
+        images,
         glyphs,
         overlays,
     }

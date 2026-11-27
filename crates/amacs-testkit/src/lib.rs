@@ -123,6 +123,19 @@ impl Harness {
         self
     }
 
+    /// Makes the frame one that draws pictures, with cells of so many
+    /// pixels across and down.
+    pub fn draw_pictures(&mut self, cell: (u16, u16)) -> &mut Self {
+        let (cols, rows) = self.screen.size();
+        self.editor.handle_event(InputEvent::Resize {
+            cols: cols as u16,
+            rows: rows as u16,
+            cell: Some(cell),
+        });
+        self.redisplay();
+        self
+    }
+
     pub fn paste(&mut self, text: &str) -> &mut Self {
         self.editor.handle_event(InputEvent::Paste(text.to_owned()));
         self.redisplay();
@@ -130,7 +143,11 @@ impl Harness {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> &mut Self {
-        self.editor.handle_event(InputEvent::Resize { cols, rows });
+        self.editor.handle_event(InputEvent::Resize {
+            cols,
+            rows,
+            cell: None,
+        });
         self.redisplay();
         self
     }

@@ -23,6 +23,10 @@ pub struct Window {
     pub point: MarkerId,
     /// Position of the first char shown.
     pub start: MarkerId,
+    /// How many rows of the first row and the pictures under it are
+    /// above the window: with 1 the row of text is, and the window
+    /// starts with the pictures, of which more are above it with more.
+    pub skip: usize,
     /// Column that vertical motion tries to keep.
     pub goal_col: Option<usize>,
     /// Area on the frame, including the mode line. Set by layout.

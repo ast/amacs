@@ -1,7 +1,8 @@
 use amacs_text::Text;
 
 use crate::display::{
-    Flow, column_of, pos_at_column, row_containing, rows_back, rows_forward, walk_row,
+    Flow, Top, column_of, first_text, pos_at_column, row_containing, rows_back, rows_forward,
+    shown_rows,
 };
 use crate::editor::Editor;
 use crate::error::{CmdError, CmdResult};
@@ -254,13 +255,14 @@ fn window_geometry(ed: &Editor) -> (usize, usize, Flow<'_>) {
     )
 }
 
-fn window_start(ed: &Editor) -> usize {
-    ed.buffer().marker(ed.window().start)
+fn window_start(ed: &Editor) -> Top {
+    (ed.buffer().marker(ed.window().start), ed.window().skip)
 }
 
-fn set_window_start(ed: &mut Editor, pos: usize) {
+fn set_window_start(ed: &mut Editor, top: Top) {
     let marker = ed.window().start;
-    ed.buffer_mut().set_marker(marker, pos);
+    ed.buffer_mut().set_marker(marker, top.0);
+    ed.window_mut().skip = top.1;
 }
 
 /// Scrolls forward. Point moves only if it would otherwise leave the window.
@@ -272,8 +274,9 @@ pub fn scroll_up(ed: &mut Editor) -> CmdResult {
         return Err(CmdError::msg("End of buffer"));
     }
     set_window_start(ed, new_start);
-    if ed.point() < new_start {
-        ed.set_point(new_start);
+    let first = first_text(ed.text(), new_start, width, ed.window_flow(ed.selected()));
+    if ed.point() < first {
+        ed.set_point(first);
     }
     Ok(())
 }
@@ -290,24 +293,14 @@ pub fn scroll_down(ed: &mut Editor) -> CmdResult {
 
     // Find the last row now shown and pull point up to it if it is below.
     let tab = ed.window_flow(ed.selected());
-    let text = ed.text();
-    let mut last_row = new_start;
-    let mut visible = false;
+    let shown = shown_rows(ed.text(), new_start, rows, width, tab);
     let point = ed.point();
-    for _ in 0..rows {
-        let row = walk_row(text, last_row, width, tab, |_, _, _, _| {});
-        if row.contains(point) {
-            visible = true;
-            break;
-        }
-        match row.next {
-            Some(next) => last_row = next,
-            None => break,
-        }
-    }
-    if !visible {
-        let last_shown = rows_back(text, last_row, 1, width, tab);
-        ed.set_point(last_shown);
+    if !shown
+        .iter()
+        .any(|shown| shown.at.is_some() && shown.row.contains(point))
+        && let Some(last) = shown.last()
+    {
+        ed.set_point(last.row.start);
     }
     Ok(())
 }
@@ -317,7 +310,7 @@ pub fn recenter(ed: &mut Editor) -> CmdResult {
     let (rows, width, tab) = window_geometry(ed);
     let text = ed.text();
     let (point_row, _) = row_containing(text, ed.point(), width, tab);
-    let start = rows_back(text, point_row, rows / 2, width, tab);
+    let start = rows_back(text, (point_row, 0), rows / 2, width, tab);
     set_window_start(ed, start);
     Ok(())
 }

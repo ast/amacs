@@ -393,3 +393,66 @@ fn text_is_drawn_per_subpixel_when_the_order_is_known() {
         "text drawn per subpixel covers them unevenly: {bgr}"
     );
 }
+
+/// Writes a picture of one colour and a size in pixels, and returns where.
+fn picture(name: &str, width: u32, height: u32, color: [u8; 3]) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("render");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    let file = std::fs::File::create(&path).unwrap();
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let data: Vec<u8> = (0..width * height).flat_map(|_| color).collect();
+    encoder
+        .write_header()
+        .and_then(|mut writer| writer.write_image_data(&data))
+        .unwrap();
+    path
+}
+
+#[test]
+fn a_picture_is_drawn_in_the_cells_under_its_line() {
+    let mut h = Harness::new("picture", 30, 8);
+    let (cell_w, cell_h) = h.renderer.cell_size();
+    h.editor.handle_event(InputEvent::Resize {
+        cols: 30,
+        rows: 8,
+        cell: Some((cell_w as u16, cell_h as u16)),
+    });
+    h.type_text("one");
+    h.keys("RET");
+    h.type_text("two");
+    // Three cells across and two down, to the pixel.
+    let file = picture("source-red.png", cell_w * 3, cell_h * 2, [200, 30, 30]);
+    h.editor.add_image(0, &file, None, None);
+    h.paint();
+    let red = rgb(Color::rgb(200, 30, 30));
+    for (col, row) in [(0, 1), (2, 1), (0, 2), (2, 2)] {
+        assert!(
+            h.cell(col, row).iter().all(|pixel| *pixel == red),
+            "cell {col}, {row} is of the picture"
+        );
+    }
+    // Beside it and under it there is none of it.
+    for (col, row) in [(3, 1), (3, 2), (0, 3), (0, 0)] {
+        assert!(
+            h.cell(col, row).iter().all(|pixel| *pixel != red),
+            "cell {col}, {row} is not of the picture"
+        );
+    }
+    // A picture larger than its rows is made smaller by the server: two
+    // rows of a square are two cells' height across.
+    let file = picture("source-blue.png", 400, 400, [20, 40, 220]);
+    h.editor.add_image(5, &file, Some(2), None);
+    h.paint();
+    let blue = rgb(Color::rgb(20, 40, 220));
+    let (width, _) = h.renderer.size();
+    let pixels = h.renderer.pixels();
+    let at = |x: u32, y: u32| pixels[(y * width + x) as usize];
+    // The second line is now under the two rows of the first picture.
+    let top = 4 * cell_h;
+    assert_eq!(at(0, top), blue);
+    assert_eq!(at(2 * cell_h - 1, top + 2 * cell_h - 1), blue);
+    assert_ne!(at(2 * cell_h, top), blue);
+}

@@ -66,7 +66,7 @@ pub(crate) struct MinibufferState {
     /// Where each window started when the prompt opened. The candidate
     /// list takes rows from the windows, which scrolls them to keep point
     /// in view; they go back when the prompt closes.
-    window_starts: Vec<(WindowId, crate::buffer::BufferId, usize)>,
+    window_starts: Vec<(WindowId, crate::buffer::BufferId, usize, usize)>,
     /// What is typed is a secret, such as a password: it is not drawn,
     /// not kept in a history and not given to hooks.
     pub secret: bool,
@@ -97,7 +97,7 @@ impl Editor {
             .map(|id| {
                 let window = &self.windows[id];
                 let start = self.buffers[window.buffer].marker(window.start);
-                (id, window.buffer, start)
+                (id, window.buffer, start, window.skip)
             })
             .collect();
         let history = session
@@ -459,11 +459,12 @@ impl Editor {
             self.buffers[buffer].reset(Text::new());
         }
         self.prompt_frame = None;
-        for (id, buffer, start) in &state.window_starts {
-            if let Some(window) = self.windows.get(*id)
+        for (id, buffer, start, skip) in &state.window_starts {
+            if let Some(window) = self.windows.get_mut(*id)
                 && window.buffer == *buffer
             {
                 let marker = window.start;
+                window.skip = *skip;
                 self.buffers[*buffer].set_marker(marker, *start);
             }
         }

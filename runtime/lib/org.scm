@@ -393,3 +393,11 @@ fold the whole buffer to its headings, or show it again."
    ("M-<left>" org-metaleft) ("M-<right>" org-metaright)
    ("M-S-<left>" outline-promote-subtree) ("M-S-<right>" outline-demote-subtree)
    ("M-<up>" outline-move-subtree-up) ("M-<down>" outline-move-subtree-down)))
+
+;;; Pictures
+
+;; [[file]] and [[file:file]], with or without a text.
+(define (%org-images)
+  (image-links-matching "\\[\\[(?:file:)?([^\\]]+)\\](?:\\[[^\\]]*\\])?\\]" 1))
+
+(define-image-finder 'org-mode %org-images)

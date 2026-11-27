@@ -37,6 +37,11 @@ jiff = "0.2"
 listenfd = "1"
 nucleo = "0.5"
 png = "0.18"
+# Pictures in buffers are decoded by these and by `png`: each reads one
+# format, in Rust alone.
+zune-jpeg = "0.4"
+image-webp = "0.2"
+gif = "0.14"
 postcard = { version = "1.1", default-features = false, features = ["use-std"] }
 proptest = "1"
 regex = "1"

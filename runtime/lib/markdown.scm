@@ -188,3 +188,13 @@ item of a list."
    ("M-<up>" outline-move-subtree-up) ("M-<down>" outline-move-subtree-down)
    ("C-c C-o" open-link-at-point)
    ("<mouse-2>" open-link-at-mouse) ("C-<mouse-1>" open-link-at-mouse)))
+
+;;; Pictures
+
+;; ![text](file), with the file as it is written: not an address of the web.
+(define (%markdown-images)
+  (filter (lambda (found) (not (regexp-search "^[A-Za-z][A-Za-z0-9+.-]*:" (cdr found))))
+          (image-links-matching
+           "!\\[[^\\]]*\\]\\(\\s*<?([^)\\s>]+)>?(?:\\s+\"[^\"]*\")?\\s*\\)" 1)))
+
+(define-image-finder 'markdown-mode %markdown-images)

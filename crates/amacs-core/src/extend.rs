@@ -15,7 +15,6 @@ use slotmap::{Key as _, KeyData};
 
 use crate::buffer::BufferId;
 use crate::decorate::{Label, Labels};
-use crate::display::walk_row;
 use crate::editor::Editor;
 use crate::env::EnvState;
 use crate::error::{CmdError, CmdResult};
@@ -210,21 +209,18 @@ impl Editor {
         let buffer = &self.buffers[window.buffer];
         let width = self.text_width(id);
         let start = buffer.marker(window.start);
-        let mut pos = start;
-        for _ in 0..window.text_rows() {
-            let row = walk_row(
-                buffer.text(),
-                pos,
-                width,
-                self.window_flow(id),
-                |_, _, _, _| {},
-            );
-            match row.next {
-                Some(next) => pos = next,
-                None => return start..buffer.len(),
-            }
+        let shown = crate::display::shown_rows(
+            buffer.text(),
+            (start, window.skip),
+            window.text_rows(),
+            width,
+            self.window_flow(id),
+        );
+        match shown.last().map(|shown| shown.row.next) {
+            Some(Some(next)) => start..next,
+            Some(None) => start..buffer.len(),
+            None => start..start,
         }
-        start..pos
     }
 
     /// Makes another buffer the one that the selected window shows, without

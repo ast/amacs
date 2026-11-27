@@ -14,7 +14,10 @@ amacs-remote.workspace = true
 amacs-text.workspace = true
 amacs-treesit.workspace = true
 anyhow.workspace = true
+gif.workspace = true
+image-webp.workspace = true
 nucleo.workspace = true
+png.workspace = true
 portable-pty.workspace = true
 regex.workspace = true
 rustix.workspace = true
@@ -24,6 +27,7 @@ spellbook.workspace = true
 thiserror.workspace = true
 tungstenite.workspace = true
 unicode-width.workspace = true
+zune-jpeg.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

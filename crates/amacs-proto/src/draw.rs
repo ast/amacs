@@ -50,6 +50,24 @@ pub struct Run {
     pub face: FaceId,
 }
 
+/// A picture sent with [`DrawOp::DefineImage`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ImageId(pub u32);
+
+/// The part of a picture that one row shows. A picture takes whole cells:
+/// `cols` of them across and `bands` rows down, from the cell at `col` of
+/// the first of its rows, and the row with this slice shows the band
+/// `band` of them, counted from 0. The picture is drawn as large as fits
+/// in those cells with its proportions kept, from their top left corner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageSlice {
+    pub id: ImageId,
+    pub col: u16,
+    pub cols: u16,
+    pub band: u16,
+    pub bands: u16,
+}
+
 /// One screen row of a pane. The server guarantees the text fits the pane.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct DisplayLine {
@@ -58,6 +76,9 @@ pub struct DisplayLine {
     pub runs: Vec<Run>,
     /// Face for the cells between the end of the text and the pane's edge.
     pub fill: FaceId,
+    /// The pictures that the row shows a band of, over its cells. Only a
+    /// frontend that said it draws pictures is sent any.
+    pub images: Vec<ImageSlice>,
 }
 
 impl DisplayLine {
@@ -140,6 +161,17 @@ pub enum DrawOp {
         /// can choose it. Without it, a cursor is whatever stands out.
         color: Option<Color>,
     },
+    /// A picture that rows from now on may show: `width` by `height`
+    /// pixels, four bytes each of red, green, blue and opacity, by rows
+    /// from the top.
+    DefineImage {
+        id: ImageId,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    },
+    /// Pictures that no row shows any more, to be forgotten.
+    DropImages(Vec<ImageId>),
     /// Everything since the last flush forms one consistent frame.
     Flush,
 }

@@ -1043,6 +1043,47 @@ pub const API: &[ApiFn] = api! {
             ed.buffer_mut().add_text_face(a.min(b)..a.max(b), &face);
             Ok(Value::Void)
         };
+    "add-image!" (2, Some(4)) "Show the picture of a file under the line of a position of the current buffer: a PNG, JPEG, WebP or GIF file on this host, named as expand-file-name takes it. The picture is no text. It is drawn in rows of its own, in a frame that draws pictures, as large as it is and no larger than the third argument in rows (default 16) and the fourth in columns (default the width of the window); #f is the default. It stays with the char at the position as the text changes, and goes when that char is deleted or the text is replaced. Returns a number for remove-image!. A file that is no picture shows nothing, and messages say why." =>
+        |ed, args| {
+            let at = pos(ed, args, 0)?;
+            let file = expand_path(string(args, 1)?, ed.working_directory());
+            let limit = |index: usize| match args.get(index) {
+                None | Some(Value::Bool(false)) => Ok(None),
+                Some(Value::Int(n)) if *n > 0 => Ok(Some(*n as usize)),
+                Some(other) => Err(wrong_type(index, "a number above 0 or #f", other)),
+            };
+            let (rows, cols) = (limit(2)?, limit(3)?);
+            Ok(Value::Int(ed.add_image(at, &file, rows, cols) as i64))
+        };
+    "remove-image!" (1, Some(1)) "Take a picture out of the current buffer: the one that add-image! returned this number for. Returns whether there was one." =>
+        |ed, args| {
+            let id = u64::try_from(int(args, 0)?).unwrap_or(u64::MAX);
+            Ok(ed.buffer_mut().remove_image(id).into())
+        };
+    "clear-images!" (0, Some(0)) "Take every picture out of the current buffer." =>
+        |ed, _| {
+            ed.buffer_mut().clear_images();
+            Ok(Value::Void)
+        };
+    "buffer-images" (0, Some(0)) "The pictures of the current buffer, in the order of their positions: a list of lists of the number that add-image! returned, the position, the file, and the rows that the picture takes in the frame last drawn, 0 where it is not shown." =>
+        |ed, _| {
+            Ok(Value::List(
+                ed.buffer()
+                    .images()
+                    .iter()
+                    .map(|image| {
+                        Value::List(vec![
+                            Value::Int(image.id as i64),
+                            Value::Int(image.pos as i64),
+                            image.file.display().to_string().into(),
+                            Value::Int(image.rows() as i64),
+                        ])
+                    })
+                    .collect(),
+            ))
+        };
+    "frame-draws-images?" (0, Some(0)) "Whether the current frame draws pictures: a window does, a terminal does not." =>
+        |ed, _| Ok(ed.frame_draws_images().into());
     "buffer-default-face" (0, Some(1)) "The name of the default face of a buffer (default the current one), or #f for the theme's default." =>
         |ed, args| Ok(buffer(ed, args, 0)?.default_face().map(Value::sym).into());
     "set-buffer-default-face!" (1, Some(2)) "Give a buffer (default the current one) a default face of its own, a name, in place of the theme's: the background and foreground of empty cells and of text with no face take its colours. #f restores the theme's default." =>

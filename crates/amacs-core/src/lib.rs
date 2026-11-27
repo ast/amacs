@@ -23,6 +23,7 @@ mod fold;
 mod format;
 mod frame;
 mod history;
+mod image;
 mod keymap;
 mod kill_ring;
 mod kmacro;

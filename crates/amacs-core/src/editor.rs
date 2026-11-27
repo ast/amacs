@@ -175,6 +175,8 @@ pub struct Editor {
     natives: HashMap<String, fn(&mut Editor) -> CmdResult>,
     pub(crate) extend: ExtendState,
     pub(crate) file_jobs: crate::files::FileJobs,
+    /// The pictures that buffers show.
+    pub(crate) images: crate::image::ImageStore,
     pub(crate) spell: crate::spell::SpellState,
     pub(crate) processes: ProcessState,
     pub(crate) websockets: crate::websocket::WebSocketState,
@@ -274,6 +276,7 @@ impl Editor {
             natives: HashMap::new(),
             extend: ExtendState::default(),
             file_jobs: crate::files::FileJobs::default(),
+            images: crate::image::ImageStore::default(),
             spell: crate::spell::SpellState::default(),
             processes: ProcessState::default(),
             websockets: Default::default(),
@@ -597,7 +600,10 @@ impl Editor {
         }
         match event {
             InputEvent::Key(key) => self.handle_key(key),
-            InputEvent::Resize { cols, rows } => self.resize(cols, rows),
+            InputEvent::Resize { cols, rows, cell } => {
+                self.frame_mut().cell = cell;
+                self.resize(cols, rows);
+            }
             InputEvent::Paste(text) => self.handle_paste(&text),
             InputEvent::Mouse(event) => self.handle_mouse(event),
         }
@@ -618,6 +624,7 @@ impl Editor {
         self.key_hint_due = None;
         self.minibuffer_hint = None;
         self.relayout();
+        self.place_images();
 
         if let Some(question) = self.key_prompt.take() {
             self.prompt_frame = None;
@@ -719,21 +726,25 @@ impl Editor {
         let buffer = &self.buffers[window.buffer];
         let (gutter, width) = crate::redisplay::text_area(window, buffer);
         let col = col.saturating_sub(gutter);
-        let mut start = buffer.marker(window.start);
-        for _ in 0..row {
-            let walked = crate::display::walk_row(
-                buffer.text(),
-                start,
-                width,
-                self.window_flow(id),
-                |_, _, _, _| {},
-            );
-            match walked.next {
-                Some(next) => start = next,
-                // Below the end of the text.
-                None => return buffer.len(),
-            }
+        let shown = crate::display::shown_rows(
+            buffer.text(),
+            (buffer.marker(window.start), window.skip),
+            row + 1,
+            width,
+            self.window_flow(id),
+        );
+        // A picture is at the end of the line that it is under.
+        if let Some(under) = shown.iter().find(|shown| shown.pictures.contains(&row)) {
+            return under.row.end;
         }
+        let Some(start) = shown
+            .iter()
+            .find(|shown| shown.at == Some(row))
+            .map(|shown| shown.row.start)
+        else {
+            // Below the end of the text.
+            return buffer.len();
+        };
         let mut found = None;
         let walked = crate::display::walk_row(
             buffer.text(),
@@ -914,6 +925,7 @@ impl Editor {
         self.lsp_poll(now);
         self.extend_poll(now);
         self.file_jobs_poll();
+        self.images_poll();
         self.askpass_poll();
         self.spell_poll();
         self.process_poll();
@@ -1534,6 +1546,7 @@ impl Editor {
         window.buffer = buffer;
         window.point = point;
         window.start = start;
+        window.skip = 0;
         window.goal_col = None;
     }
 
@@ -1590,6 +1603,7 @@ fn new_window(buffer: &mut Buffer, id: BufferId, serial: u32) -> Window {
         buffer: id,
         point: buffer.create_marker(point),
         start: buffer.create_marker(start),
+        skip: 0,
         goal_col: None,
         rect: Rect::default(),
         border: false,

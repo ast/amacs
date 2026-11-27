@@ -290,6 +290,41 @@ places in windows, and `(hide-labels!)` removes them. `(avy-candidates match?)`
 finds places on screen, `(avy-pick candidates)` lets the user choose one by
 its label, and `(avy-jump candidates)` goes there.
 
+## Pictures
+
+`(add-image! position file)` shows the picture of a file under the line of a
+position of the current buffer: a PNG, JPEG, WebP or GIF file on this host,
+of which a picture that moves shows its first frame. The picture is no
+text. It has rows of its own, which point is never on, and the window
+scrolls through them row by row. It is as large as the file says, and no
+larger than the rows and columns that the third and fourth arguments
+give: 16 rows and the width of the window without them.
+
+```scheme
+(define first (add-image! (point) "~/pictures/plan.png"))
+(add-image! (point) "chart.png" 8)      ; no more than 8 rows
+(remove-image! first)
+(clear-images!)
+```
+
+A picture stays with the char that it is at as the text around it changes,
+and goes when that char is deleted or the text is replaced, so code that
+writes a buffer anew adds its pictures anew. `(buffer-images)` lists them.
+
+Only a frame that draws pictures shows them, which a window does and a
+terminal does not: `(frame-draws-images?)`. In a terminal the picture takes
+no rows, so the text has to say what is there. The file is read on a
+thread, and a file that is no picture shows nothing; `*Messages*` says why.
+
+`inline-images-mode` does this for the pictures that the text names:
+`![text](file)` in Markdown and `[[file]]` in Org. Another mode joins with
+a procedure that finds the names in its text:
+
+```scheme
+(define-image-finder 'my-mode
+  (lambda () (image-links-matching "^image: (\\S+)$" 1)))
+```
+
 ## Lines that are hidden
 
 `(hide-lines! start end)` hides the lines of the current buffer that the

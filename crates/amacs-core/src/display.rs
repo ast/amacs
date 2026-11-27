@@ -64,6 +64,9 @@ pub struct Flow<'a> {
     pub tab_width: usize,
     pub words: bool,
     pub folds: &'a Folds,
+    /// The pictures shown under lines, in the order of their anchors,
+    /// each with the rows that it takes.
+    pub images: &'a [crate::image::BufferImage],
     /// Chars within lines that get no cells: markup, while it is hidden.
     /// Ranges in order and apart, none across the end of a line.
     pub hidden: &'a [Range<usize>],
@@ -140,6 +143,7 @@ impl Flow<'static> {
             tab_width,
             words: false,
             folds: &NO_FOLDS,
+            images: &[],
             hidden: &[],
             reveal: (0, 0),
             headings: &[],
@@ -160,6 +164,9 @@ pub struct Row {
     pub continued: bool,
     /// Lines are hidden after this row, which ends its line.
     pub folded: bool,
+    /// The rows of pictures that follow this row, which ends its line:
+    /// those of the pictures that are anchored in the line.
+    pub extra: usize,
 }
 
 impl Row {
@@ -213,6 +220,7 @@ pub fn walk_row(
                 next: Some(pos),
                 continued: true,
                 folded: false,
+                extra: 0,
             };
         }
         if c != '\n' && hidden.at(pos) {
@@ -232,6 +240,7 @@ pub fn walk_row(
                 },
                 continued: false,
                 folded: hidden_to.is_some(),
+                extra: picture_rows(text, pos, &flow),
             };
         }
         // A tab never needs more than a whole row.
@@ -246,6 +255,7 @@ pub fn walk_row(
                 next: Some(pos),
                 continued: true,
                 folded: false,
+                extra: 0,
             };
         }
         visit(pos, c, col, cells);
@@ -258,7 +268,32 @@ pub fn walk_row(
         next: None,
         continued: false,
         folded: false,
+        extra: picture_rows(text, pos, &flow),
     }
+}
+
+/// The rows that the pictures take which are anchored in the line that
+/// ends at `line_end`.
+fn picture_rows(text: &Text, line_end: usize, flow: &Flow) -> usize {
+    if flow.images.is_empty() {
+        return 0;
+    }
+    line_images(text, line_end, flow.images)
+        .iter()
+        .map(crate::image::BufferImage::rows)
+        .sum()
+}
+
+/// The pictures that are anchored in the line that ends at `line_end`.
+pub fn line_images<'a>(
+    text: &Text,
+    line_end: usize,
+    images: &'a [crate::image::BufferImage],
+) -> &'a [crate::image::BufferImage] {
+    let line_start = text.line_start(text.line_of(line_end));
+    let first = images.partition_point(|image| image.pos < line_start);
+    let after = images.partition_point(|image| image.pos <= line_end);
+    &images[first..after.max(first)]
 }
 
 /// Where the row that starts at `start` is broken between words: just
@@ -295,7 +330,7 @@ fn word_break(text: &Text, start: usize, budget: usize, flow: &Flow) -> Option<u
     None
 }
 
-fn row_at(text: &Text, start: usize, width: usize, flow: Flow) -> Row {
+pub(crate) fn row_at(text: &Text, start: usize, width: usize, flow: Flow) -> Row {
     walk_row(text, start, width, flow, |_, _, _, _| {})
 }
 
@@ -318,38 +353,126 @@ pub fn row_containing(text: &Text, pos: usize, width: usize, flow: Flow) -> (usi
     }
 }
 
-/// Start of the row `n` rows after `row_start`, stopping at the last row.
-pub fn rows_forward(text: &Text, row_start: usize, n: usize, width: usize, flow: Flow) -> usize {
-    let mut start = row_start;
+/// The first row of a window: the start of a row of text, and how many
+/// rows of that row and the pictures under it are above the window. With
+/// 0 the window starts with the text of the row.
+pub type Top = (usize, usize);
+
+/// The row `n` rows after `from`, stopping at the last row. The rows of
+/// pictures count as those of text do.
+pub fn rows_forward(text: &Text, from: Top, n: usize, width: usize, flow: Flow) -> Top {
+    let (mut start, skip) = from;
+    let mut row = row_at(text, start, width, flow);
+    let mut skip = skip.min(row.extra);
     for _ in 0..n {
-        match row_at(text, start, width, flow).next {
-            Some(next) => start = next,
+        if skip < row.extra {
+            skip += 1;
+            continue;
+        }
+        match row.next {
+            Some(next) => {
+                start = next;
+                skip = 0;
+                row = row_at(text, start, width, flow);
+            }
             None => break,
         }
     }
-    start
+    (start, skip)
 }
 
-/// Start of the row `n` rows before `row_start`, stopping at the first row.
-pub fn rows_back(text: &Text, row_start: usize, n: usize, width: usize, flow: Flow) -> usize {
-    let row_start = flow.folds.visible(row_start);
+/// The row `n` rows before `from`, stopping at the first row.
+pub fn rows_back(text: &Text, from: Top, n: usize, width: usize, flow: Flow) -> Top {
+    let row_start = flow.folds.visible(from.0);
+    if from.1 > 0 {
+        let skip = from.1.min(row_at(text, row_start, width, flow).extra);
+        if skip >= n {
+            return (row_start, skip - n);
+        }
+        return rows_back(text, (row_start, 0), n - skip, width, flow);
+    }
     let mut line = text.line_of(row_start);
     let (_, index) = row_containing(text, row_start, width, flow);
     if index >= n {
-        return rows_forward(text, text.line_start(line), index - n, width, flow);
+        return rows_forward(text, (text.line_start(line), 0), index - n, width, flow);
     }
     let mut remaining = n - index;
     while let Some(before) = flow.folds.previous_line(text, line) {
         line = before;
         let line_start = text.line_start(line);
-        let (_, last_index) = row_containing(text, text.line_end(line), width, flow);
-        let rows = last_index + 1;
+        let (last, last_index) = row_containing(text, text.line_end(line), width, flow);
+        // The pictures of a line are under the last of its rows.
+        let rows = last_index + 1 + row_at(text, last, width, flow).extra;
         if rows >= remaining {
-            return rows_forward(text, line_start, rows - remaining, width, flow);
+            let index = rows - remaining;
+            return if index <= last_index {
+                rows_forward(text, (line_start, 0), index, width, flow)
+            } else {
+                (last, index - last_index)
+            };
         }
         remaining -= rows;
     }
-    0
+    (0, 0)
+}
+
+/// The first position whose row of text a window that starts at `top`
+/// shows: the row after the first, where the window starts among that
+/// one's pictures and there is a row after it.
+pub fn first_text(text: &Text, top: Top, width: usize, flow: Flow) -> usize {
+    if top.1 == 0 {
+        return top.0;
+    }
+    let row = row_at(text, top.0, width, flow);
+    match row.next {
+        Some(next) if row.extra > 0 => next,
+        _ => top.0,
+    }
+}
+
+/// A row of text with what a window shows of it and of its pictures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shown {
+    pub row: Row,
+    /// The row of the window that the text is on, unless it is above the
+    /// window.
+    pub at: Option<usize>,
+    /// The rows of the window that its pictures are on.
+    pub pictures: Range<usize>,
+    /// Which of the rows of its pictures the first of those is.
+    pub first_picture: usize,
+}
+
+/// What a window of `rows` rows shows from `top`: the rows of text in
+/// order, each with where it and its pictures are.
+pub fn shown_rows(text: &Text, top: Top, rows: usize, width: usize, flow: Flow) -> Vec<Shown> {
+    let mut shown = Vec::new();
+    let (mut start, mut skip) = top;
+    let mut at = 0;
+    while at < rows {
+        let row = row_at(text, start, width, flow);
+        let skip_here = skip.min(row.extra);
+        let text_at = (skip_here == 0).then_some(at);
+        if skip_here == 0 {
+            at += 1;
+        }
+        let first_picture = skip_here.saturating_sub(1);
+        let pictures = at..(at + row.extra - first_picture).min(rows);
+        at = pictures.end.max(at);
+        let next = row.next;
+        shown.push(Shown {
+            row,
+            at: text_at,
+            pictures,
+            first_picture,
+        });
+        match next {
+            Some(next) => start = next,
+            None => break,
+        }
+        skip = 0;
+    }
+    shown
 }
 
 /// Display column of `pos`, counted from the start of its line.
@@ -476,13 +599,13 @@ mod tests {
         // Rows at width 5: "abcd" "efgh" | "xy" | "" (after the last newline).
         let text = Text::from("abcdefgh\nxy\n");
         let last = text.len();
-        assert_eq!(rows_back(&text, last, 1, 5, Flow::chars(8)), 9);
-        assert_eq!(rows_back(&text, last, 2, 5, Flow::chars(8)), 4);
-        assert_eq!(rows_back(&text, last, 3, 5, Flow::chars(8)), 0);
-        assert_eq!(rows_back(&text, last, 99, 5, Flow::chars(8)), 0);
-        assert_eq!(rows_back(&text, 4, 1, 5, Flow::chars(8)), 0);
-        assert_eq!(rows_forward(&text, 0, 2, 5, Flow::chars(8)), 9);
-        assert_eq!(rows_forward(&text, 0, 99, 5, Flow::chars(8)), last);
+        assert_eq!(rows_back(&text, (last, 0), 1, 5, Flow::chars(8)).0, 9);
+        assert_eq!(rows_back(&text, (last, 0), 2, 5, Flow::chars(8)).0, 4);
+        assert_eq!(rows_back(&text, (last, 0), 3, 5, Flow::chars(8)).0, 0);
+        assert_eq!(rows_back(&text, (last, 0), 99, 5, Flow::chars(8)).0, 0);
+        assert_eq!(rows_back(&text, (4, 0), 1, 5, Flow::chars(8)).0, 0);
+        assert_eq!(rows_forward(&text, (0, 0), 2, 5, Flow::chars(8)).0, 9);
+        assert_eq!(rows_forward(&text, (0, 0), 99, 5, Flow::chars(8)).0, last);
     }
 
     #[test]
@@ -515,8 +638,8 @@ mod tests {
         // Rows are counted and walked by the same breaks.
         let text = Text::from("the quick brown fox");
         assert_eq!(row_containing(&text, 12, 12, words), (10, 1));
-        assert_eq!(rows_forward(&text, 0, 1, 12, words), 10);
-        assert_eq!(rows_back(&text, 10, 1, 12, words), 0);
+        assert_eq!(rows_forward(&text, (0, 0), 1, 12, words).0, 10);
+        assert_eq!(rows_back(&text, (10, 0), 1, 12, words).0, 0);
     }
 
     #[test]

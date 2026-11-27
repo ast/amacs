@@ -146,13 +146,66 @@ fn the_gpu_draws_what_the_cpu_draws() {
     // Nothing happened: both have nothing to do, and the picture stays.
     pair.check("idle");
 
+    // A picture, with pixels that are clear and half clear, under a line,
+    // and the window scrolled into the middle of it.
+    let (cell_w, cell_h) = pair.cpu.cell_size();
+    pair.editor.handle_event(InputEvent::Resize {
+        cols: 64,
+        rows: 14,
+        cell: Some((cell_w as u16, cell_h as u16)),
+    });
+    let (width, height) = (cell_w * 5 + 3, cell_h * 3 - 2);
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("gpu-picture.png");
+    {
+        let out = std::fs::File::create(&file).unwrap();
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(out), width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let data: Vec<u8> = (0..width * height)
+            .flat_map(|index| {
+                let (x, y) = (index % width, index / width);
+                [
+                    (x * 5) as u8,
+                    (y * 7) as u8,
+                    90,
+                    [255, 128, 0][((x / 9 + y / 9) % 3) as usize],
+                ]
+            })
+            .collect();
+        encoder
+            .write_header()
+            .and_then(|mut writer| writer.write_image_data(&data))
+            .unwrap();
+    }
+    pair.editor.add_image(0, &file, None, None);
+    pair.check("picture");
+    pair.keys("M-<");
+    pair.check("picture from the top");
+    pair.keys("M-x");
+    for c in "scroll-up-line".chars() {
+        pair.editor.handle_event(InputEvent::Key(Key::char(c)));
+    }
+    pair.keys("RET M-x");
+    for c in "scroll-up-line".chars() {
+        pair.editor.handle_event(InputEvent::Key(Key::char(c)));
+    }
+    pair.keys("RET");
+    pair.check("picture scrolled into");
+    pair.editor.buffer_mut().clear_images();
+    pair.check("picture gone");
+
     // Another size of font and of picture, with a part of a cell left over
     // at the edges.
     pair.cpu.set_font_size(20.0);
     pair.gpu.set_font_size(20.0);
     let (cell_w, cell_h) = pair.cpu.cell_size();
-    pair.editor
-        .handle_event(InputEvent::Resize { cols: 40, rows: 8 });
+    pair.editor.handle_event(InputEvent::Resize {
+        cols: 40,
+        rows: 8,
+        cell: None,
+    });
     pair.resize(40 * cell_w + 5, 8 * cell_h + 3);
     pair.check("resized");
     for keys in ["C-a", "C-p", "C-x h", "C-g"] {
@@ -170,8 +223,11 @@ fn more_glyphs_than_the_atlas_holds_are_still_drawn() {
     pair.cpu.set_font_size(96.0);
     pair.gpu.set_font_size(96.0);
     let (cell_w, cell_h) = pair.cpu.cell_size();
-    pair.editor
-        .handle_event(InputEvent::Resize { cols: 30, rows: 10 });
+    pair.editor.handle_event(InputEvent::Resize {
+        cols: 30,
+        rows: 10,
+        cell: None,
+    });
     pair.resize(30 * cell_w, 10 * cell_h);
     let alphabet: String = ('!'..='~').chain('À'..='ž').collect();
     for round in 0..12 {
@@ -208,7 +264,11 @@ fn timing_of_both_backends_at_4k() {
     };
     let (cell_w, cell_h) = pair.cpu.cell_size();
     let (cols, rows) = ((3840 / cell_w) as u16, (2160 / cell_h) as u16);
-    pair.editor.handle_event(InputEvent::Resize { cols, rows });
+    pair.editor.handle_event(InputEvent::Resize {
+        cols,
+        rows,
+        cell: None,
+    });
     pair.resize(3840, 2160);
     // Every line is another, so that a page of scrolling changes every row.
     let text: String = (0..usize::from(rows) * 6)

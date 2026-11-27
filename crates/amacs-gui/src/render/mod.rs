@@ -38,8 +38,8 @@ use std::path::Path;
 use amacs_proto::{Color, DrawOp, SubpixelOrder};
 
 pub use gpu::Gpu;
-pub use list::{Frame, GlyphQuad, Quad, Row};
-pub use scene::Scene;
+pub use list::{Frame, GlyphQuad, ImageQuad, Quad, Row};
+pub use scene::{Image, Images, Scene};
 pub use software::Software;
 pub use text::{Fonts, GlyphContent, GlyphImage, GlyphKey, GlyphSource};
 
@@ -224,6 +224,7 @@ impl<B: Backend> Renderer<B> {
             background: self.scene.colors(0).1,
             full,
             rows: &self.rows,
+            images: self.scene.images(),
             changed: &changed,
             cursor,
         };

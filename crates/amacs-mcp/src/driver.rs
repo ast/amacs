@@ -185,8 +185,16 @@ impl Driver {
             let (cell_w, cell_h) = renderer.cell_size();
             renderer.resize(u32::from(cols) * cell_w, u32::from(rows) * cell_h);
         }
-        self.send(InputEvent::Resize { cols, rows })?;
+        let cell = self.cell();
+        self.send(InputEvent::Resize { cols, rows, cell })?;
         self.sync()
+    }
+
+    /// The size of a cell of the picture of the frame, once there is one:
+    /// from then on the frame has pictures in it.
+    fn cell(&self) -> Option<(u16, u16)> {
+        let (width, height) = self.renderer.as_ref()?.cell_size();
+        Some((u16::try_from(width).ok()?, u16::try_from(height).ok()?))
     }
 
     /// The frame as text, with where the cursor is.
@@ -228,7 +236,8 @@ impl Driver {
             self.renderer = Some(renderer);
             // The renderer has seen nothing yet: have everything drawn anew.
             let (cols, rows) = self.size;
-            self.send(InputEvent::Resize { cols, rows })?;
+            let cell = self.cell();
+            self.send(InputEvent::Resize { cols, rows, cell })?;
         }
         self.sync()?;
         let renderer = self.renderer.as_mut().expect("made above");

@@ -23,6 +23,9 @@ pub(crate) struct Frame {
     pub minibuffer_window: WindowId,
     /// Columns and rows.
     pub size: (u16, u16),
+    /// The width and height of a cell in pixels, in a frame whose
+    /// frontend draws pictures. In one without it, pictures take no rows.
+    pub cell: Option<(u16, u16)>,
     pub redisplay: RedisplayState,
     /// The message in the echo area.
     pub echo: Option<String>,
@@ -69,6 +72,7 @@ impl Editor {
             selected,
             minibuffer_window,
             size: (cols, rows),
+            cell: None,
             redisplay: RedisplayState::default(),
             echo: None,
             hint: Vec::new(),

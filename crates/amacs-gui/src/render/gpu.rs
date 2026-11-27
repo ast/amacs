@@ -16,12 +16,13 @@
 use std::collections::HashMap;
 
 use amacs_gpu_surface::WindowSurface;
-use amacs_proto::Color;
+use amacs_proto::{Color, ImageId};
 use anyhow::{Context, Result, bail};
 use wayland_client::Connection;
 use wayland_client::protocol::wl_surface::WlSurface;
 
 use super::list::{Frame, Row};
+use super::scene::{Image, Images};
 use super::text::{GlyphContent, GlyphKey, GlyphSource};
 use super::{Backend, Rect};
 
@@ -32,6 +33,7 @@ struct Globals {
 };
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
+@group(0) @binding(2) var pictures: texture_2d<f32>;
 
 struct Instance {
     // In pixels: left, top, width, height.
@@ -41,7 +43,8 @@ struct Instance {
     @location(2) color: vec4<f32>,
     // 0: a rectangle of the colour. 1: a glyph that is a mask for the
     // colour. 2: a glyph with colours of its own. 3: a glyph that is a
-    // mask for each channel of the colour.
+    // mask for each channel of the colour. 4: a piece of a picture, whose
+    // texels are those of the other texture.
     @location(3) kind: vec4<f32>,
 };
 
@@ -74,6 +77,9 @@ fn fragment(corner: Corner) -> @location(0) vec4<f32> {
     if corner.kind < 0.5 {
         return corner.color;
     }
+    if corner.kind > 3.5 {
+        return textureLoad(pictures, vec2<i32>(floor(corner.uv)), 0);
+    }
     let texel = textureLoad(atlas, vec2<i32>(floor(corner.uv)), 0);
     if corner.kind < 1.5 {
         return vec4<f32>(corner.color.rgb, texel.a);
@@ -96,6 +102,11 @@ fn fragment_dual(corner: Corner) -> Fragments {
     out.color = corner.color;
     if corner.kind < 0.5 {
         out.coverage = vec4<f32>(corner.color.a);
+        return out;
+    }
+    if corner.kind > 3.5 {
+        out.color = textureLoad(pictures, vec2<i32>(floor(corner.uv)), 0);
+        out.coverage = vec4<f32>(out.color.a);
         return out;
     }
     let texel = textureLoad(atlas, vec2<i32>(floor(corner.uv)), 0);
@@ -298,6 +309,107 @@ impl Atlas {
 /// The atlas has no room for another glyph.
 struct Full;
 
+/// The texture of pictures is square, with a side of at most this many
+/// texels: a few screens of them.
+const PICTURES_SIDE: u32 = 4096;
+
+/// The pictures that rows show, in one texture, packed in rows from the top.
+struct Pictures {
+    texture: wgpu::Texture,
+    side: u32,
+    /// Where each picture is: left, top, width, height. A picture too
+    /// large for the texture is remembered as not there.
+    slots: HashMap<ImageId, Option<[u32; 4]>>,
+    next: (u32, u32),
+    row_height: u32,
+}
+
+impl Pictures {
+    fn new(device: &wgpu::Device) -> Self {
+        let side = PICTURES_SIDE.min(device.limits().max_texture_dimension_2d);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("pictures"),
+            size: wgpu::Extent3d {
+                width: side,
+                height: side,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        Self {
+            texture,
+            side,
+            slots: HashMap::new(),
+            next: (0, 0),
+            row_height: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.slots.clear();
+        self.next = (0, 0);
+        self.row_height = 0;
+    }
+
+    /// The place of a picture, which is put in the texture if it is not
+    /// there. `Err` if the texture is full.
+    fn slot(
+        &mut self,
+        queue: &wgpu::Queue,
+        id: ImageId,
+        image: &Image,
+    ) -> Result<Option<[u32; 4]>, Full> {
+        if let Some(slot) = self.slots.get(&id) {
+            return Ok(*slot);
+        }
+        let fits = image.width > 0
+            && image.height > 0
+            && image.width <= self.side
+            && image.height <= self.side;
+        if !fits {
+            self.slots.insert(id, None);
+            return Ok(None);
+        }
+        if self.next.0 + image.width > self.side {
+            self.next = (0, self.next.1 + self.row_height);
+            self.row_height = 0;
+        }
+        if self.next.1 + image.height > self.side {
+            return Err(Full);
+        }
+        let (x, y) = self.next;
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &image.rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(image.width * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: image.width,
+                height: image.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.next.0 += image.width;
+        self.row_height = self.row_height.max(image.height);
+        let slot = Some([x, y, image.width, image.height]);
+        self.slots.insert(id, slot);
+        Ok(slot)
+    }
+}
+
 /// What the GPU draws into.
 enum Target {
     Window {
@@ -327,6 +439,7 @@ pub struct Gpu {
     /// How many instances the buffer has room for.
     capacity: u64,
     atlas: Atlas,
+    pictures: Pictures,
     width: u32,
     height: u32,
     drawn_cursor: Option<Rect>,
@@ -448,6 +561,16 @@ impl Gpu {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -553,6 +676,7 @@ impl Gpu {
             mapped_at_creation: false,
         });
         let atlas = Atlas::new(&device, dual_source);
+        let pictures = Pictures::new(&device);
         let bindings = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("quads"),
             layout: &layout,
@@ -565,6 +689,14 @@ impl Gpu {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(
                         &atlas
+                            .texture
+                            .create_view(&wgpu::TextureViewDescriptor::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(
+                        &pictures
                             .texture
                             .create_view(&wgpu::TextureViewDescriptor::default()),
                     ),
@@ -588,6 +720,7 @@ impl Gpu {
             instances,
             capacity,
             atlas,
+            pictures,
             width: 0,
             height: 0,
             drawn_cursor: None,
@@ -629,7 +762,7 @@ impl Gpu {
     fn build(&mut self, frame: &Frame, glyphs: &mut dyn GlyphSource) -> Result<Vec<f32>, Full> {
         let mut out = Vec::new();
         for row in frame.rows {
-            self.build_row(row, glyphs, &mut out)?;
+            self.build_row(row, frame.images, glyphs, &mut out)?;
         }
         if let Some(cell) = frame.cursor {
             push(&mut out, quad(cell), [0.0; 4], [1.0; 4], 0.0);
@@ -640,6 +773,7 @@ impl Gpu {
     fn build_row(
         &mut self,
         row: &Row,
+        images: &Images,
         glyphs: &mut dyn GlyphSource,
         out: &mut Vec<f32>,
     ) -> Result<(), Full> {
@@ -659,6 +793,35 @@ impl Gpu {
             (row.area.x + row.area.w).min(self.width) as i32,
             (row.area.y + row.area.h).min(self.height) as i32,
         );
+        for picture in &row.images {
+            let Some(image) = images.get(&picture.id) else {
+                continue;
+            };
+            let Some([slot_x, slot_y, width, height]) =
+                self.pictures.slot(&self.queue, picture.id, image)?
+            else {
+                continue;
+            };
+            let (x0, y0) = (picture.x.max(clip.0), picture.y.max(clip.1));
+            let x1 = (picture.x + picture.w as i32).min(clip.2);
+            let y1 = (picture.y + picture.h as i32).min(clip.3);
+            if x0 >= x1 || y0 >= y1 || picture.w == 0 || picture.h == 0 {
+                continue;
+            }
+            // So many texels of the picture to a pixel of the screen.
+            let (step_x, step_y) = (
+                width as f32 / picture.w as f32,
+                height as f32 / picture.h as f32,
+            );
+            let rect = [x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32];
+            let uv = [
+                slot_x as f32 + (x0 - picture.x) as f32 * step_x,
+                slot_y as f32 + (y0 - picture.y) as f32 * step_y,
+                rect[2] * step_x,
+                rect[3] * step_y,
+            ];
+            push(out, rect, uv, [1.0; 4], 4.0);
+        }
         for glyph in &row.glyphs {
             let Some(slot) = self.atlas.slot(&self.queue, glyphs, glyph.key)? else {
                 continue;
@@ -880,6 +1043,7 @@ impl Backend for Gpu {
             Ok(floats) => floats,
             Err(Full) => {
                 self.atlas.clear();
+                self.pictures.clear();
                 self.build(frame, glyphs).unwrap_or_default()
             }
         };

@@ -17,7 +17,11 @@ pub fn translate(event: Event) -> Option<InputEvent> {
                 .map(|key| if legacy { legacy_key(key) } else { key })
                 .map(InputEvent::Key)
         }
-        Event::Resize(cols, rows) => Some(InputEvent::Resize { cols, rows }),
+        Event::Resize(cols, rows) => Some(InputEvent::Resize {
+            cols,
+            rows,
+            cell: None,
+        }),
         Event::Paste(text) => Some(InputEvent::Paste(
             text.replace("\r\n", "\n").replace('\r', "\n"),
         )),

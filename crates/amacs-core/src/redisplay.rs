@@ -5,13 +5,17 @@
 
 use std::collections::HashMap;
 
-use amacs_proto::{CursorShape, DisplayLine, DrawOp, FaceId, PaneId, PaneRect};
+use std::collections::{HashSet, VecDeque};
+
+use amacs_proto::{
+    CursorShape, DisplayLine, DrawOp, FaceId, ImageId, ImageSlice, PaneId, PaneRect,
+};
 
 use crate::buffer::{Buffer, LineNumbers};
 use crate::decorate::RowContext;
 use crate::display::{
-    char_cells, column_of, overlay_cells, push_glyph, row_containing, rows_back, str_cells,
-    walk_row,
+    char_cells, column_of, line_images, overlay_cells, push_glyph, row_at, row_containing,
+    rows_back, shown_rows, str_cells, walk_row,
 };
 use crate::editor::Editor;
 use crate::faces;
@@ -28,6 +32,8 @@ pub(crate) struct RedisplayState {
     layout: Vec<PaneRect>,
     lines: HashMap<PaneId, Vec<DisplayLine>>,
     cursor: Option<(PaneId, u16, u16)>,
+    /// The pictures that the frontend has.
+    images: HashSet<ImageId>,
 }
 
 impl RedisplayState {
@@ -119,6 +125,7 @@ impl Editor {
     /// nothing changed.
     pub fn redisplay(&mut self) -> Vec<DrawOp> {
         self.relayout();
+        self.place_images();
         let leaves = self.frame().layout.leaves();
         for id in &leaves {
             let buffer = self.windows[*id].buffer;
@@ -224,6 +231,35 @@ impl Editor {
             state.layout = layout;
             state.size = size;
         }
+        // A picture is sent before the first row that shows it.
+        let shown: HashSet<ImageId> = panes
+            .iter()
+            .flat_map(|(_, lines)| lines)
+            .flat_map(|line| &line.images)
+            .map(|slice| slice.id)
+            .collect();
+        for id in &shown {
+            if state.images.contains(id) {
+                continue;
+            }
+            if let Some(picture) = self.images.picture(*id) {
+                ops.push(DrawOp::DefineImage {
+                    id: *id,
+                    width: picture.width,
+                    height: picture.height,
+                    rgba: picture.rgba.clone(),
+                });
+                state.images.insert(*id);
+            }
+        }
+        let mut panes = panes;
+        for (_, lines) in &mut panes {
+            // What could not be sent is not shown.
+            for line in lines {
+                line.images.retain(|slice| state.images.contains(&slice.id));
+            }
+        }
+        let dropped: Vec<ImageId> = state.images.difference(&shown).copied().collect();
         for (rect, lines) in panes {
             let old = state.lines.get(&rect.id);
             let unchanged = |row: usize| old.and_then(|old| old.get(row)) == Some(&lines[row]);
@@ -252,6 +288,12 @@ impl Editor {
                 .iter()
                 .any(|rect| rect.id == *pane && *row < rect.h && *col < rect.w)
         });
+        if !dropped.is_empty() {
+            for id in &dropped {
+                state.images.remove(id);
+            }
+            ops.push(DrawOp::DropImages(dropped));
+        }
         if cursor != state.cursor || !ops.is_empty() {
             if let Some((pane, row, col)) = cursor {
                 ops.push(DrawOp::Cursor {
@@ -281,31 +323,59 @@ impl Editor {
         let (text, tab) = (buffer.text(), self.window_flow(id));
         let point = buffer.marker(window.point);
         // Edits can leave the start marker in the middle of a row.
-        let (mut start, _) = row_containing(text, buffer.marker(window.start), width, tab);
+        let (start, _) = row_containing(text, buffer.marker(window.start), width, tab);
+        let mut top = (
+            start,
+            window.skip.min(row_at(text, start, width, tab).extra),
+        );
 
-        let mut visible = false;
-        let mut pos = start;
-        for _ in 0..rows {
-            let row = walk_row(text, pos, width, tab, |_, _, _, _| {});
-            if row.contains(point) {
-                visible = true;
-                break;
-            }
-            match row.next {
-                Some(next) => pos = next,
-                None => break,
-            }
-        }
+        // Point is in sight when the text of its row is: not when only
+        // the pictures under it are.
+        let visible = shown_rows(text, top, rows, width, tab)
+            .iter()
+            .any(|shown| shown.at.is_some() && shown.row.contains(point));
         if !visible {
             let (point_row, _) = row_containing(text, point, width, tab);
-            start = if point < start {
-                point_row
+            top = if point < start {
+                (point_row, 0)
             } else {
-                rows_back(text, point_row, rows - 1, width, tab)
+                rows_back(text, (point_row, 0), rows - 1, width, tab)
             };
         }
         let (marker, buffer) = (window.start, window.buffer);
-        self.buffers[buffer].set_marker(marker, start);
+        self.buffers[buffer].set_marker(marker, top.0);
+        self.windows[id].skip = top.1;
+    }
+
+    /// The rows of the pictures under the line that ends at `line_end`,
+    /// in a window with so many columns for line numbers and for text.
+    fn picture_lines(
+        &self,
+        buffer: &Buffer,
+        line_end: usize,
+        gutter: usize,
+        indent: usize,
+        width: usize,
+    ) -> Vec<DisplayLine> {
+        let mut lines = Vec::new();
+        for image in line_images(buffer.text(), line_end, buffer.images()) {
+            let Some(placed) = image.placed else {
+                continue;
+            };
+            for band in 0..placed.rows {
+                let mut line = DisplayLine::default();
+                line.push(&" ".repeat(gutter), faces::LINE_NUMBER);
+                line.images.push(ImageSlice {
+                    id: placed.image,
+                    col: (gutter + indent) as u16,
+                    cols: placed.cols.min((width - indent) as u16).max(1),
+                    band,
+                    bands: placed.rows,
+                });
+                lines.push(line);
+            }
+        }
+        lines
     }
 
     /// The rows of a window's text area and the cell that point is on.
@@ -341,10 +411,38 @@ impl Editor {
         let mut lines = Vec::with_capacity(rows);
         let mut cursor = None;
         let mut pos = Some(window_start);
+        // Pictures are indented as the text of their line is.
+        let picture_indent =
+            |start: usize| tab.indent(text, start, width).min(width.saturating_sub(1));
+        // The rows of pictures that come before the next row of text.
+        let mut pictures: VecDeque<DisplayLine> = VecDeque::new();
+        if window.skip > 0 && !buffer.images().is_empty() {
+            // The window starts among the pictures of its first row.
+            let first = row_at(text, window_start, width, tab);
+            if first.extra > 0 {
+                let skipped = window.skip.min(first.extra) - 1;
+                pictures.extend(
+                    self.picture_lines(
+                        buffer,
+                        first.end,
+                        gutter,
+                        picture_indent(first.start),
+                        width,
+                    )
+                    .into_iter()
+                    .skip(skipped),
+                );
+                pos = first.next;
+            }
+        }
         let mut glyph = String::new();
         // Labels to draw on the row: column and keys.
         let mut labels: Vec<(usize, &str)> = Vec::new();
         for row_index in 0..rows {
+            if let Some(line) = pictures.pop_front() {
+                lines.push(line);
+                continue;
+            }
             let Some(start) = pos else {
                 lines.push(DisplayLine::default());
                 continue;
@@ -473,6 +571,15 @@ impl Editor {
                 }
             }
             lines.push(line);
+            if row.extra > 0 {
+                pictures.extend(self.picture_lines(
+                    buffer,
+                    row.end,
+                    gutter,
+                    picture_indent(start),
+                    width,
+                ));
+            }
             pos = row.next;
         }
         (lines, cursor)

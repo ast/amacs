@@ -183,6 +183,11 @@ the ones that are still not there, the ones that need the core first.
 
 - [ ] Tables are lined up by changing the text. Showing an unaligned table
       aligned without touching it needs virtual text in redisplay.
+- [ ] Pictures are drawn in a window only. A terminal that has the
+      graphics protocol of kitty could show them too, with its
+      placeholder chars, which fit rows that are sent one by one.
+- [ ] A picture is of a file on this host. One on another host, or at a
+      web address, would have to be fetched first.
 - [ ] `hide-markup-mode` hides the markup of Markdown since 2026-11-27,
       by the captures `conceal` of `queries/markdown-inline.scm`. Left:
       images, links that are only text in brackets, the backslash of an
