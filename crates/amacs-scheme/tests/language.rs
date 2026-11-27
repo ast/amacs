@@ -98,6 +98,64 @@ fn tail_calls_do_not_grow_the_stack() {
 }
 
 #[test]
+fn a_loop_that_calls_itself_starts_afresh() {
+    // Each turn has variables of its own, for the closures made in it.
+    assert_eq!(
+        run("(let loop ((i 0) (made '()))
+               (if (= i 3)
+                   (map (lambda (f) (f)) made)
+                   (loop (+ i 1) (cons (lambda () i) made))))"),
+        "(2 1 0)"
+    );
+    assert_eq!(
+        run("(let loop ((i 0) (made '()))
+               (if (= i 3)
+                   (map (lambda (f) (f)) made)
+                   (let ((f (lambda () (set! i (+ i 10)) i)))
+                     (loop (+ i 1) (cons f made)))))"),
+        "(12 11 10)"
+    );
+    // A definition in the body has no value left over from the turn before.
+    assert_eq!(
+        run("(let loop ((i 0))
+               (define a (if (= i 1) b 1))
+               (define b 2)
+               (if (= i 1) a (loop (+ i 1))))"),
+        "error: test.scm:2:38: a variable is used before its definition has been reached"
+    );
+    // A definition inside a body is a loop too.
+    assert_eq!(
+        run("(define (sum n)
+               (define (go i acc) (if (= i n) acc (go (+ i 1) (+ acc i))))
+               (go 0 0))
+             (sum 300000)"),
+        "44999850000"
+    );
+    // The name may come to mean something else, by assignment or by a
+    // binding nearer to the call.
+    assert_eq!(
+        run("(let loop ((i 0))
+               (if (= i 0)
+                   (begin (set! loop (lambda (i) 'other)) (loop 1))
+                   'itself))"),
+        "other"
+    );
+    assert_eq!(
+        run("(let loop ((i 0)) (let ((loop (lambda (x) 'nearer))) (loop i)))"),
+        "nearer"
+    );
+    // A call from a function inside the loop is an ordinary call.
+    assert_eq!(
+        run("(let loop ((i 0)) (if (= i 3) i ((lambda () (loop (+ i 1))))))"),
+        "3"
+    );
+    assert_eq!(
+        run("(let loop ((i 0)) (if (= i 0) (loop 1 2) i))"),
+        "error: test.scm:1:31: loop: expected 1 argument, got 2"
+    );
+}
+
+#[test]
 fn special_forms() {
     assert_eq!(
         run("(list (if #f #f) (if '() 1 2) (when #f 1) (unless #f 1 2))"),

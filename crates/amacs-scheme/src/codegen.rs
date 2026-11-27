@@ -125,6 +125,20 @@ impl Gen<'_> {
         var.func == self.lambda.func
     }
 
+    /// Whether a call of `callee` with that many arguments is a call of
+    /// the function being compiled, by the variable that holds it.
+    fn calls_itself(&self, callee: &Expr, args: usize) -> bool {
+        let (Expr::Local(var) | Expr::LocalAt(var, _)) = callee else {
+            return false;
+        };
+        self.lambda.self_var.as_ref().is_some_and(|own| {
+            Rc::ptr_eq(own, var)
+                && !own.mutated.get()
+                && !self.lambda.rest
+                && self.lambda.required == args
+        })
+    }
+
     fn load(&mut self, var: &Rc<Var>) {
         let op = match (self.is_local(var), var.in_cell()) {
             (true, true) => Op::LocalCell(var.slot),
@@ -254,6 +268,14 @@ impl Gen<'_> {
                 }
                 self.note(*span);
                 self.emit(Op::Intrinsic(*index));
+            }
+            Expr::Call(callee, args, span) if tail && self.calls_itself(callee, args.len()) => {
+                for arg in args {
+                    self.expr(arg, false)?;
+                }
+                self.note(*span);
+                self.emit(Op::TailSelf);
+                return Ok(());
             }
             Expr::Call(callee, args, span) => {
                 self.expr(callee, false)?;

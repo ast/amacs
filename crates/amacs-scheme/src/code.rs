@@ -49,6 +49,11 @@ pub enum Op {
     Call(u8),
     /// The same, in place of the running call.
     TailCall(u8),
+    /// Call the running procedure again in place of the running call: its
+    /// parameters take the values on top of the stack and it starts over.
+    /// For a loop, where the compiler can tell that the call is of the
+    /// procedure itself.
+    TailSelf,
     Return,
     /// Make a closure of one of the code's inner pieces of code.
     Closure(u32),

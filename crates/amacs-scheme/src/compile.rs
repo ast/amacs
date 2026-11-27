@@ -196,6 +196,11 @@ pub struct Lambda {
     pub locals: u16,
     /// Whether this is a form of the top level rather than a `lambda`.
     pub toplevel: bool,
+    /// The local variable that the function is the first value of, as in
+    /// a named `let` or a definition inside a body. For as long as nothing
+    /// assigns to the variable, a call of it from the function's own body
+    /// is a call of the function itself.
+    pub self_var: Option<Rc<Var>>,
 }
 
 #[derive(Debug)]
@@ -245,6 +250,15 @@ enum BodyItem {
     /// Several variables from one expression that returns several values.
     DefineValues(Vec<Rc<Var>>, Option<Rc<Var>>, Syntax),
     Expr(Syntax),
+}
+
+/// Gives a recursive variable its first value. A function learns here
+/// which variable holds it, so that it can tell a call of itself.
+fn init_local(var: Rc<Var>, mut value: Expr) -> Expr {
+    if let Expr::Lambda(lambda) = &mut value {
+        lambda.self_var = Some(var.clone());
+    }
+    Expr::InitLocal(var, Box::new(value))
 }
 
 fn error(message: &str, at: &Syntax) -> Error {
@@ -360,6 +374,7 @@ impl<'a> Compiler<'a> {
             span: form.span,
             locals: func.next_slot,
             toplevel: true,
+            self_var: None,
         })
     }
 
@@ -732,7 +747,7 @@ impl<'a> Compiler<'a> {
                 let mut steps = Vec::new();
                 for (var, (ident, value)) in vars.iter().zip(&bindings) {
                     let value = self.named_expr(value, &scope, Some(ident.name))?;
-                    steps.push(Expr::InitLocal(var.clone(), Box::new(value)));
+                    steps.push(init_local(var.clone(), value));
                 }
                 steps.push(self.body(body, &scope, form)?);
                 Ok(Expr::Letrec(vars, Box::new(Expr::Begin(steps))))
@@ -984,6 +999,7 @@ impl<'a> Compiler<'a> {
             span,
             locals: func.next_slot,
             toplevel: false,
+            self_var: None,
         })))
     }
 
@@ -1058,7 +1074,7 @@ impl<'a> Compiler<'a> {
                 BodyItem::Define(var, value, name) => {
                     let value = self.named_expr(&value, &inner, name)?;
                     vars.push(var.clone());
-                    steps.push(Expr::InitLocal(var, Box::new(value)));
+                    steps.push(init_local(var, value));
                 }
                 BodyItem::DefineValues(targets, rest, value) => {
                     let list = self.values_as_list(&value, &inner)?;
@@ -1121,10 +1137,7 @@ impl<'a> Compiler<'a> {
                 let call = Expr::Call(Box::new(Expr::Local(var.clone())), values, form.span);
                 Ok(Expr::Letrec(
                     vec![var.clone()],
-                    Box::new(Expr::Begin(vec![
-                        Expr::InitLocal(var, Box::new(lambda)),
-                        call,
-                    ])),
+                    Box::new(Expr::Begin(vec![init_local(var, lambda), call])),
                 ))
             }
             [_, bindings, body @ ..] => {
@@ -1349,10 +1362,7 @@ impl<'a> Compiler<'a> {
         let call = Expr::Call(Box::new(Expr::Local(loop_var.clone())), inits, span);
         Ok(Expr::Letrec(
             vec![loop_var.clone()],
-            Box::new(Expr::Begin(vec![
-                Expr::InitLocal(loop_var, Box::new(lambda)),
-                call,
-            ])),
+            Box::new(Expr::Begin(vec![init_local(loop_var, lambda), call])),
         ))
     }
 

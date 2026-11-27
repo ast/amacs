@@ -785,9 +785,19 @@ impl Vm {
         Ok(())
     }
 
-    /// Calls the procedure that is on the stack under `nargs` arguments.
-    /// With `tail`, a closure takes the place of the running call.
-    fn call_value(&mut self, mut nargs: usize, tail: bool) -> Result<Flow, Error> {
+    /// Whether nothing waits to be seen to before the next call: garbage
+    /// to collect, a limit on the number of calls, a request to stop.
+    #[inline]
+    fn calm(&self) -> bool {
+        !self.core.heap.wants_collection()
+            && self.fuel.is_none()
+            && !self.interrupt.load(Ordering::Relaxed)
+    }
+
+    /// Sees to what [`Vm::calm`] found. Every call comes by here, and every
+    /// turn of a loop, so that code that does not end can be stopped.
+    #[cold]
+    fn attend(&mut self) -> Result<(), Error> {
         if self.core.heap.wants_collection() {
             self.collect();
         }
@@ -803,6 +813,15 @@ impl Vm {
             let mut error = Error::new("interrupted");
             error.payload = Some(self.core.alloc(Object::Escape(tag, Value::Void)));
             return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Calls the procedure that is on the stack under `nargs` arguments.
+    /// With `tail`, a closure takes the place of the running call.
+    fn call_value(&mut self, mut nargs: usize, tail: bool) -> Result<Flow, Error> {
+        if !self.calm() {
+            self.attend()?;
         }
         loop {
             let slot = self.fiber.stack.len() - nargs - 1;
@@ -1137,7 +1156,8 @@ impl Vm {
         'frame: loop {
             let frame = self.fiber.frames.last().expect("a call is in progress");
             let proto = frame.proto.clone();
-            let (base, closure) = (frame.base, frame.closure);
+            let base = frame.base;
+            let mut closure = frame.closure;
             let mut pc = frame.pc;
             let code = &proto.code[..];
             loop {
@@ -1244,13 +1264,82 @@ impl Vm {
                     Op::Call(nargs) | Op::TailCall(nargs) => {
                         self.save_pc(pc);
                         let tail = matches!(op, Op::TailCall(_));
-                        match self.call_value(usize::from(nargs), tail)? {
+                        let nargs = usize::from(nargs);
+                        // The usual case first: a closure that takes just
+                        // these arguments, and nothing else to see to.
+                        let slot = self.fiber.stack.len() - nargs - 1;
+                        if let Value::Obj(handle) = self.fiber.stack[slot]
+                            && let Object::Closure(callee) = self.core.heap.get(handle)
+                            && usize::from(callee.proto.required) == nargs
+                            && !callee.proto.rest
+                            && self.calm()
+                        {
+                            let locals = usize::from(callee.proto.locals);
+                            let stack = &mut self.fiber.stack;
+                            if tail {
+                                // The new call's values move down over the
+                                // old one's, and the frame is used again.
+                                stack.copy_within(slot.., base - 1);
+                                stack.truncate(base + nargs);
+                                stack.resize(base + locals, Value::Unbound);
+                                let frame =
+                                    self.fiber.frames.last_mut().expect("a call is in progress");
+                                frame.closure = handle;
+                                frame.pc = 0;
+                                if Rc::ptr_eq(&proto, &callee.proto) {
+                                    // The same code, as when a procedure
+                                    // calls itself: only start over.
+                                    closure = handle;
+                                    pc = 0;
+                                    continue;
+                                }
+                                frame.proto = callee.proto.clone();
+                                continue 'frame;
+                            }
+                            if self.fiber.frames.len() < self.max_depth {
+                                stack.resize(slot + 1 + locals, Value::Unbound);
+                                self.fiber.frames.push(Frame {
+                                    closure: handle,
+                                    proto: callee.proto.clone(),
+                                    pc: 0,
+                                    base: slot + 1,
+                                    cleanup: Cleanup::None,
+                                });
+                                continue 'frame;
+                            }
+                        }
+                        match self.call_value(nargs, tail)? {
                             Flow::Value => {}
                             Flow::Frame => continue 'frame,
                             Flow::Suspended(outcome) => return Ok(outcome),
                         }
                     }
+                    Op::TailSelf => {
+                        let required = usize::from(proto.required);
+                        let stack = &mut self.fiber.stack;
+                        let args = stack.len() - required;
+                        stack.copy_within(args.., base);
+                        // The other variables are without values again, as
+                        // in a call that has just begun.
+                        stack.truncate(base + required);
+                        stack.resize(base + usize::from(proto.locals), Value::Unbound);
+                        pc = 0;
+                        if !self.calm() {
+                            self.save_pc(pc);
+                            self.attend()?;
+                        }
+                    }
                     Op::Return => {
+                        if let [.., _, frame] = &self.fiber.frames[..]
+                            && matches!(frame.cleanup, Cleanup::None)
+                        {
+                            let stack = &mut self.fiber.stack;
+                            let result = stack.pop().expect("a call leaves a value");
+                            stack.truncate(base - 1);
+                            stack.push(result);
+                            self.fiber.frames.pop();
+                            continue 'frame;
+                        }
                         self.save_pc(pc);
                         match self.ret()? {
                             Some(outcome) => return Ok(outcome),

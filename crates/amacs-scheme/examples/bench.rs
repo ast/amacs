@@ -1,4 +1,5 @@
-//! Times a few small programs. Run with `--release`.
+//! Times a few small programs: each three times, and the best counts. Run
+//! with `--release`.
 
 use std::time::Instant;
 
@@ -12,6 +13,22 @@ const PROGRAMS: &[(&str, &str)] = &[
     (
         "loop of 3M turns calling a host procedure",
         "(let loop ((i 0) (sum 0)) (if (= i 3000000) sum (loop (+ i 1) (host-add sum i))))",
+    ),
+    (
+        "named let: a loop of 3M turns",
+        "(let loop ((i 0) (sum 0)) (if (= i 3000000) sum (loop (+ i 1) (+ sum i))))",
+    ),
+    (
+        "do: a loop of 3M turns",
+        "(do ((i 0 (+ i 1)) (sum 0 (+ sum i))) ((= i 3000000) sum))",
+    ),
+    (
+        "a procedure of the top level that calls itself last, 3M times",
+        "(define (count i sum) (if (= i 3000000) sum (count (+ i 1) (+ sum i)))) (count 0 0)",
+    ),
+    (
+        "two procedures that call each other last, 3M times",
+        "(define (even-n? n) (if (= n 0) #t (odd-n? (- n 1)))) (define (odd-n? n) (if (= n 0) #f (even-n? (- n 1)))) (even-n? 3000000)",
     ),
     (
         "map, filter and fold over 1M items",
@@ -54,12 +71,18 @@ fn main() {
             }
         });
     for (name, source) in PROGRAMS {
-        let started = Instant::now();
-        let result = match vm.eval(source, "bench") {
-            Ok(Outcome::Done(value)) => vm.core.write(value),
-            other => format!("{other:?}"),
-        };
-        println!("{:>9.2?}  {name} => {result}", started.elapsed());
+        let mut best = None;
+        let mut result = String::new();
+        for _ in 0..3 {
+            let started = Instant::now();
+            result = match vm.eval(source, "bench") {
+                Ok(Outcome::Done(value)) => vm.core.write(value),
+                other => format!("{other:?}"),
+            };
+            let took = started.elapsed();
+            best = Some(best.map_or(took, |best: std::time::Duration| best.min(took)));
+        }
+        println!("{:>9.2?}  {name} => {result}", best.unwrap_or_default());
     }
     println!(
         "{} collections, {} objects alive",

@@ -112,4 +112,10 @@ removed, on the machine this was written on:
 | 100k lookups in an association list | 252 ms | 37 ms |
 
 `cargo run --release -p amacs-scheme --example bench` times a few programs
-on the interpreter as it is now.
+on the interpreter as it is now, and `--example micro` single features of
+the machine.
+
+A loop costs no calls: where a named `let`, a `do` or a definition inside a
+body calls itself last, the compiled code gives the parameters their new
+values and jumps to the start. The same holds for any procedure that calls
+itself last, which the machine sees when the call is made.
