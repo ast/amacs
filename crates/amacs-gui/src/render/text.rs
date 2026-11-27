@@ -246,15 +246,27 @@ impl Fonts {
 
         let mut glyphs = Vec::new();
         for run in self.scratch.layout_runs() {
+            // Where the first glyph of the current column starts.
+            let mut cell: Option<(u32, f32)> = None;
             for glyph in run.glyphs {
-                // Only the glyph's offset within its own advance is kept:
-                // the cell decides where the advance starts.
+                // The cell decides where a column starts. Only a glyph's
+                // place within its column is kept: a combining mark is
+                // placed from the end of the letter it is on, which is in
+                // the same column.
+                let glyph_col = columns.get(glyph.start).copied().unwrap_or(col);
+                let start = match cell {
+                    Some((cell_col, x)) if cell_col == glyph_col => x,
+                    _ => {
+                        cell = Some((glyph_col, glyph.x));
+                        glyph.x
+                    }
+                };
                 let mut placed = glyph.clone();
-                placed.x = 0.0;
+                placed.x = glyph.x - start;
                 placed.y = 0.0;
                 let physical = placed.physical((0.0, 0.0), 1.0);
                 glyphs.push(Glyph {
-                    col: columns.get(glyph.start).copied().unwrap_or(col),
+                    col: glyph_col,
                     key: physical.cache_key,
                     dx: physical.x,
                     dy: physical.y,

@@ -118,7 +118,7 @@ fn the_gpu_draws_what_the_cpu_draws() {
     pair.check("empty");
     pair.editor.handle_event(InputEvent::Paste(
         "fn main() -> Result<(), Error> { a != b && c >= d }\n\
-         åäö ÅÄÖ  日本語  \u{f121} \u{e7a8}  🙂\n\
+         åäö ÅÄÖ  日本語  \u{f121} \u{e7a8}  🙂 E\u{301}\u{301}\u{301}\n\
          0123456789 the quick brown fox jumps over the lazy dog\n\tindented by a tab"
             .to_owned(),
     ));

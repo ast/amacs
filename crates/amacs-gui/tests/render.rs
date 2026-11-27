@@ -224,6 +224,38 @@ fn a_keystroke_repaints_only_what_changed() {
 }
 
 #[test]
+fn accents_that_reach_above_their_row_are_drawn_whole_and_erased_with_it() {
+    let mut h = Harness::new("overhang", 40, 6);
+    // An acute on a ringed capital, and three stacked on an E, reach well
+    // above the font's ascent, into the row above.
+    h.paste("\n\u{1fa}E\u{301}\u{301}\u{301}");
+    let (_, cell_h) = h.renderer.cell_size();
+    let above = h.cell(0, 0);
+    let width = above.len() / cell_h as usize;
+    let inked = above[above.len() - 2 * width..]
+        .iter()
+        .any(|pixel| *pixel != rgb(DEFAULT_BG));
+    assert!(inked, "the top accent shows in the row above");
+
+    // The row above is repainted for a change of its own: the accent is
+    // drawn there again.
+    h.keys("C-p");
+    h.type_text("x");
+    h.keys("DEL C-n");
+    let above = h.cell(0, 0);
+    assert!(
+        above[above.len() - 2 * width..]
+            .iter()
+            .any(|pixel| *pixel != rgb(DEFAULT_BG)),
+        "the accent is still there after the row above is redrawn"
+    );
+
+    // The accented line goes, and its ink in the row above with it.
+    h.keys("C-a C-k");
+    assert!(h.cell_is(0, 0, DEFAULT_BG), "nothing is left above");
+}
+
+#[test]
 fn wide_characters_take_two_cells() {
     let mut h = Harness::new("wide", 40, 4);
     h.paste("a日b");

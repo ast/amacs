@@ -58,6 +58,20 @@ pub struct Rect {
 }
 
 impl Rect {
+    /// The part that both have, or `None` if they have none.
+    pub(crate) fn intersect(self, other: Rect) -> Option<Rect> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let x1 = (self.x + self.w).min(other.x + other.w);
+        let y1 = (self.y + self.h).min(other.y + other.h);
+        (x < x1 && y < y1).then(|| Rect {
+            x,
+            y,
+            w: x1 - x,
+            h: y1 - y,
+        })
+    }
+
     pub(crate) fn union(self, other: Rect) -> Rect {
         let x = self.x.min(other.x);
         let y = self.y.min(other.y);

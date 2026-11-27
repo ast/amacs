@@ -6,8 +6,8 @@
 
 use amacs_proto::Color;
 
-use super::list::{Frame, ImageQuad, Row};
-use super::scene::{Image, Images};
+use super::list::{Frame, ImageQuad, Row, ink_clips};
+use super::scene::Image;
 use super::text::{GlyphContent, GlyphKey, GlyphSource};
 use super::{Backend, DEFAULT_BG, Rect};
 
@@ -23,6 +23,27 @@ pub struct Software {
     pixels: Vec<u32>,
     /// The cell that the cursor is drawn in.
     drawn_cursor: Option<Rect>,
+    /// For each row, by its index in the frame, whether its glyphs as last
+    /// drawn reach into the row above and into the row below.
+    overhangs: Vec<(bool, bool)>,
+}
+
+/// Whether the glyphs of a row reach above it and below it.
+fn overhang(row: &Row, glyphs: &mut dyn GlyphSource) -> (bool, bool) {
+    let (top, bottom) = (row.area.y as i32, (row.area.y + row.area.h) as i32);
+    let mut reach = (false, false);
+    for glyph in &row.glyphs {
+        let Some(image) = glyphs.image(glyph.key) else {
+            continue;
+        };
+        if image.width == 0 || image.height == 0 {
+            continue;
+        }
+        let y = glyph.y - image.top;
+        reach.0 |= y < top;
+        reach.1 |= y + image.height as i32 > bottom;
+    }
+    reach
 }
 
 impl Software {
@@ -153,30 +174,6 @@ impl Software {
             }
         }
     }
-
-    fn paint_row(&mut self, row: &Row, images: &Images, glyphs: &mut dyn GlyphSource) {
-        for quad in &row.backgrounds {
-            self.fill(quad.rect, pixel(quad.color));
-        }
-        for quad in &row.images {
-            if let Some(image) = images.get(&quad.id) {
-                self.draw_image(quad, image, row.area);
-            }
-        }
-        for glyph in &row.glyphs {
-            self.draw_glyph(
-                glyphs,
-                glyph.key,
-                glyph.x,
-                glyph.y,
-                pixel(glyph.color),
-                row.area,
-            );
-        }
-        for quad in &row.overlays {
-            self.fill(quad.rect, pixel(quad.color));
-        }
-    }
 }
 
 impl Backend for Software {
@@ -212,17 +209,79 @@ impl Backend for Software {
             }
         }
 
-        let mut changed = frame.changed.iter().copied().peekable();
-        let mut cursor_row_painted = false;
-        for (index, row) in frame.rows.iter().enumerate() {
-            let is_changed = changed.next_if_eq(&index).is_some();
-            let holds_old_cursor = cursor_moved && old_cursor_y == Some(row.area.y);
-            if !(frame.full || is_changed || holds_old_cursor) {
-                continue;
+        // What is repainted: the rows that changed, the row that the cursor
+        // left, and the rows that a changed row's glyphs reach or reached
+        // into, which may hold ink of it that is to go.
+        let rows = frame.rows;
+        let mut repaint = vec![frame.full; rows.len()];
+        if frame.full {
+            self.overhangs = rows.iter().map(|row| overhang(row, glyphs)).collect();
+        } else {
+            for &index in frame.changed {
+                let row = &rows[index];
+                let was = self.overhangs[index];
+                let is = overhang(row, glyphs);
+                self.overhangs[index] = is;
+                let (up, down) = (was.0 || is.0, was.1 || is.1);
+                repaint[index] = true;
+                if !(up || down) {
+                    continue;
+                }
+                let ink = row.ink_area();
+                for (other, neighbour) in rows.iter().enumerate() {
+                    if neighbour.area.intersect(ink).is_some() {
+                        let above = neighbour.area.y < row.area.y;
+                        let below = neighbour.area.y > row.area.y;
+                        repaint[other] |= (above && up) || (below && down);
+                    }
+                }
             }
-            self.paint_row(row, frame.images, glyphs);
+            for (index, row) in rows.iter().enumerate() {
+                repaint[index] |= cursor_moved && old_cursor_y == Some(row.area.y);
+            }
+        }
+        let repainted: Vec<usize> = (0..rows.len()).filter(|&index| repaint[index]).collect();
+
+        let mut cursor_row_painted = false;
+        for &index in &repainted {
+            let row = &rows[index];
+            for quad in &row.backgrounds {
+                self.fill(quad.rect, pixel(quad.color));
+            }
+            for quad in &row.images {
+                if let Some(image) = frame.images.get(&quad.id) {
+                    self.draw_image(quad, image, row.area);
+                }
+            }
             add(row.area);
             cursor_row_painted |= frame.cursor.is_some_and(|cell| cell.y == row.area.y);
+        }
+
+        // The glyphs of the repainted rows and of the rows next to them,
+        // each only where its row reaches and only over what was repainted:
+        // what was not repainted has its glyphs already.
+        for (index, row) in rows.iter().enumerate() {
+            if row.glyphs.is_empty() {
+                continue;
+            }
+            for clip in ink_clips(rows, index, |other| repaint[other]) {
+                for glyph in &row.glyphs {
+                    self.draw_glyph(
+                        glyphs,
+                        glyph.key,
+                        glyph.x,
+                        glyph.y,
+                        pixel(glyph.color),
+                        clip,
+                    );
+                }
+            }
+        }
+
+        for &index in &repainted {
+            for quad in &rows[index].overlays {
+                self.fill(quad.rect, pixel(quad.color));
+            }
         }
 
         if let Some(cell) = frame.cursor

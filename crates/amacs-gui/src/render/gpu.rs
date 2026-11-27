@@ -21,7 +21,7 @@ use anyhow::{Context, Result, bail};
 use wayland_client::Connection;
 use wayland_client::protocol::wl_surface::WlSurface;
 
-use super::list::{Frame, Row};
+use super::list::{Frame, Row, ink_clips};
 use super::scene::{Image, Images};
 use super::text::{GlyphContent, GlyphKey, GlyphSource};
 use super::{Backend, Rect};
@@ -761,8 +761,26 @@ impl Gpu {
     /// cursor if there is one. `Err` if the atlas filled up on the way.
     fn build(&mut self, frame: &Frame, glyphs: &mut dyn GlyphSource) -> Result<Vec<f32>, Full> {
         let mut out = Vec::new();
+        // Glyphs go over the backgrounds of every row, since one can reach
+        // into the next row, and the overlays over every glyph.
         for row in frame.rows {
-            self.build_row(row, frame.images, glyphs, &mut out)?;
+            self.build_background(row, frame.images, &mut out)?;
+        }
+        for index in 0..frame.rows.len() {
+            for clip in ink_clips(frame.rows, index, |_| true) {
+                self.build_glyphs(&frame.rows[index], clip, glyphs, &mut out)?;
+            }
+        }
+        for row in frame.rows {
+            for overlay in &row.overlays {
+                push(
+                    &mut out,
+                    quad(overlay.rect),
+                    [0.0; 4],
+                    rgba(overlay.color),
+                    0.0,
+                );
+            }
         }
         if let Some(cell) = frame.cursor {
             push(&mut out, quad(cell), [0.0; 4], [1.0; 4], 0.0);
@@ -770,11 +788,11 @@ impl Gpu {
         Ok(out)
     }
 
-    fn build_row(
+    /// The backgrounds of a row and the bands of pictures in it.
+    fn build_background(
         &mut self,
         row: &Row,
         images: &Images,
-        glyphs: &mut dyn GlyphSource,
         out: &mut Vec<f32>,
     ) -> Result<(), Full> {
         for background in &row.backgrounds {
@@ -786,7 +804,7 @@ impl Gpu {
                 0.0,
             );
         }
-        // Nothing of a glyph shows outside its row or the picture.
+        // Nothing of a picture shows outside the row or the window.
         let clip = (
             row.area.x as i32,
             row.area.y as i32,
@@ -822,6 +840,23 @@ impl Gpu {
             ];
             push(out, rect, uv, [1.0; 4], 4.0);
         }
+        Ok(())
+    }
+
+    /// The glyphs of a row, the parts of them that are in `clip`.
+    fn build_glyphs(
+        &mut self,
+        row: &Row,
+        clip: Rect,
+        glyphs: &mut dyn GlyphSource,
+        out: &mut Vec<f32>,
+    ) -> Result<(), Full> {
+        let clip = (
+            clip.x as i32,
+            clip.y as i32,
+            (clip.x + clip.w).min(self.width) as i32,
+            (clip.y + clip.h).min(self.height) as i32,
+        );
         for glyph in &row.glyphs {
             let Some(slot) = self.atlas.slot(&self.queue, glyphs, glyph.key)? else {
                 continue;
@@ -846,9 +881,6 @@ impl Gpu {
                 GlyphContent::Subpixel => 3.0,
             };
             push(out, rect, uv, rgba(glyph.color), kind);
-        }
-        for overlay in &row.overlays {
-            push(out, quad(overlay.rect), [0.0; 4], rgba(overlay.color), 0.0);
         }
         Ok(())
     }

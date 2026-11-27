@@ -37,8 +37,11 @@ pub struct ImageQuad {
     pub h: u32,
 }
 
-/// One row of a pane. It is drawn in the order of its fields, and nothing
-/// of it shows outside its area.
+/// One row of a pane. The backgrounds and pictures of every row are drawn
+/// first, then the glyphs of every row, then the overlays of every row.
+/// Everything but the glyphs stays in the row's area. A glyph can reach
+/// into the rows above and below, as an accent on a capital or a tall
+/// icon does, and is cut only at [`Row::ink_area`] and where no row is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     pub area: Rect,
@@ -49,6 +52,45 @@ pub struct Row {
     pub glyphs: Vec<GlyphQuad>,
     /// What is over the text: underlines, the lines of a box.
     pub overlays: Vec<Quad>,
+}
+
+impl Row {
+    /// Where the row's glyphs can reach: its own columns, from a row's
+    /// height above it to a row's height below it. Sideways a glyph stays
+    /// in its pane.
+    pub fn ink_area(&self) -> Rect {
+        let y = self.area.y.saturating_sub(self.area.h);
+        Rect {
+            y,
+            h: self.area.y + 2 * self.area.h - y,
+            ..self.area
+        }
+    }
+}
+
+/// Where the glyphs of `rows[index]` show: the parts of rows, its own and
+/// those around it, that its ink area covers, for which `keep` holds of the
+/// row's index. Parts one under the other are joined, so that a glyph is
+/// mostly drawn once. Nothing shows where no row is, as in the margin at
+/// the edge of the window.
+pub fn ink_clips(rows: &[Row], index: usize, keep: impl Fn(usize) -> bool) -> Vec<Rect> {
+    let ink = rows[index].ink_area();
+    let mut clips: Vec<Rect> = Vec::new();
+    for (other, row) in rows.iter().enumerate() {
+        let Some(part) = row.area.intersect(ink) else {
+            continue;
+        };
+        if !keep(other) {
+            continue;
+        }
+        match clips.last_mut() {
+            Some(last) if last.x == part.x && last.w == part.w && last.y + last.h == part.y => {
+                last.h += part.h;
+            }
+            _ => clips.push(part),
+        }
+    }
+    clips
 }
 
 /// What is to be on screen.
