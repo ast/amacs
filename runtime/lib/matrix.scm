@@ -31,12 +31,22 @@ its keys of encryption and your session. secret-get finds it by this name
 as the host, so with the password store it is the entry of that name. If
 there is no such secret, M-x matrix asks for a passphrase each time.")
 
+(define-option 'matrix-notify #t
+  "Whether a message that your Matrix account's rules say to tell you of is
+shown by the desktop too, and not only in the echo area.")
+
+(define-option 'matrix-notify-program '("notify-send" "--app-name=amacs")
+  "The program that shows a Matrix message on the desktop, and its first
+arguments. The name of who wrote and the message are given after them.")
+
 (set-face! 'matrix-heading 'fg 'blue 'bold #t)
 (set-face! 'matrix-unread 'bold #t)
 (set-face! 'matrix-mention 'fg 'red 'bold #t)
 (set-face! 'matrix-sender 'fg 'cyan 'bold #t)
 (set-face! 'matrix-time 'fg 'fg-dim)
 (set-face! 'matrix-note 'fg 'fg-dim 'italic #t)
+(set-face! 'matrix-quote 'fg 'fg-dim)
+(set-face! 'matrix-reaction 'fg 'yellow)
 
 ;;; State
 
@@ -55,6 +65,9 @@ there is no such secret, M-x matrix asks for a passphrase each time.")
 ;; The room of each row of the list of rooms, from the first row: #f for
 ;; rows that are of no room.
 (define %matrix-rows '())
+;; Where each message starts in the buffer of a room, by the buffer's
+;; name: a list of pairs of a position and the message, the last first.
+(define %matrix-item-starts (make-hash-table))
 ;; Whether a redraw is on its way.
 (define %matrix-redraw-due #f)
 
@@ -151,7 +164,21 @@ there is no such secret, M-x matrix asks for a passphrase each time.")
                             (%matrix-list (json-ref data 'items))
                             (%matrix-list (json-ref data 'ids)))
     (%matrix-changed!)]
+   [(equal? event "notify") (%matrix-notify data)]
    [else #f]))
+
+(define (%matrix-notify data)
+  ;; A message that the rules of the account say to tell of.
+  (let* ((room (hash-table-ref %matrix-rooms (json-ref data 'room) #f))
+         (who (string-append (or (json-ref data 'sender_name) "Somebody")
+                             (if room (string-append " in " (%matrix-room-name room)) "")))
+         (body (json-ref data 'body "")))
+    (message (string-append who ": " body))
+    (when (option 'matrix-notify)
+      (let ((program (option 'matrix-notify-program)))
+        ;; A desktop without the program is no reason to stop.
+        (guard (e (#t #f))
+          (start-process (car program) (append (cdr program) (list who body))))))))
 
 (define (%matrix-timeline-event room op items ids)
   ;; Only the rooms that are open have their messages kept.
@@ -193,7 +220,11 @@ there is no such secret, M-x matrix asks for a passphrase each time.")
      (let ((room (hash-table-ref %matrix-rooms id #f)))
        (when (and room (member (%matrix-room-buffer room) (buffer-list)))
          (%matrix-draw-room! room))))
-   (hash-table-keys %matrix-timelines)))
+   (hash-table-keys %matrix-timelines))
+  ;; Messages that come into the room that is being looked at are read.
+  (let ((shown (window-buffer)))
+    (when (hash-table-contains? %matrix-item-starts shown)
+      (with-current-buffer shown (%matrix-mark-read)))))
 
 (define (%matrix-state-line)
   (cond [(equal? %matrix-state "syncing") ""]
@@ -287,13 +318,27 @@ there is no such secret, M-x matrix asks for a passphrase each time.")
           [(member kind '("image" "file")) (string-append "[" kind ": " body "]")]
           [else body])))
 
+(define (%matrix-first-line text)
+  (let ((nl (string-search text "\n")))
+    (if nl (string-append (substring text 0 nl) " …") text)))
+
 (define (%matrix-draw-room! room)
   (let ((builder (%matrix-builder))
+        (starts '())
         (items (hash-table-ref %matrix-timelines (json-ref room 'id) '())))
     (for-each
      (lambda (item)
        (let ((kind (json-ref item 'kind "text"))
-             (sender (or (json-ref item 'sender_name) (json-ref item 'sender "?"))))
+             (sender (or (json-ref item 'sender_name) (json-ref item 'sender "?")))
+             (reply (json-ref item 'reply_to))
+             (reactions (%matrix-list (json-ref item 'reactions))))
+         (set! starts (cons (cons (builder 'length) item) starts))
+         ;; What a reply answers, above it.
+         (when (and reply (not (eq? reply 'null)))
+           (builder 'emit
+                    (string-append "      > " (or (json-ref reply 'sender_name) "?") ": "
+                                   (%matrix-first-line (json-ref reply 'body "")) "\n")
+                    'matrix-quote))
          (builder 'emit (%matrix-clock (json-ref item 'time)) 'matrix-time)
          (builder 'emit " " #f)
          (cond
@@ -306,8 +351,24 @@ there is no such secret, M-x matrix asks for a passphrase each time.")
            (builder 'emit (string-append ": " (%matrix-body item)) #f)])
          (when (eq? (json-ref item 'edited) #t)
            (builder 'emit " (edited)" 'matrix-note))
-         (builder 'emit "\n" #f)))
+         (builder 'emit "\n" #f)
+         (unless (null? reactions)
+           (builder 'emit
+                    (string-append
+                     "      "
+                     (string-join
+                      (map (lambda (reaction)
+                             (let ((count (json-ref reaction 'count 1)))
+                               (string-append (json-ref reaction 'key "?")
+                                              (if (> count 1)
+                                                  (string-append " " (number->string count))
+                                                  ""))))
+                           reactions)
+                      "  ")
+                     "\n")
+                    'matrix-reaction))))
      items)
+    (hash-table-set! %matrix-item-starts (%matrix-room-buffer room) starts)
     (with-current-buffer (%matrix-room-buffer room)
       (%matrix-fill-buffer! builder #t)
       (set-mode-line-text!
@@ -323,7 +384,9 @@ messages that name you. RET shows the room of the line.")
 
 (define-major-mode matrix-room-mode special-mode "Matrix-Room"
   "Major mode of a Matrix room: its messages, the newest last. RET writes
-a message, and p shows earlier messages.")
+a message, and p shows earlier messages. On a message, r answers it, e
+changes it if it is yours, a puts a reaction on it or takes yours off, and
+d deletes it.")
 
 (define (%matrix-row-room)
   ;; The id of the room of the line that point is on in the list of rooms.
@@ -347,6 +410,23 @@ a message, and p shows earlier messages.")
         (error "There is no Matrix room here."))))
 
 ;;; Commands
+
+(define (%matrix-item-at-point)
+  ;; The message that point is in, in the buffer of a room; an error if
+  ;; there is none.
+  (let loop ((starts (hash-table-ref %matrix-item-starts (buffer-name) '())))
+    (cond [(null? starts) (error "There is no message here.")]
+          [(<= (car (car starts)) (point)) (cdr (car starts))]
+          [else (loop (cdr starts))])))
+
+(define (%matrix-on-message method . more)
+  ;; Asks the program to do something with the message at point: `more`
+  ;; is keys and values that go with the room and the message.
+  (let ((room (%matrix-current-room))
+        (item (%matrix-item-at-point)))
+    (%matrix-request method
+                     (apply json-object 'room (json-ref room 'id) 'id (json-ref item 'id) more)
+                     (lambda (result error) (%matrix-report error)))))
 
 (define (%matrix-passphrase)
   ;; The passphrase of the store: the secret of the option, or one typed.
@@ -416,6 +496,52 @@ browser. When you finish there, the rooms come."
       (%matrix-request "send" (json-object 'room (json-ref room 'id) 'body text)
                        (lambda (result error) (%matrix-report error))))))
 
+(define-command (matrix-reply)
+  "Answer the message at point."
+  (let* ((item (%matrix-item-at-point))
+         (who (or (json-ref item 'sender_name) (json-ref item 'sender "?")))
+         (text (read-string (string-append "Answer to " who ": "))))
+    (unless (string-null? (string-trim text))
+      (%matrix-on-message "reply" 'body text))))
+
+(define-command (matrix-edit)
+  "Change the text of the message at point, which must be yours."
+  (let ((item (%matrix-item-at-point)))
+    (unless (eq? (json-ref item 'own) #t)
+      (error "You can change only your own messages."))
+    (let ((text (read-string "Change to: " (json-ref item 'body ""))))
+      (unless (or (string-null? (string-trim text)) (equal? text (json-ref item 'body "")))
+        (%matrix-on-message "edit" 'body text)))))
+
+(define-command (matrix-react)
+  "Put a reaction on the message at point: an emoji, or other short text.
+A reaction that you put there before is taken off."
+  (let ((key (string-trim (read-string "Reaction: "))))
+    (unless (string-null? key)
+      (%matrix-on-message "react" 'key key))))
+
+(define-command (matrix-delete)
+  "Delete the message at point for everybody in the room."
+  (%matrix-item-at-point)
+  (when (y-or-n? "Delete this message for everybody? ")
+    (%matrix-on-message "redact")))
+
+(define (%matrix-mark-read)
+  ;; A room is read when its buffer is the one in use and point is at its
+  ;; end: the program is told, once, while messages are not read.
+  (when (and %matrix-process (eq? (major-mode) 'matrix-room-mode)
+             (= (point) (string-length (buffer-string))))
+    (let ((room (guard (e (#t #f)) (%matrix-current-room))))
+      (when (and room (or (> (json-ref room 'unread 0) 0) (> (json-ref room 'mentions 0) 0)))
+        ;; Not asked for again before the program tells of the room anew.
+        (hash-table-set! %matrix-rooms (json-ref room 'id)
+                         (map (lambda (field)
+                                (if (memq (car field) '(unread mentions)) (cons (car field) 0) field))
+                              room))
+        (%matrix-request "mark-read" (json-object 'room (json-ref room 'id)) #f)))))
+
+(add-hook! 'post-command-hook %matrix-mark-read)
+
 (define-command (matrix-load-earlier)
   "Show earlier messages of the room of this buffer."
   (let ((room (%matrix-current-room)))
@@ -441,4 +567,5 @@ date here."
 
 (for-each
  (lambda (binding) (define-key 'matrix-room-mode (car binding) (cadr binding)))
- '(("RET" matrix-send) ("p" matrix-load-earlier) ("l" matrix) ("k" matrix-close-room)))
+ '(("RET" matrix-send) ("p" matrix-load-earlier) ("l" matrix) ("k" matrix-close-room)
+   ("r" matrix-reply) ("e" matrix-edit) ("a" matrix-react) ("d" matrix-delete)))

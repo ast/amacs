@@ -97,3 +97,79 @@ fn a_program_that_stops_is_said_to_have_stopped() {
     h.keys("g");
     h.wait_until(|h| !h.screen.text().contains("stopped") && h.screen.text().contains("Tea"));
 }
+
+/// Opens the room "Tea" and waits for its messages.
+fn open_tea(h: &mut Harness) {
+    start(h);
+    h.keys("C-n C-n C-n RET");
+    h.wait_until(|h| h.screen.text().contains("kettle on?"));
+}
+
+#[test]
+fn messages_are_answered_changed_reacted_to_and_deleted() {
+    let mut h = harness("@me:example.org");
+    open_tea(&mut h);
+    let row = |h: &Harness, n: usize| h.screen.row(n).to_owned();
+
+    // An answer shows what it answers above it, in one line.
+    h.keys("M-< r");
+    assert_eq!(h.prompt(), "Answer to Ada:");
+    h.type_text("Yes").keys("RET");
+    h.wait_until(|h| h.screen.text().contains("Me: Yes"));
+    assert_eq!(row(&h, 4), "      > Ada: Is the kettle on? …");
+    assert!(row(&h, 5).ends_with("Me: Yes"), "{}", row(&h, 5));
+
+    // A reaction is under its message.
+    h.keys("M-< a").type_text("+1").keys("RET");
+    h.wait_until(|h| h.screen.text().contains("+1 2"));
+    assert_eq!(row(&h, 1), "      +1 2  tea");
+
+    // Only a message of one's own is changed.
+    h.keys("M-< e");
+    assert!(h.echo().contains("only your own"), "{}", h.echo());
+    h.keys("M-> C-p e");
+    assert_eq!(h.prompt(), "Change to: Yes");
+    h.type_text(", it is").keys("RET");
+    h.wait_until(|h| h.screen.text().contains("Yes, it is (edited)"));
+
+    // A message is deleted after a question.
+    h.keys("M-< d");
+    h.type_text("y");
+    h.wait_until(|h| h.screen.text().contains("Ada (deleted)"));
+
+    // Under the last message there is none.
+    h.eval("(%replace-buffer-text! \"\") (hash-table-set! %matrix-item-starts (buffer-name) '())");
+    h.keys("r");
+    assert!(h.echo().contains("no message here"), "{}", h.echo());
+}
+
+#[test]
+fn a_message_that_names_you_is_told_of() {
+    let dir = tempfile::tempdir().unwrap();
+    let told = dir.path().join("told");
+    let mut h = harness("@me:example.org");
+    h.eval(&format!(
+        "(set-option! 'matrix-notify-program '(\"sh\" \"-c\" \"printf '%s|%s' \\\"$0\\\" \\\"$1\\\" > {}\"))",
+        told.display()
+    ));
+    open_tea(&mut h);
+    h.keys("RET").type_text("ping me").keys("RET");
+    h.wait_until(|h| h.echo().contains("the tea is ready"));
+    assert_eq!(h.echo(), "Ada in Tea: me: the tea is ready");
+    h.wait_until(|_| told.exists() && !std::fs::read_to_string(&told).unwrap().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(&told).unwrap(),
+        "Ada in Tea|me: the tea is ready"
+    );
+}
+
+#[test]
+fn a_room_that_is_looked_at_is_read() {
+    let mut h = harness("@me:example.org");
+    start(&mut h);
+    assert_eq!(h.screen.row(2), "  1@  Work");
+    h.keys("C-n C-n RET");
+    h.wait_until(|h| h.screen.text().contains("kettle on?"));
+    h.keys("l");
+    h.wait_until(|h| h.screen.row(2) == "      Work");
+}

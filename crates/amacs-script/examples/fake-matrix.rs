@@ -2,7 +2,9 @@
 //! `amacs-matrix` does, in lines of JSON on standard input and output, and
 //! to no server. It has two rooms and a space. A message that is sent comes
 //! back as one of the room, and "paginate-back" gives one earlier message,
-//! once. To "start" with the user "@nobody:example.org" it says that
+//! once. A message of the user's own can be changed, and any can be
+//! answered, reacted to and deleted; to "ping me" it tells of a message
+//! that names the user. To "start" with the user "@nobody:example.org" it says that
 //! nobody is logged in, and "login" then logs in.
 
 use std::io::{self, BufRead, Write};
@@ -79,10 +81,18 @@ fn main() {
             "send" => {
                 sent += 1;
                 let body = params["body"].as_str().unwrap_or_default();
+                let mut own = item(&format!("$sent{sent}"), "Me", 3840, "text", body);
+                own["own"] = json!(true);
                 send(&json!({
                     "event": "timeline", "room": room_id, "op": "append",
-                    "items": [item(&format!("$sent{sent}"), "Me", 3840, "text", body)],
+                    "items": [own],
                 }));
+                if body == "ping me" {
+                    send(&json!({
+                        "event": "notify", "room": room_id, "sender_name": "Ada",
+                        "body": "me: the tea is ready",
+                    }));
+                }
                 if body == "edit that" {
                     let mut edited = item("$1", "Ada", 3600, "text", "Is the kettle on yet?");
                     edited["edited"] = json!(true);
@@ -105,6 +115,55 @@ fn main() {
                 result = json!(earlier);
                 earlier = false;
             }
+            "reply" => {
+                let mut answer = item(
+                    "$reply",
+                    "Me",
+                    3900,
+                    "text",
+                    params["body"].as_str().unwrap_or_default(),
+                );
+                answer["own"] = json!(true);
+                answer["reply_to"] =
+                    json!({"sender_name": "Ada", "body": "Is the kettle on?\nOr not?"});
+                send(
+                    &json!({"event": "timeline", "room": room_id, "op": "append", "items": [answer]}),
+                );
+            }
+            "edit" => {
+                let target = params["id"].as_str().unwrap_or_default();
+                let mut changed = item(
+                    target,
+                    "Me",
+                    3840,
+                    "text",
+                    params["body"].as_str().unwrap_or_default(),
+                );
+                changed["own"] = json!(true);
+                changed["edited"] = json!(true);
+                send(
+                    &json!({"event": "timeline", "room": room_id, "op": "update", "items": [changed]}),
+                );
+            }
+            "react" => {
+                let target = params["id"].as_str().unwrap_or_default();
+                let mut reacted = item(target, "Ada", 3600, "text", "Is the kettle on?");
+                reacted["reactions"] = json!([
+                    {"key": params["key"], "count": 2, "mine": true},
+                    {"key": "tea", "count": 1, "mine": false},
+                ]);
+                send(
+                    &json!({"event": "timeline", "room": room_id, "op": "update", "items": [reacted]}),
+                );
+            }
+            "redact" => {
+                let target = params["id"].as_str().unwrap_or_default();
+                let gone = item(target, "Ada", 3600, "redacted", "");
+                send(
+                    &json!({"event": "timeline", "room": room_id, "op": "update", "items": [gone]}),
+                );
+            }
+            "mark-read" => room(&room_id, "Work", 0, 0, 200),
             "timeline-close" => {}
             other => {
                 send(&json!({"id": id, "error": format!("no method {other}")}));
