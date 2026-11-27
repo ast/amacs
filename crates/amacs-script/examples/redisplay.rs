@@ -37,6 +37,9 @@ fn main() {
         .unwrap_or_else(|| "crates/amacs-core/src/editor.rs".to_owned());
     let file = std::path::absolute(&file).expect("the name of a file");
     let mut session = Session::new(200, 60).expect("the runtime loads");
+    // As in the server: with something to wake, text with syntax errors
+    // is parsed on another thread, and a key press does not wait for it.
+    session.editor_mut().set_waker(std::sync::Arc::new(|| {}));
     session.eval(SETUP).expect("the setup runs");
     session
         .eval(&format!("(find-file {:?})", file.display().to_string()))

@@ -288,6 +288,27 @@ impl Buffer {
         }
     }
 
+    /// Brings the syntax tree up to date for drawing, without waiting for
+    /// a parse that takes long: text with syntax errors is parsed on
+    /// another thread, which calls `notify` when the tree is there, and
+    /// is drawn from the tree of before until then.
+    pub fn update_syntax_soon(&mut self, notify: &amacs_treesit::Notify) {
+        let hide_markup = self.minor_modes.iter().any(|mode| {
+            mode == crate::display::HIDE_MARKUP_MODE || mode == crate::display::ORG_INDENT_MODE
+        });
+        if let Some(syntax) = &mut self.syntax {
+            syntax.update_soon(&self.text, notify);
+            if hide_markup {
+                syntax.update_markup(&self.text);
+            }
+        }
+    }
+
+    /// Whether another thread is parsing the text for its syntax tree.
+    pub fn is_parsing(&self) -> bool {
+        self.syntax.as_ref().is_some_and(Syntax::is_parsing)
+    }
+
     /// Syntax highlights for a range of bytes. The tree must be up to date.
     pub fn highlights(&self, range: Range<usize>) -> Option<Highlights> {
         Some(self.syntax.as_ref()?.highlights(&self.text, range))

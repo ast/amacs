@@ -230,6 +230,9 @@ pub struct Editor {
     pub(crate) telemetry: crate::telemetry::Telemetry,
     /// Wakes the host's event loop from worker threads.
     pub(crate) waker: Waker,
+    /// Whether text with syntax errors is parsed on another thread while
+    /// it is drawn: so with a waker, which says when the tree is there.
+    pub(crate) parse_in_background: bool,
     /// When to show the keys that can follow the pending prefix.
     key_hint_due: Option<Instant>,
     clipboard: Option<Box<dyn Clipboard>>,
@@ -305,6 +308,7 @@ impl Editor {
             history: History::default(),
             telemetry: crate::telemetry::Telemetry::default(),
             waker: Arc::new(|| {}),
+            parse_in_background: false,
             key_hint_due: None,
             clipboard: None,
             clipboard_synced: None,
@@ -893,6 +897,13 @@ impl Editor {
     /// results, so that it calls [`Editor::poll`] and redraws.
     pub fn set_waker(&mut self, waker: Waker) {
         self.waker = waker;
+        self.parse_in_background = true;
+    }
+
+    /// Whether a buffer that is shown is being parsed on another thread:
+    /// it will be drawn again, with other highlights, when that is done.
+    pub fn is_parsing(&self) -> bool {
+        self.buffers.values().any(Buffer::is_parsing)
     }
 
     /// Does the work that is due at `now` and takes in results from worker

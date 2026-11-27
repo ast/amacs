@@ -236,3 +236,231 @@ fn remembered_highlights_are_those_of_the_text() {
         );
     }
 }
+
+const PYTHON: &str = "import os\nMAX_SIZE = 10\n\nclass Shape(object):\n    \"\"\"A shape.\"\"\"\n\n    def __init__(self, name):\n        self.name = name\n        print(len(name), MAX_SIZE)\n\n    @property\n    def area(self):\n        # nothing yet\n        return None if self.name else isinstance(self, Shape)\n\n\ndef main(argv):\n    for arg in argv:\n        shape = Shape(arg)\n        print(f\"{shape.name}: {shape.area}\")\n    return 0\n";
+
+const JAVASCRIPT: &str = "const fs = require('fs');\nconst MAX = 3;\n\nclass Shape extends Base {\n  constructor(name) {\n    super();\n    this.name = name;\n  }\n\n  get area() {\n    // nothing yet\n    return undefined;\n  }\n}\n\nfunction main(argv) {\n  for (const arg of argv) {\n    const shape = new Shape(arg);\n    console.log(`${shape.name}: ${shape.area}`, MAX);\n  }\n  return fs.existsSync('x') ? 0 : 1;\n}\n\nmodule.exports = { main };\n";
+
+const C: &str = "#include <stdio.h>\n#define MAX_SIZE 10\n\nstruct shape {\n    const char *name;\n    int sides;\n};\n\n/* The area of a shape. */\nstatic int area(const struct shape *s) {\n    return s->sides * MAX_SIZE;\n}\n\nint main(int argc, char **argv) {\n    struct shape square = {\"square\", 4};\n    for (int i = 0; i < argc; i++) {\n        printf(\"%s: %d\\n\", argv[i], area(&square));\n    }\n    return NULL == argv;\n}\n";
+
+fn small_op() -> impl Strategy<Value = Op> {
+    let snippet = prop_oneof![
+        Just("{".to_owned()),
+        Just("}".to_owned()),
+        Just("(".to_owned()),
+        Just("\n".to_owned()),
+        Just("\"".to_owned()),
+        Just("'".to_owned()),
+        Just("#".to_owned()),
+        Just("//".to_owned()),
+        Just("/*".to_owned()),
+        Just("X".to_owned()),
+        Just("x".to_owned()),
+        Just("_".to_owned()),
+        Just(" ".to_owned()),
+        Just(".".to_owned()),
+        Just("ö".to_owned()),
+        Just("self".to_owned()),
+        "[a-zA-Z(); =:]{1,4}",
+    ];
+    prop_oneof![
+        (any::<usize>(), snippet).prop_map(|(pos, text)| Op::Insert(pos, text)),
+        (any::<usize>(), 1usize..4).prop_map(|(pos, len)| Op::Delete(pos, len)),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// Windows on a text ask for their highlights after each change, as
+    /// the editor does when it draws, and get what is remembered where
+    /// the change left that standing. It is what painting anew gives.
+    #[test]
+    fn highlights_kept_across_a_change_are_those_of_the_text(
+        which in 0usize..4,
+        ops in prop::collection::vec((small_op(), any::<usize>(), any::<bool>()), 1..40),
+    ) {
+        let (name, source) =
+            [("rust", SOURCE), ("python", PYTHON), ("javascript", JAVASCRIPT), ("c", C)][which];
+        let language = language(name).unwrap();
+        let mut text = Text::from(source);
+        let mut syntax = Syntax::new(language).unwrap();
+        syntax.update(&text);
+        let window = 400;
+        let mut top = 0;
+        // The window as the editor asks for it: so many chars from a char.
+        let shown = |text: &Text, top: usize| {
+            let top = top.min(text.len());
+            text.char_to_byte(top)..text.char_to_byte((top + window).min(text.len()))
+        };
+        syntax.highlights(&text, shown(&text, top));
+        for (op, scroll, twice) in ops {
+            let edits = if twice { 2 } else { 1 };
+            for _ in 0..edits {
+                match &op {
+                    Op::Insert(pos, inserted) => {
+                        let pos = pos % (text.len() + 1);
+                        syntax.before_insert(&text, pos, inserted);
+                        text.insert(pos, inserted);
+                    }
+                    Op::Delete(pos, len) => {
+                        let start = pos % (text.len() + 1);
+                        let end = (start + len).min(text.len());
+                        syntax.before_delete(&text, start..end);
+                        text.remove(start..end);
+                    }
+                }
+            }
+            syntax.update(&text);
+            // The window stays, moves by a little or goes elsewhere.
+            top = match scroll % 4 {
+                0 => top,
+                1 => top + scroll % 90,
+                2 => top.saturating_sub(scroll % 90),
+                _ => scroll % (text.len() + 1),
+            };
+            let range = shown(&text, top);
+            let mut fresh = Syntax::new(language).unwrap();
+            fresh.update(&text);
+            prop_assert_eq!(
+                syntax.highlights(&text, range.clone()),
+                fresh.highlights(&text, range.clone()),
+                "{} at {:?} after {:?}", name, range, op
+            );
+        }
+    }
+}
+
+/// Brings a tree up to date as the editor does when it draws, and waits
+/// for the thread that parses to be done.
+fn settle(syntax: &mut Syntax, text: &Text) {
+    let notify: amacs_treesit::Notify = std::sync::Arc::new(|| {});
+    let started = std::time::Instant::now();
+    loop {
+        syntax.update_soon(text, &notify);
+        if !syntax.is_parsing() {
+            return;
+        }
+        assert!(started.elapsed().as_secs() < 20, "the parse never came");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn text_with_errors_is_parsed_on_another_thread() {
+    let rust = language("rust").unwrap();
+    let mut text = Text::from(SOURCE);
+    let mut syntax = Syntax::new(rust).unwrap();
+    let woken = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let notify: amacs_treesit::Notify = {
+        let woken = woken.clone();
+        std::sync::Arc::new(move || {
+            woken.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })
+    };
+    // The first parse, and a change that leaves no error, are done at once.
+    syntax.update_soon(&text, &notify);
+    assert!(!syntax.is_parsing());
+    let at = SOURCE.find("fn ").unwrap() + 3;
+    syntax.before_insert(&text, at, "x");
+    text.insert(at, "x");
+    syntax.update_soon(&text, &notify);
+    assert!(!syntax.is_parsing());
+
+    // A bracket that is not closed is an error: the tree comes later, and
+    // there are highlights to draw with until then.
+    syntax.before_insert(&text, at, "(");
+    text.insert(at, "(");
+    syntax.update_soon(&text, &notify);
+    assert!(syntax.is_parsing());
+    let all = 0..text.len_bytes();
+    let _ = syntax.highlights(&text, all.clone());
+    let started = std::time::Instant::now();
+    while woken.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        assert!(started.elapsed().as_secs() < 20, "the parse never came");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    syntax.update_soon(&text, &notify);
+    assert!(!syntax.is_parsing());
+    let mut fresh = Syntax::new(rust).unwrap();
+    fresh.update(&text);
+    assert_eq!(
+        syntax.highlights(&text, all.clone()),
+        fresh.highlights(&text, all.clone())
+    );
+
+    // A tree that is asked for in earnest, as to indent a line, does not
+    // wait for the thread.
+    syntax.before_insert(&text, at, "{");
+    text.insert(at, "{");
+    syntax.update_soon(&text, &notify);
+    assert!(syntax.is_parsing());
+    syntax.update(&text);
+    assert!(!syntax.is_parsing());
+    let mut fresh = Syntax::new(rust).unwrap();
+    fresh.update(&text);
+    let all = 0..text.len_bytes();
+    assert_eq!(
+        syntax.highlights(&text, all.clone()),
+        fresh.highlights(&text, all)
+    );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(48))]
+
+    /// Text that is changed while another thread parses it is drawn from
+    /// a tree of before, which must not fail, and comes to the highlights
+    /// that the text has.
+    #[test]
+    fn drawing_while_parsing_comes_to_the_highlights_of_the_text(
+        which in 0usize..4,
+        ops in prop::collection::vec((small_op(), any::<usize>(), 0usize..3), 1..40),
+    ) {
+        let (name, source) =
+            [("rust", SOURCE), ("python", PYTHON), ("javascript", JAVASCRIPT), ("c", C)][which];
+        let language = language(name).unwrap();
+        let notify: amacs_treesit::Notify = std::sync::Arc::new(|| {});
+        let mut text = Text::from(source);
+        let mut syntax = Syntax::new(language).unwrap();
+        syntax.update_soon(&text, &notify);
+        for (op, top, wait) in ops {
+            match &op {
+                Op::Insert(pos, inserted) => {
+                    let pos = pos % (text.len() + 1);
+                    syntax.before_insert(&text, pos, inserted);
+                    text.insert(pos, inserted);
+                }
+                Op::Delete(pos, len) => {
+                    let start = pos % (text.len() + 1);
+                    let end = (start + len).min(text.len());
+                    syntax.before_delete(&text, start..end);
+                    text.remove(start..end);
+                }
+            }
+            // Drawn at once, drawn after the parse, or asked in earnest.
+            match wait {
+                0 => syntax.update_soon(&text, &notify),
+                1 => settle(&mut syntax, &text),
+                _ => syntax.update(&text),
+            }
+            let top = top % (text.len() + 1);
+            let range = text.char_to_byte(top)..text.char_to_byte((top + 400).min(text.len()));
+            let drawn = syntax.highlights(&text, range.clone());
+            if !syntax.is_parsing() {
+                let mut fresh = Syntax::new(language).unwrap();
+                fresh.update(&text);
+                prop_assert_eq!(
+                    drawn,
+                    fresh.highlights(&text, range.clone()),
+                    "{} at {:?} after {:?}", name, range, op
+                );
+            }
+        }
+        settle(&mut syntax, &text);
+        let mut fresh = Syntax::new(language).unwrap();
+        fresh.update(&text);
+        let all = 0..text.len_bytes();
+        prop_assert_eq!(syntax.highlights(&text, all.clone()), fresh.highlights(&text, all));
+    }
+}

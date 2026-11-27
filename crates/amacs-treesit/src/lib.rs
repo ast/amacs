@@ -17,4 +17,4 @@ pub use languages::{
     BracketRules, IndentStyle, Injections, Language, language, language_called, languages,
     prepare_languages,
 };
-pub use syntax::{Highlights, MAX_PARSE_BYTES, Syntax};
+pub use syntax::{Highlights, MAX_PARSE_BYTES, Notify, Syntax};

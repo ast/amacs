@@ -122,7 +122,13 @@ impl Editor {
         let leaves = self.frame().layout.leaves();
         for id in &leaves {
             let buffer = self.windows[*id].buffer;
-            self.buffers[buffer].update_syntax();
+            // With an event loop to wake, a parse that takes long is not
+            // waited for: the text is drawn again when it is done.
+            if self.parse_in_background {
+                self.buffers[buffer].update_syntax_soon(&self.waker);
+            } else {
+                self.buffers[buffer].update_syntax();
+            }
         }
         // Point can have been put among hidden lines outside any command.
         self.settle_points();

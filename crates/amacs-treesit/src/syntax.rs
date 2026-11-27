@@ -3,10 +3,16 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::ops::Range;
+use std::ops::{ControlFlow, Range};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use amacs_text::Text;
-use tree_sitter::{InputEdit, Node, Parser, Point, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{
+    InputEdit, Node, ParseOptions, ParseState, Parser, Point, QueryCursor, StreamingIterator, Tree,
+};
 
 use crate::highlight::{Capture, Highlight};
 use crate::languages::{Grammar, Injections, Language};
@@ -33,6 +39,39 @@ impl Highlights {
         Highlights {
             start: range.start,
             bytes: self.bytes[range.start - self.start..range.end - self.start].to_vec(),
+        }
+    }
+
+    /// Follows a change to the text: the bytes from `start` to `old_end`
+    /// became `new_len` bytes, which have no highlight yet. Returns
+    /// whether these still are the highlights of one stretch of text; they
+    /// are not when the change went across their start.
+    fn follow(&mut self, start: usize, old_end: usize, new_len: usize) -> bool {
+        let known = self.range();
+        if start >= known.end {
+            return true;
+        }
+        if old_end <= known.start {
+            self.start = known.start - (old_end - start) + new_len;
+            return true;
+        }
+        if start < known.start {
+            return false;
+        }
+        let from = start - known.start;
+        let to = old_end.min(known.end) - known.start;
+        self.bytes.splice(from..to, std::iter::repeat_n(0, new_len));
+        true
+    }
+
+    /// Takes over the highlights of another, where they are among these.
+    fn take(&mut self, other: &Highlights) {
+        let (known, given) = (self.range(), other.range());
+        let from = given.start.max(known.start);
+        let to = given.end.min(known.end);
+        if from < to {
+            self.bytes[from - known.start..to - known.start]
+                .copy_from_slice(&other.bytes[from - given.start..to - given.start]);
         }
     }
 
@@ -85,6 +124,80 @@ pub struct Syntax {
     /// same are asked for each time the text is drawn, and most of the
     /// time the text has not changed in between.
     painted: RefCell<Vec<Highlights>>,
+    /// The bytes whose remembered highlights a change to the text has made
+    /// doubtful, as they are after the change: they are painted again at
+    /// the next [`Syntax::update`], and the rest is kept. `None` when
+    /// nothing changed, or when what is remembered was dropped instead.
+    doubtful: Option<Range<usize>>,
+    /// Counts the changes to the text.
+    generation: u64,
+    /// The count that the thread that parses is asked about last.
+    newest: Arc<AtomicU64>,
+    /// Where the tree of a parse on that thread comes.
+    pending: Option<Receiver<(u64, Option<Tree>)>>,
+    /// Whether the tree is not that of the text: the text was changed
+    /// since the tree was parsed, and the tree only told where. That is
+    /// what is drawn from while another thread parses the text.
+    rough: bool,
+}
+
+/// How long [`Syntax::update_soon`] parses before it leaves the rest to
+/// another thread: more than a change to text without errors takes, and
+/// little of the time that a key press may take.
+const PARSE_BUDGET: Duration = Duration::from_millis(1);
+
+/// Called from the thread that parses when a tree is ready, to wake the
+/// thread that owns the text.
+pub type Notify = Arc<dyn Fn() + Send + Sync>;
+
+/// A text to parse on the thread for that.
+struct Job {
+    language: tree_sitter::Language,
+    text: Text,
+    /// Which state of the text this is, and the newest that is asked
+    /// about: a job for an older one is not worth doing.
+    generation: u64,
+    newest: Arc<AtomicU64>,
+    reply: Sender<(u64, Option<Tree>)>,
+    notify: Notify,
+}
+
+/// The thread that parses texts whole, away from the one that draws.
+/// `None` if it could not be started.
+fn parse_thread() -> Option<&'static Sender<Job>> {
+    static THREAD: OnceLock<Option<Sender<Job>>> = OnceLock::new();
+    THREAD
+        .get_or_init(|| {
+            let (sender, jobs) = mpsc::channel::<Job>();
+            std::thread::Builder::new()
+                .name("parse".to_owned())
+                .spawn(move || {
+                    let mut parser = Parser::new();
+                    for job in jobs {
+                        let wanted = || job.newest.load(Ordering::Relaxed) == job.generation;
+                        if !wanted() || parser.set_language(&job.language).is_err() {
+                            continue;
+                        }
+                        let mut read = |byte: usize, _: Point| job.text.chunk_at_byte(byte);
+                        let mut go_on = |_: &ParseState| {
+                            if wanted() {
+                                ControlFlow::Continue(())
+                            } else {
+                                ControlFlow::Break(())
+                            }
+                        };
+                        let options = ParseOptions::new().progress_callback(&mut go_on);
+                        let tree = parser.parse_with_options(&mut read, None, Some(options));
+                        parser.reset();
+                        if tree.is_some() && job.reply.send((job.generation, tree)).is_ok() {
+                            (job.notify)();
+                        }
+                    }
+                })
+                .ok()
+                .map(|_| sender)
+        })
+        .as_ref()
 }
 
 /// The ranges of highlights that are remembered: one for each of a few
@@ -138,6 +251,11 @@ impl Syntax {
             stale: true,
             broken: false,
             painted: RefCell::new(Vec::new()),
+            doubtful: None,
+            generation: 0,
+            newest: Arc::new(AtomicU64::new(0)),
+            pending: None,
+            rough: false,
         })
     }
 
@@ -158,10 +276,11 @@ impl Syntax {
     /// Tells the tree that `inserted` is about to be put at char `pos` of
     /// `text`. Must be called before the text changes.
     pub fn before_insert(&mut self, text: &Text, pos: usize, inserted: &str) {
+        let start_byte = text.char_to_byte(pos);
+        self.before_change(text, start_byte..start_byte, inserted.len());
         self.stale = true;
         self.markup_stale = true;
         let Some(tree) = &mut self.tree else { return };
-        let start_byte = text.char_to_byte(pos);
         let start_position = point(text, start_byte);
         tree.edit(&InputEdit {
             start_byte,
@@ -176,11 +295,12 @@ impl Syntax {
     /// Tells the tree that a range of chars of `text` is about to be
     /// removed. Must be called before the text changes.
     pub fn before_delete(&mut self, text: &Text, range: Range<usize>) {
+        let start_byte = text.char_to_byte(range.start);
+        let old_end_byte = text.char_to_byte(range.end);
+        self.before_change(text, start_byte..old_end_byte, 0);
         self.stale = true;
         self.markup_stale = true;
         let Some(tree) = &mut self.tree else { return };
-        let start_byte = text.char_to_byte(range.start);
-        let old_end_byte = text.char_to_byte(range.end);
         let start_position = point(text, start_byte);
         tree.edit(&InputEdit {
             start_byte,
@@ -192,8 +312,69 @@ impl Syntax {
         });
     }
 
+    fn forget_painted(&mut self) {
+        self.painted.get_mut().clear();
+        self.doubtful = None;
+    }
+
+    /// Prepares the remembered highlights for a change to the text, which
+    /// is still as it was: the bytes of `old` are about to become
+    /// `new_len` bytes.
+    ///
+    /// Most of what is remembered holds after one change: a highlight
+    /// comes from a match of the query, and a match away from the change
+    /// and from where the tree comes out different is the same match
+    /// after. So the highlights follow the change, and what is doubtful
+    /// is noted for [`Syntax::update`] to paint again. Here that is what
+    /// the matches at the change cover, which the text may no longer
+    /// match after: the tree does not tell that.
+    ///
+    /// The second change before an update has no tree to ask, and text
+    /// in other languages is parsed as a whole each time, so in both cases
+    /// what is remembered is dropped.
+    fn before_change(&mut self, text: &Text, old: Range<usize>, new_len: usize) {
+        self.generation += 1;
+        if self.painted.get_mut().is_empty() {
+            self.doubtful = None;
+            return;
+        }
+        let asked = match (&self.tree, self.grammar) {
+            (Some(tree), Some(grammar))
+                if !self.stale
+                    && !self.rough
+                    && self.lines.is_none()
+                    && self.language.injections.is_none() =>
+            {
+                Some((tree, grammar))
+            }
+            _ => None,
+        };
+        let Some((tree, grammar)) = asked else {
+            self.forget_painted();
+            return;
+        };
+        let around = old.start.saturating_sub(1)..(old.end + 1).min(text.len_bytes());
+        let covered = covered(grammar, tree.root_node(), text, around);
+        // Where a byte of before the change is after it.
+        let after = |byte: usize| {
+            if byte >= old.end {
+                byte - old.end + old.start + new_len
+            } else {
+                byte.min(old.start)
+            }
+        };
+        self.doubtful = Some(after(covered.start)..after(covered.end).max(old.start + new_len));
+        self.painted
+            .get_mut()
+            .retain_mut(|found| found.follow(old.start, old.end, new_len));
+    }
+
     /// Forgets the tree, for when the text was replaced wholesale.
     pub fn reset(&mut self) {
+        self.generation += 1;
+        self.forget_painted();
+        self.pending = None;
+        self.rough = false;
         self.tree = None;
         self.stale = true;
         self.markup_stale = true;
@@ -202,17 +383,23 @@ impl Syntax {
     /// Brings the tree up to date with the text. Cheap when nothing changed,
     /// and after small edits only the changed part is parsed again.
     pub fn update(&mut self, text: &Text) {
-        if !self.stale {
+        if !self.stale && !self.rough {
             return;
         }
         self.stale = false;
-        self.painted.get_mut().clear();
+        self.rough = false;
+        self.pending = None;
+        let doubtful = self.doubtful.take();
+        if doubtful.is_none() {
+            self.painted.get_mut().clear();
+        }
         if let Some(lines) = &mut self.lines {
             lines.scan(text);
             return;
         }
         if text.len_bytes() > MAX_PARSE_BYTES {
             self.tree = None;
+            self.forget_painted();
             return;
         }
         let mut read = |byte: usize, _: Point| text.chunk_at_byte(byte);
@@ -231,10 +418,165 @@ impl Syntax {
         self.tree = self
             .parser
             .parse_with_options(&mut read, old.as_ref(), None);
+        let mut grown = old.is_some();
         if old.is_some() && afresh && broken(&self.tree) {
             self.tree = self.parser.parse_with_options(&mut read, None, None);
+            grown = false;
         }
         self.broken = broken(&self.tree);
+        // What is remembered of the highlights is brought up to date, if
+        // the new tree was made from the old one: only then do the two
+        // say where they differ.
+        match (doubtful, old, grown) {
+            (Some(doubtful), Some(old), true) => self.paint_again(text, &old, doubtful),
+            _ => self.forget_painted(),
+        }
+    }
+
+    /// Whether another thread is parsing the text: what is drawn now is
+    /// drawn from a tree of before the last changes, and will be drawn
+    /// again when that thread is done.
+    pub fn is_parsing(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Brings the tree up to date with the text as [`Syntax::update`]
+    /// does, but without making a key press wait for it: for drawing.
+    ///
+    /// Text without syntax errors is parsed here, which takes little
+    /// after a change. Text with errors is parsed afresh, all of it, and
+    /// that is left to another thread: `notify` is called from it when
+    /// the tree is there, and the next call of this takes the tree. Until
+    /// then the tree is the one of before, told of the changes, so that
+    /// what is drawn from it is right nearly everywhere.
+    pub fn update_soon(&mut self, text: &Text, notify: &Notify) {
+        self.take_parsed();
+        if !self.stale {
+            return;
+        }
+        let Some(grammar) = self.grammar else {
+            return self.update(text);
+        };
+        if self.language.injections.is_some()
+            || text.len_bytes() > REPARSE_BYTES
+            || self.tree.is_none()
+        {
+            return self.update(text);
+        }
+        let Some(thread) = parse_thread() else {
+            return self.update(text);
+        };
+        self.stale = false;
+        let doubtful = self.doubtful.take();
+        if !self.broken && !self.rough {
+            let mut read = |byte: usize, _: Point| text.chunk_at_byte(byte);
+            let started = Instant::now();
+            let mut in_time = |_: &ParseState| {
+                if started.elapsed() < PARSE_BUDGET {
+                    ControlFlow::Continue(())
+                } else {
+                    ControlFlow::Break(())
+                }
+            };
+            let options = ParseOptions::new().progress_callback(&mut in_time);
+            let parsed =
+                self.parser
+                    .parse_with_options(&mut read, self.tree.as_ref(), Some(options));
+            match parsed {
+                Some(tree) if !tree.root_node().has_error() => {
+                    let old = self.tree.replace(tree);
+                    match (doubtful, old) {
+                        (Some(doubtful), Some(old)) => self.paint_again(text, &old, doubtful),
+                        _ => self.forget_painted(),
+                    }
+                    return;
+                }
+                // With errors, which a parse afresh may see otherwise:
+                // good to draw from until that is there.
+                Some(tree) => self.tree = Some(tree),
+                // Out of time. The parser would go on from there if asked
+                // again, but the text will not be the same then.
+                None => self.parser.reset(),
+            }
+        }
+        self.forget_painted();
+        self.rough = true;
+        let (reply, pending) = mpsc::channel();
+        self.newest.store(self.generation, Ordering::Relaxed);
+        let job = Job {
+            language: grammar.language.clone(),
+            text: text.clone(),
+            generation: self.generation,
+            newest: self.newest.clone(),
+            reply,
+            notify: notify.clone(),
+        };
+        if thread.send(job).is_ok() {
+            self.pending = Some(pending);
+        } else {
+            self.update(text);
+        }
+    }
+
+    /// Takes the tree that another thread has parsed, if it is there and
+    /// the text is still the one it was parsed from.
+    fn take_parsed(&mut self) {
+        let Some(pending) = &self.pending else { return };
+        let Some((_, tree)) = pending
+            .try_iter()
+            .find(|(generation, _)| *generation == self.generation)
+        else {
+            return;
+        };
+        self.pending = None;
+        if self.stale {
+            return;
+        }
+        self.broken = tree
+            .as_ref()
+            .is_some_and(|tree| tree.root_node().has_error());
+        self.tree = tree;
+        self.rough = false;
+        self.markup_stale = true;
+        self.forget_painted();
+    }
+
+    /// Paints the remembered highlights again where a change to the text
+    /// can have changed them: `doubtful`, and where the tree is not what
+    /// `old` was, with what the matches of the query there cover.
+    fn paint_again(&mut self, text: &Text, old: &Tree, doubtful: Range<usize>) {
+        let (Some(tree), Some(grammar)) = (&self.tree, self.grammar) else {
+            self.forget_painted();
+            return;
+        };
+        let mut again = doubtful;
+        for changed in old.changed_ranges(tree) {
+            again.start = again.start.min(changed.start_byte);
+            again.end = again.end.max(changed.end_byte);
+        }
+        // Whole lines: what a line shows is mostly decided within it.
+        let len = text.len_bytes();
+        again.end = again.end.min(len);
+        again.start = text.line_to_byte(text.byte_to_line(again.start.min(len)));
+        let last_line = text.byte_to_line(again.end);
+        again.end = if last_line + 1 < text.len_lines() {
+            text.line_to_byte(last_line + 1)
+        } else {
+            len
+        };
+        let again = covered(grammar, tree.root_node(), text, again);
+        let remembered = std::mem::take(self.painted.get_mut());
+        let mut kept = Vec::with_capacity(remembered.len());
+        for mut found in remembered {
+            let known = found.range();
+            let from = again.start.max(known.start);
+            let to = again.end.min(known.end);
+            if from < to {
+                found.take(&self.paint(text, from..to));
+            }
+            kept.push(found);
+        }
+        *self.painted.get_mut() = kept;
     }
 
     /// Finds anew the chars of the text that are markup: what stands
@@ -381,30 +723,48 @@ impl Syntax {
         if let Some(found) = painted.iter().find(|found| holds(found)) {
             return found.part(range);
         }
-        // A window that scrolls asks for a range next to the one before:
-        // more is painted then, on both sides, so that the next rows it
-        // scrolls to are known. After a change to the text only what is
-        // asked for is painted, since typing would pay for the rest with
-        // each key.
-        let scrolled = painted.iter().position(|found| {
+        // A window that scrolls asks for a range next to the one before,
+        // and one whose text changed for one that ends elsewhere. What is
+        // missing is painted and joined to what is known, and when it is
+        // more than a line, as much again on that side, so that the rows
+        // that the window scrolls to next are known too.
+        let near = painted.iter().position(|found| {
             let known = ends(found);
-            known.start < range.end && range.start < known.end
+            known.start <= range.end && range.start <= known.end
         });
-        let wanted = match scrolled {
-            Some(at) => {
-                painted.remove(at);
-                let snap = |byte: usize| text.char_to_byte(text.byte_to_char(byte));
-                snap(range.start.saturating_sub(range.len()))
-                    ..snap((range.end + range.len()).min(text.len_bytes()))
+        let Some(near) = near else {
+            let out = self.paint(text, range);
+            if painted.len() == PAINTED_KEPT {
+                painted.remove(0);
             }
-            None => range.clone(),
+            painted.push(out.clone());
+            return out;
         };
-        let out = self.paint(text, wanted);
-        let part = out.part(range);
-        if painted.len() == PAINTED_KEPT {
-            painted.remove(0);
+        let mut found = painted.remove(near);
+        let known = ends(&found);
+        let snap = |byte: usize| text.char_to_byte(text.byte_to_char(byte));
+        let more = |missing: usize| if missing > 256 { range.len() } else { 0 };
+        if range.start < known.start {
+            let from = snap(range.start.saturating_sub(more(known.start - range.start)));
+            let before = self.paint(text, from..known.start);
+            found.bytes.splice(0..0, before.bytes);
+            found.start = from;
         }
-        painted.push(out);
+        if range.end > known.end {
+            let to = snap((range.end + more(range.end - known.end)).min(text.len_bytes()));
+            let after = self.paint(text, known.end..to);
+            found.bytes.extend(after.bytes);
+        }
+        // What is far from the window is let go, so that scrolling through
+        // a text does not come to remember all of it.
+        let known = ends(&found);
+        let keep = range.start.saturating_sub(2 * range.len()).max(known.start)
+            ..(range.end + 2 * range.len()).min(known.end);
+        if keep != known {
+            found = found.part(keep);
+        }
+        let part = found.part(range);
+        painted.push(found);
         part
     }
 
@@ -440,7 +800,7 @@ fn paint(grammar: &Grammar, first_wins: bool, root: Node, text: &Text, out: &mut
     let range = out.start..out.start + out.bytes.len();
     let mut cursor = QueryCursor::new();
     cursor.set_byte_range(range.clone());
-    let provider = |node: Node| text.byte_chunks(node.byte_range()).map(str::as_bytes);
+    let provider = |node: Node| node_text(text, node.byte_range());
     let mut matches = cursor.matches(&grammar.query, root, provider);
     // (start, end, pattern, highlight) of everything captured.
     let mut found: Vec<(usize, usize, usize, u8)> = Vec::new();
@@ -475,11 +835,40 @@ fn paint(grammar: &Grammar, first_wins: bool, root: Node, text: &Text, out: &mut
     }
 }
 
+/// The text of a node, for the query to look at. A tree that was told of
+/// changes but not parsed since can have a node where no text is, or one
+/// that ends within a char: such a node gets what there is.
+fn node_text(text: &Text, node: Range<usize>) -> impl Iterator<Item = &[u8]> + '_ {
+    let whole = |byte: usize| text.char_to_byte(text.byte_to_char(byte.min(text.len_bytes())));
+    let end = whole(node.end);
+    let start = whole(node.start).min(end);
+    text.byte_chunks(start..end).map(str::as_bytes)
+}
+
+/// A range of bytes with what the matches of a grammar's query at it
+/// cover: a match gives its captures their highlights together, so when
+/// one of them is in doubt, all are.
+fn covered(grammar: &Grammar, root: Node, text: &Text, range: Range<usize>) -> Range<usize> {
+    let mut cursor = QueryCursor::new();
+    cursor.set_byte_range(range.clone());
+    let provider = |node: Node| node_text(text, node.byte_range());
+    let mut matches = cursor.matches(&grammar.query, root, provider);
+    let mut covered = range;
+    while let Some(found) = matches.next() {
+        for capture in found.captures() {
+            let node = capture.node.byte_range();
+            covered.start = covered.start.min(node.start);
+            covered.end = covered.end.max(node.end);
+        }
+    }
+    covered
+}
+
 /// Adds what a grammar's query says is markup under `root` to `out`, as
 /// ranges of bytes counted from `origin`.
 fn conceal(grammar: &Grammar, root: Node, text: &Text, origin: usize, out: &mut Vec<Range<usize>>) {
     let mut cursor = QueryCursor::new();
-    let provider = |node: Node| text.byte_chunks(node.byte_range()).map(str::as_bytes);
+    let provider = |node: Node| node_text(text, node.byte_range());
     let mut matches = cursor.matches(&grammar.query, root, provider);
     while let Some(found) = matches.next() {
         for capture in found.captures() {
