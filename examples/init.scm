@@ -468,6 +468,15 @@
 ;; C-x SPC and C-x r k, y, d, t, o for rectangles, M-% query-replace,
 ;; M-; comments, M-! and M-| shell commands, C-x r m and C-x r b bookmarks.
 
+;;; Matrix. M-x matrix lists the rooms; docs/matrix.md has the rest.
+
+;; (set-option! 'matrix-user-id "@name:example.org")
+
+;;; Pictures under the lines that name them, in a window.
+
+;; (add-hook! 'markdown-mode-hook inline-images-mode)
+;; (add-hook! 'org-mode-hook inline-images-mode)
+
 ;;; Not available yet. These wait for later milestones:
 ;;;   repeat (H-z)
 ;;;   rainbow delimiters, matching-bracket highlight

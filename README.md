@@ -963,6 +963,27 @@ directories to work in besides that of the project:
 Not there yet: other agents than Claude by name, and what belongs to Claude
 Code's own terminal interface, such as going back to a checkpoint.
 
+## Matrix
+
+`M-x matrix` lists the rooms of a Matrix account, the rooms of each space
+under it, with what is not read; `RET` shows a room, and `RET` there writes
+a message. Messages are answered, changed, reacted to and deleted with a
+key each, a thread has a buffer of its own, and pictures show under their
+messages. Encrypted rooms are read and written as others are, once the
+device is verified with `M-x matrix-verify` or `M-x matrix-recover`.
+
+The editor does not speak Matrix itself. A program beside it does,
+`amacs-matrix`, with the Matrix SDK, and the two talk in lines of JSON.
+`docs/matrix.md` has the setting up, the keys and what the lines say; the
+editor's side is `runtime/lib/matrix.scm`.
+
+## Pictures
+
+`M-x inline-images-mode` shows the pictures that Markdown and Org name
+under the lines that name them, in a window; in a terminal the text is all
+there is. Code shows a picture with `(add-image! position file)`, which
+`docs/extending.md` describes.
+
 ## Spelling
 
 The misspelled words on screen have a wave under them: all of the text in
