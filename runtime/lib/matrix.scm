@@ -39,6 +39,10 @@ shown by the desktop too, and not only in the echo area.")
   "The program that shows a Matrix message on the desktop, and its first
 arguments. The name of who wrote and the message are given after them.")
 
+(define-option 'matrix-image-rows 10
+  "The rows that a picture in a Matrix room gets at most, in a frame that
+draws pictures. 0 is to show no pictures, only their names.")
+
 (set-face! 'matrix-heading 'fg 'blue 'bold #t)
 (set-face! 'matrix-unread 'bold #t)
 (set-face! 'matrix-mention 'fg 'red 'bold #t)
@@ -58,14 +62,21 @@ arguments. The name of who wrote and the message are given after them.")
 ;; "offline", "error", and #f while it does not run.
 (define %matrix-state #f)
 (define %matrix-state-note #f)
-;; The rooms by their ids, each as the program told of it.
+;; Whether this device is one that the account trusts: without that, old
+;; messages of encrypted rooms cannot be read. #t until the program says.
+(define %matrix-verified #t)
+;; The rooms and spaces by their ids, each as the program told of it.
 (define %matrix-rooms (make-hash-table))
-;; The messages of the rooms that are open, by room id: lists in order.
+;; The messages that are shown, by room, or by room and thread: lists in
+;; order. See %matrix-key.
 (define %matrix-timelines (make-hash-table))
+;; What each buffer of messages shows, by its name: a pair of the id of a
+;; room and the id of the message that a thread starts with, or #f.
+(define %matrix-views (make-hash-table))
 ;; The room of each row of the list of rooms, from the first row: #f for
 ;; rows that are of no room.
 (define %matrix-rows '())
-;; Where each message starts in the buffer of a room, by the buffer's
+;; Where each message starts in a buffer of messages, by the buffer's
 ;; name: a list of pairs of a position and the message, the last first.
 (define %matrix-item-starts (make-hash-table))
 ;; Whether a redraw is on its way.
@@ -73,15 +84,31 @@ arguments. The name of who wrote and the message are given after them.")
 
 (define %matrix-rooms-buffer "*matrix*")
 
-(define (%matrix-room-buffer room)
-  (string-append "*matrix: " (%matrix-room-name room) "*"))
+(define (%matrix-get object key)
+  ;; The value of a key, with #f for one that is not there or is null.
+  (let ((value (json-ref object key)))
+    (if (eq? value 'null) #f value)))
 
 (define (%matrix-list value)
   (if (vector? value) (vector->list value) '()))
 
 (define (%matrix-room-name room)
-  (let ((name (json-ref room 'name)))
+  (let ((name (%matrix-get room 'name)))
     (if (and (string? name) (not (string-null? name))) name (json-ref room 'id "?"))))
+
+(define (%matrix-key room thread)
+  ;; The name that the messages of a room, or of a thread in it, are
+  ;; kept under.
+  (if thread (string-append room " " thread) room))
+
+(define (%matrix-view-buffer room thread)
+  ;; The name of the buffer of a room, or of a thread in it.
+  (string-append "*matrix: " (%matrix-room-name room)
+                 (if thread
+                     (string-append " / thread "
+                                    (substring thread 0 (min 9 (string-length thread))))
+                     "")
+                 "*"))
 
 ;;; The connection
 
@@ -97,9 +124,14 @@ arguments. The name of who wrote and the message are given after them.")
      (string-append (json-encode (json-object 'id id 'method method 'params params)) "\n"))
     id))
 
-(define (%matrix-report error)
+(define (%matrix-report problem)
   ;; Says what went wrong with a request, if something did.
-  (when error (message (string-append "Matrix: " (if (string? error) error "the request failed")))))
+  (when (and problem (not (eq? problem 'null)))
+    (message (string-append "Matrix: " (if (string? problem) problem "the request failed")))))
+
+(define (%matrix-reporting result problem)
+  ;; A callback for requests whose answer says nothing when all is well.
+  (%matrix-report problem))
 
 (define (%matrix-filter process text)
   ;; Whole lines of JSON are handled; a part line waits for its rest.
@@ -117,14 +149,14 @@ arguments. The name of who wrote and the message are given after them.")
               (%matrix-dispatch (json-decode line))))
           (loop))))))
 
-(define (%matrix-dispatch message)
-  (let ((event (json-ref message 'event))
-        (id (json-ref message 'id)))
-    (cond [event (%matrix-event event message)]
+(define (%matrix-dispatch data)
+  (let ((event (json-ref data 'event))
+        (id (json-ref data 'id)))
+    (cond [event (%matrix-event event data)]
           [id (let ((callback (hash-table-ref %matrix-pending id #f)))
                 (when callback
                   (hash-table-delete! %matrix-pending id)
-                  (callback (json-ref message 'result) (json-ref message 'error))))])))
+                  (callback (json-ref data 'result) (%matrix-get data 'error))))])))
 
 (define (%matrix-stderr process text)
   (log-message (string-append "matrix: " (string-trim text))))
@@ -146,12 +178,12 @@ arguments. The name of who wrote and the message are given after them.")
   (cond
    [(equal? event "state")
     (set! %matrix-state (json-ref data 'state))
-    (set! %matrix-state-note (json-ref data 'message))
+    (set! %matrix-state-note (%matrix-get data 'message))
+    (set! %matrix-verified (not (eq? (json-ref data 'verified #t) #f)))
     (%matrix-changed!)]
    [(equal? event "login-url")
-    (let ((url (json-ref data 'url)))
-      (message "Matrix: finish the login in the browser.")
-      (browse-url url))]
+    (message "Matrix: finish the login in the browser.")
+    (browse-url (json-ref data 'url))]
    [(equal? event "room")
     (let ((room (json-ref data 'room)))
       (hash-table-set! %matrix-rooms (json-ref room 'id) room)
@@ -160,17 +192,26 @@ arguments. The name of who wrote and the message are given after them.")
     (hash-table-delete! %matrix-rooms (json-ref data 'id))
     (%matrix-changed!)]
    [(equal? event "timeline")
-    (%matrix-timeline-event (json-ref data 'room) (json-ref data 'op)
+    (%matrix-timeline-event (%matrix-key (json-ref data 'room) (%matrix-get data 'thread))
+                            (json-ref data 'op)
                             (%matrix-list (json-ref data 'items))
                             (%matrix-list (json-ref data 'ids)))
     (%matrix-changed!)]
    [(equal? event "notify") (%matrix-notify data)]
+   [(equal? event "verify-request") (%matrix-verify-request data)]
+   [(equal? event "verify-emojis") (%matrix-verify-emojis data)]
+   [(equal? event "verify-done")
+    (message (if (eq? (json-ref data 'ok) #t)
+                 "Matrix: this device is verified."
+                 (string-append "Matrix: the verification did not finish"
+                                (let ((why (%matrix-get data 'message)))
+                                  (if why (string-append ": " why) ".")))))]
    [else #f]))
 
 (define (%matrix-notify data)
   ;; A message that the rules of the account say to tell of.
   (let* ((room (hash-table-ref %matrix-rooms (json-ref data 'room) #f))
-         (who (string-append (or (json-ref data 'sender_name) "Somebody")
+         (who (string-append (or (%matrix-get data 'sender_name) "Somebody")
                              (if room (string-append " in " (%matrix-room-name room)) "")))
          (body (json-ref data 'body "")))
     (message (string-append who ": " body))
@@ -180,13 +221,13 @@ arguments. The name of who wrote and the message are given after them.")
         (guard (e (#t #f))
           (start-process (car program) (append (cdr program) (list who body))))))))
 
-(define (%matrix-timeline-event room op items ids)
-  ;; Only the rooms that are open have their messages kept.
-  (when (hash-table-contains? %matrix-timelines room)
-    (let ((old (hash-table-ref %matrix-timelines room '()))
+(define (%matrix-timeline-event key op items ids)
+  ;; Only what is shown has its messages kept.
+  (when (hash-table-contains? %matrix-timelines key)
+    (let ((old (hash-table-ref %matrix-timelines key '()))
           (id-of (lambda (item) (json-ref item 'id))))
       (hash-table-set!
-       %matrix-timelines room
+       %matrix-timelines key
        (cond
         [(equal? op "reset") items]
         [(equal? op "append") (append old items)]
@@ -202,6 +243,24 @@ arguments. The name of who wrote and the message are given after them.")
          (filter (lambda (item) (not (member (id-of item) ids))) old)]
         [else old])))))
 
+;;; Verifying this device
+
+(define (%matrix-verify-request data)
+  ;; Another device of the account asks to verify this one.
+  (let ((accept (y-or-n? "Matrix: another of your devices asks to verify this one. Start? ")))
+    (%matrix-request (if accept "verify-accept" "verify-cancel") (json-object)
+                     %matrix-reporting)))
+
+(define (%matrix-verify-emojis data)
+  ;; Both devices show the same emojis if nobody is between them.
+  (let* ((emojis (map (lambda (emoji)
+                        (string-append (json-ref emoji 'symbol "?") " "
+                                       (json-ref emoji 'description "")))
+                      (%matrix-list (json-ref data 'emojis))))
+         (same (y-or-n? (string-append (string-join emojis "  ")
+                                       "   Does the other device show these? "))))
+    (%matrix-request "verify-confirm" (json-object 'match same) %matrix-reporting)))
+
 ;;; Drawing
 
 (define (%matrix-changed!)
@@ -213,21 +272,35 @@ arguments. The name of who wrote and the message are given after them.")
                  (%matrix-redraw!)))))
 
 (define (%matrix-redraw!)
-  (when (member %matrix-rooms-buffer (buffer-list))
-    (%matrix-draw-rooms!))
-  (for-each
-   (lambda (id)
-     (let ((room (hash-table-ref %matrix-rooms id #f)))
-       (when (and room (member (%matrix-room-buffer room) (buffer-list)))
-         (%matrix-draw-room! room))))
-   (hash-table-keys %matrix-timelines))
+  (let ((buffers (buffer-list)))
+    (when (member %matrix-rooms-buffer buffers)
+      (%matrix-draw-rooms!))
+    (for-each
+     (lambda (name)
+       (if (member name buffers)
+           (%matrix-draw-view! name)
+           ;; A buffer that was killed shows nothing any more.
+           (%matrix-forget-view! name)))
+     (hash-table-keys %matrix-views)))
   ;; Messages that come into the room that is being looked at are read.
   (let ((shown (window-buffer)))
-    (when (hash-table-contains? %matrix-item-starts shown)
+    (when (hash-table-contains? %matrix-views shown)
       (with-current-buffer shown (%matrix-mark-read)))))
 
+(define (%matrix-forget-view! name)
+  (let ((view (hash-table-ref %matrix-views name #f)))
+    (when view
+      (hash-table-delete! %matrix-views name)
+      (hash-table-delete! %matrix-item-starts name)
+      (hash-table-delete! %matrix-timelines (%matrix-key (car view) (cdr view)))
+      (when %matrix-process
+        (%matrix-request "timeline-close" (%matrix-view-params view) #f)))))
+
 (define (%matrix-state-line)
-  (cond [(equal? %matrix-state "syncing") ""]
+  (cond [(equal? %matrix-state "syncing")
+         (if %matrix-verified
+             ""
+             "This device is not verified. Use M-x matrix-verify or M-x matrix-recover.")]
         [(equal? %matrix-state "starting") "Starting…"]
         [(equal? %matrix-state "login") "Not logged in. Use M-x matrix-login."]
         [(equal? %matrix-state "offline")
@@ -236,19 +309,19 @@ arguments. The name of who wrote and the message are given after them.")
         [(equal? %matrix-state "error") (or %matrix-state-note "The Matrix program has a problem.")]
         [else (or %matrix-state-note "Matrix is not running. Use M-x matrix.")]))
 
-;; A list of the text of a buffer and the faces to lay over it, built by
-;; rows: `(emit! text face)` adds text, with a face or #f.
+;; The text of a buffer and the faces to lay over it, built piece by
+;; piece: (builder 'emit text face) adds text, with a face or #f.
 (define (%matrix-builder)
-  (let ((parts '()) (faces '()) (length 0))
+  (let ((parts '()) (faces '()) (size 0))
     (lambda (command . args)
       (cond
        [(eq? command 'emit)
         (let ((text (car args)) (face (cadr args)))
           (when face
-            (set! faces (cons (list length (+ length (string-length text)) face) faces)))
+            (set! faces (cons (list size (+ size (string-length text)) face) faces)))
           (set! parts (cons text parts))
-          (set! length (+ length (string-length text))))]
-       [(eq? command 'length) length]
+          (set! size (+ size (string-length text))))]
+       [(eq? command 'length) size]
        [(eq? command 'text) (apply string-append (reverse parts))]
        [(eq? command 'faces) faces]))))
 
@@ -263,16 +336,51 @@ arguments. The name of who wrote and the message are given after them.")
               (builder 'faces))
     (goto-char (if at-end (string-length text) (min old (string-length text))))))
 
-(define (%matrix-sorted-rooms)
-  ;; The rooms that are no spaces, the one last written in first.
-  (sort (filter (lambda (room) (not (eq? (json-ref room 'space) #t)))
-                (map (lambda (id) (hash-table-ref %matrix-rooms id #f))
-                     (hash-table-keys %matrix-rooms)))
+(define (%matrix-by-activity rooms)
+  ;; The one last written in first.
+  (sort rooms
         (lambda (a b)
           (let ((ta (json-ref a 'activity 0)) (tb (json-ref b 'activity 0)))
             (if (= ta tb)
                 (string<? (%matrix-room-name a) (%matrix-room-name b))
                 (> ta tb))))))
+
+(define (%matrix-space? room)
+  (eq? (json-ref room 'space) #t))
+
+(define (%matrix-room-space room)
+  ;; The space that a room is listed under: the first of those that it
+  ;; is in and that are known, or #f.
+  (let loop ((parents (%matrix-list (json-ref room 'parents))))
+    (if (null? parents)
+        #f
+        (let ((space (hash-table-ref %matrix-rooms (car parents) #f)))
+          (if (and space (%matrix-space? space))
+              space
+              (loop (cdr parents)))))))
+
+(define (%matrix-groups)
+  ;; The rooms in the groups that the list shows them in: a list of lists
+  ;; of a heading and its rooms. First the spaces by name, then the talks
+  ;; with one person, then the other rooms. A group without rooms is left
+  ;; out.
+  (let* ((all (map (lambda (id) (hash-table-ref %matrix-rooms id #f))
+                   (hash-table-keys %matrix-rooms)))
+         (rooms (filter (lambda (room) (not (%matrix-space? room))) all))
+         (spaces (sort (filter %matrix-space? all)
+                       (lambda (a b) (string<? (%matrix-room-name a) (%matrix-room-name b)))))
+         (in-space (lambda (space)
+                     (filter (lambda (room)
+                               (let ((of (%matrix-room-space room)))
+                                 (and of (equal? (json-ref of 'id) (json-ref space 'id)))))
+                             rooms)))
+         (loose (filter (lambda (room) (not (%matrix-room-space room))) rooms))
+         (direct? (lambda (room) (eq? (json-ref room 'direct) #t))))
+    (filter (lambda (group) (not (null? (cadr group))))
+            (append
+             (map (lambda (space) (list (%matrix-room-name space) (in-space space))) spaces)
+             (list (list "People" (filter direct? loose))
+                   (list "Rooms" (filter (lambda (room) (not (direct? room))) loose)))))))
 
 (define (%matrix-draw-rooms!)
   (let ((builder (%matrix-builder))
@@ -285,23 +393,29 @@ arguments. The name of who wrote and the message are given after them.")
       (unless (string-null? state)
         (builder 'emit (string-append state "\n") 'matrix-note)
         (row! #f)))
-    (builder 'emit "\n" #f)
-    (row! #f)
     (for-each
-     (lambda (room)
-       (let* ((unread (json-ref room 'unread 0))
-              (mentions (json-ref room 'mentions 0))
-              (count (cond [(> mentions 0) (string-append (number->string mentions) "@")]
-                           [(> unread 0) (number->string unread)]
-                           [else ""])))
-         (builder 'emit (string-pad-left count 4)
-                  (if (> mentions 0) 'matrix-mention 'matrix-unread))
-         (builder 'emit "  " #f)
-         (builder 'emit (%matrix-room-name room)
-                  (and (or (> unread 0) (> mentions 0)) 'matrix-unread))
-         (builder 'emit "\n" #f)
-         (row! (json-ref room 'id))))
-     (%matrix-sorted-rooms))
+     (lambda (group)
+       (builder 'emit "\n" #f)
+       (row! #f)
+       (builder 'emit (car group) 'matrix-heading)
+       (builder 'emit "\n" #f)
+       (row! #f)
+       (for-each
+        (lambda (room)
+          (let* ((unread (json-ref room 'unread 0))
+                 (mentions (json-ref room 'mentions 0))
+                 (count (cond [(> mentions 0) (string-append (number->string mentions) "@")]
+                              [(> unread 0) (number->string unread)]
+                              [else ""])))
+            (builder 'emit (string-pad-left count 4)
+                     (if (> mentions 0) 'matrix-mention 'matrix-unread))
+            (builder 'emit "  " #f)
+            (builder 'emit (%matrix-room-name room)
+                     (and (or (> unread 0) (> mentions 0)) 'matrix-unread))
+            (builder 'emit "\n" #f)
+            (row! (json-ref room 'id))))
+        (%matrix-by-activity (cadr group))))
+     (%matrix-groups))
     (set! %matrix-rows (reverse rows))
     (with-current-buffer %matrix-rooms-buffer
       (%matrix-fill-buffer! builder #f))))
@@ -322,23 +436,39 @@ arguments. The name of who wrote and the message are given after them.")
   (let ((nl (string-search text "\n")))
     (if nl (string-append (substring text 0 nl) " …") text)))
 
-(define (%matrix-draw-room! room)
-  (let ((builder (%matrix-builder))
-        (starts '())
-        (items (hash-table-ref %matrix-timelines (json-ref room 'id) '())))
+(define (%matrix-thumbnail item)
+  ;; The file of the picture of a message, if the program has fetched one
+  ;; and pictures are shown.
+  (let ((path (%matrix-get (%matrix-get item 'file) 'thumbnail)))
+    (and (string? path)
+         (> (option 'matrix-image-rows) 0)
+         (file-exists? path)
+         path)))
+
+(define (%matrix-draw-view! name)
+  ;; Draws the messages of the buffer of a room or of a thread.
+  (let* ((view (hash-table-ref %matrix-views name #f))
+         (builder (%matrix-builder))
+         (starts '())
+         (pictures '())
+         (items (hash-table-ref %matrix-timelines (%matrix-key (car view) (cdr view)) '())))
     (for-each
      (lambda (item)
        (let ((kind (json-ref item 'kind "text"))
-             (sender (or (json-ref item 'sender_name) (json-ref item 'sender "?")))
-             (reply (json-ref item 'reply_to))
+             (sender (or (%matrix-get item 'sender_name) (json-ref item 'sender "?")))
+             (reply (%matrix-get item 'reply_to))
+             (thread (%matrix-get item 'thread))
              (reactions (%matrix-list (json-ref item 'reactions))))
          (set! starts (cons (cons (builder 'length) item) starts))
          ;; What a reply answers, above it.
-         (when (and reply (not (eq? reply 'null)))
+         (when reply
            (builder 'emit
-                    (string-append "      > " (or (json-ref reply 'sender_name) "?") ": "
+                    (string-append "      > " (or (%matrix-get reply 'sender_name) "?") ": "
                                    (%matrix-first-line (json-ref reply 'body "")) "\n")
                     'matrix-quote))
+         (let ((picture (%matrix-thumbnail item)))
+           (when picture
+             (set! pictures (cons (cons (builder 'length) picture) pictures))))
          (builder 'emit (%matrix-clock (json-ref item 'time)) 'matrix-time)
          (builder 'emit " " #f)
          (cond
@@ -366,11 +496,24 @@ arguments. The name of who wrote and the message are given after them.")
                            reactions)
                       "  ")
                      "\n")
-                    'matrix-reaction))))
+                    'matrix-reaction))
+         ;; The answers that a message has in a thread of its own, in the
+         ;; room: not in the thread itself.
+         (when (and thread (not (cdr view)))
+           (let ((count (json-ref thread 'count 0)))
+             (builder 'emit
+                      (string-append "      " (number->string count)
+                                     (if (= count 1) " answer" " answers")
+                                     " in a thread: t shows them\n")
+                      'matrix-note)))))
      items)
-    (hash-table-set! %matrix-item-starts (%matrix-room-buffer room) starts)
-    (with-current-buffer (%matrix-room-buffer room)
+    (hash-table-set! %matrix-item-starts name starts)
+    (with-current-buffer name
       (%matrix-fill-buffer! builder #t)
+      ;; The text was replaced, and its pictures went with it.
+      (for-each (lambda (picture)
+                  (add-image! (car picture) (cdr picture) (option 'matrix-image-rows)))
+                pictures)
       (set-mode-line-text!
        (let ((state (%matrix-state-line)))
          (if (string-null? state) #f state))))))
@@ -378,15 +521,17 @@ arguments. The name of who wrote and the message are given after them.")
 ;;; Modes
 
 (define-major-mode matrix-rooms-mode special-mode "Matrix"
-  "Major mode of the list of Matrix rooms, the one last written in first,
-each with the number of messages that are not read; a number with @ is of
-messages that name you. RET shows the room of the line.")
+  "Major mode of the list of Matrix rooms: under each space its rooms, then
+the talks with one person and the other rooms, the one last written in
+first. Each has the number of messages that are not read; a number with @
+is of messages that name you. RET shows the room of the line.")
 
 (define-major-mode matrix-room-mode special-mode "Matrix-Room"
-  "Major mode of a Matrix room: its messages, the newest last. RET writes
-a message, and p shows earlier messages. On a message, r answers it, e
-changes it if it is yours, a puts a reaction on it or takes yours off, and
-d deletes it.")
+  "Major mode of a Matrix room or of a thread in one: its messages, the
+newest last. RET writes a message, p shows earlier messages and u sends a
+file. On a message, r answers it, e changes it if it is yours, a puts a
+reaction on it or takes yours off, d deletes it, o opens its file and t
+shows its thread.")
 
 (define (%matrix-row-room)
   ;; The id of the room of the line that point is on in the list of rooms.
@@ -394,39 +539,28 @@ d deletes it.")
          (row (length (filter (lambda (c) (char=? c #\newline)) (string->list before)))))
     (and (< row (length %matrix-rows)) (list-ref %matrix-rows row))))
 
+(define (%matrix-current-view)
+  ;; What the current buffer shows: a pair of the id of a room and of a
+  ;; thread or #f. An error in a buffer that shows no messages.
+  (or (hash-table-ref %matrix-views (buffer-name) #f)
+      (error "There is no Matrix room here.")))
+
 (define (%matrix-current-room)
   ;; The room that the current buffer shows, or the one of the line that
   ;; point is on in the list of rooms; an error if there is none.
-  (let* ((name (buffer-name))
-         (id (if (equal? name %matrix-rooms-buffer)
-                 (%matrix-row-room)
-                 (let loop ((ids (hash-table-keys %matrix-rooms)))
-                   (cond [(null? ids) #f]
-                         [(equal? (%matrix-room-buffer (hash-table-ref %matrix-rooms (car ids) #f))
-                                  name)
-                          (car ids)]
-                         [else (loop (cdr ids))])))))
+  (let ((id (if (equal? (buffer-name) %matrix-rooms-buffer)
+                (%matrix-row-room)
+                (car (%matrix-current-view)))))
     (or (and id (hash-table-ref %matrix-rooms id #f))
         (error "There is no Matrix room here."))))
 
+(define (%matrix-view-params view . more)
+  ;; What a request about a room, or about a thread in it, is sent with:
+  ;; `more` is further keys and values.
+  (apply json-object 'room (car view)
+         (append (if (cdr view) (list 'thread (cdr view)) '()) more)))
+
 ;;; Commands
-
-(define (%matrix-item-at-point)
-  ;; The message that point is in, in the buffer of a room; an error if
-  ;; there is none.
-  (let loop ((starts (hash-table-ref %matrix-item-starts (buffer-name) '())))
-    (cond [(null? starts) (error "There is no message here.")]
-          [(<= (car (car starts)) (point)) (cdr (car starts))]
-          [else (loop (cdr starts))])))
-
-(define (%matrix-on-message method . more)
-  ;; Asks the program to do something with the message at point: `more`
-  ;; is keys and values that go with the room and the message.
-  (let ((room (%matrix-current-room))
-        (item (%matrix-item-at-point)))
-    (%matrix-request method
-                     (apply json-object 'room (json-ref room 'id) 'id (json-ref item 'id) more)
-                     (lambda (result error) (%matrix-report error)))))
 
 (define (%matrix-passphrase)
   ;; The passphrase of the store: the secret of the option, or one typed.
@@ -443,8 +577,11 @@ d deletes it.")
       (set! %matrix-pending (make-hash-table))
       (set! %matrix-rooms (make-hash-table))
       (set! %matrix-timelines (make-hash-table))
+      (set! %matrix-views (make-hash-table))
+      (set! %matrix-item-starts (make-hash-table))
       (set! %matrix-state "starting")
       (set! %matrix-state-note #f)
+      (set! %matrix-verified #t)
       (set! %matrix-process
             (make-process "matrix" (option 'matrix-program)
                           'filter %matrix-filter
@@ -454,7 +591,7 @@ d deletes it.")
                        (json-object 'user user
                                     'homeserver (or (option 'matrix-homeserver) 'null)
                                     'passphrase passphrase)
-                       (lambda (result error) (%matrix-report error))))))
+                       %matrix-reporting))))
 
 (define-command (matrix)
   "Show the list of Matrix rooms, and start the program that speaks Matrix
@@ -467,42 +604,97 @@ if it does not run. The matrix-user-id option says who you are."
 (define-command (matrix-login)
   "Log in to your Matrix server. The server's page for that opens in the
 browser. When you finish there, the rooms come."
-  (%matrix-request "login" (json-object) (lambda (result error) (%matrix-report error))))
+  (%matrix-request "login" (json-object) %matrix-reporting))
 
 (define-command (matrix-quit)
   "Stop the program that speaks Matrix. The buffers of the rooms stay."
   (when %matrix-process
-    (let ((process %matrix-process))
-      (process-send-eof process))))
+    (process-send-eof %matrix-process)))
+
+(define-command (matrix-verify)
+  "Verify this device with another device of your account, such as
+Element on a telephone: accept the request there, then compare the emojis
+that both show. A verified device gets the keys of your encrypted rooms."
+  (%matrix-request "verify-start" (json-object)
+                   (lambda (result problem)
+                     (if problem
+                         (%matrix-report problem)
+                         (message "Matrix: accept the verification on your other device.")))))
+
+(define-command (matrix-recover)
+  "Verify this device with the recovery key of your account, and get the
+keys of your encrypted rooms from the server's backup."
+  (let ((key (read-passwd "Recovery key: ")))
+    (unless (string-null? (string-trim key))
+      (%matrix-request "recover" (json-object 'key key)
+                       (lambda (result problem)
+                         (if problem
+                             (%matrix-report problem)
+                             (message "Matrix: this device is verified.")))))))
+
+(define (%matrix-show-view! room thread)
+  ;; Shows the buffer of a room, or of a thread in it, and asks the
+  ;; program for its messages if they are not kept yet.
+  (let* ((id (json-ref room 'id))
+         (view (cons id thread))
+         (name (%matrix-view-buffer room thread))
+         (key (%matrix-key id thread)))
+    (hash-table-set! %matrix-views name view)
+    (unless (hash-table-contains? %matrix-timelines key)
+      (hash-table-set! %matrix-timelines key '())
+      (%matrix-request "timeline-open" (%matrix-view-params view) %matrix-reporting))
+    (switch-to-buffer name)
+    (unless (eq? (major-mode) 'matrix-room-mode) (matrix-room-mode))
+    (%matrix-draw-view! name)
+    (goto-char (string-length (buffer-string)))))
 
 (define-command (matrix-open-room)
   "Show the messages of the room on this line."
-  (let* ((room (%matrix-current-room))
-         (id (json-ref room 'id)))
-    (unless (hash-table-contains? %matrix-timelines id)
-      (hash-table-set! %matrix-timelines id '())
-      (%matrix-request "timeline-open" (json-object 'room id)
-                       (lambda (result error) (%matrix-report error))))
-    (switch-to-buffer (%matrix-room-buffer room))
-    (unless (eq? (major-mode) 'matrix-room-mode) (matrix-room-mode))
-    (%matrix-draw-room! room)
-    (goto-char (string-length (buffer-string)))))
+  (%matrix-show-view! (%matrix-current-room) #f))
+
+(define-command (matrix-switch-room)
+  "Show the messages of a room that you choose by its name."
+  (let* ((rooms (apply append (map cadr (%matrix-groups))))
+         (name (completing-read "Room: " (map %matrix-room-name rooms)))
+         (room (let loop ((rooms rooms))
+                 (cond [(null? rooms) (error "There is no room of that name.")]
+                       [(equal? (%matrix-room-name (car rooms)) name) (car rooms)]
+                       [else (loop (cdr rooms))]))))
+    (%matrix-show-view! room #f)))
 
 (define-command (matrix-send)
-  "Write a message to the room of this buffer."
-  (let* ((room (%matrix-current-room))
-         (text (read-string (string-append "To " (%matrix-room-name room) ": "))))
+  "Write a message to the room, or the thread, of this buffer."
+  (let* ((view (%matrix-current-view))
+         (room (%matrix-current-room))
+         (text (read-string (string-append "To " (%matrix-room-name room)
+                                           (if (cdr view) ", in the thread" "") ": "))))
     (unless (string-null? (string-trim text))
-      (%matrix-request "send" (json-object 'room (json-ref room 'id) 'body text)
-                       (lambda (result error) (%matrix-report error))))))
+      (%matrix-request "send" (%matrix-view-params view 'body text) %matrix-reporting))))
+
+(define (%matrix-item-at-point)
+  ;; The message that point is in, in a buffer of messages; an error if
+  ;; there is none.
+  (let loop ((starts (hash-table-ref %matrix-item-starts (buffer-name) '())))
+    (cond [(null? starts) (error "There is no message here.")]
+          [(<= (car (car starts)) (point)) (cdr (car starts))]
+          [else (loop (cdr starts))])))
+
+(define (%matrix-on-message method callback . more)
+  ;; Asks the program to do something with the message at point: `more`
+  ;; is keys and values that go with the room and the message.
+  (let ((view (%matrix-current-view))
+        (item (%matrix-item-at-point)))
+    (%matrix-request method
+                     (apply %matrix-view-params view 'id (json-ref item 'id) more)
+                     callback)))
 
 (define-command (matrix-reply)
   "Answer the message at point."
   (let* ((item (%matrix-item-at-point))
-         (who (or (json-ref item 'sender_name) (json-ref item 'sender "?")))
+         (who (or (%matrix-get item 'sender_name) (json-ref item 'sender "?")))
          (text (read-string (string-append "Answer to " who ": "))))
     (unless (string-null? (string-trim text))
-      (%matrix-on-message "reply" 'body text))))
+      (%matrix-on-message "reply" %matrix-reporting 'body text))))
 
 (define-command (matrix-edit)
   "Change the text of the message at point, which must be yours."
@@ -511,27 +703,62 @@ browser. When you finish there, the rooms come."
       (error "You can change only your own messages."))
     (let ((text (read-string "Change to: " (json-ref item 'body ""))))
       (unless (or (string-null? (string-trim text)) (equal? text (json-ref item 'body "")))
-        (%matrix-on-message "edit" 'body text)))))
+        (%matrix-on-message "edit" %matrix-reporting 'body text)))))
 
 (define-command (matrix-react)
   "Put a reaction on the message at point: an emoji, or other short text.
 A reaction that you put there before is taken off."
+  (%matrix-item-at-point)
   (let ((key (string-trim (read-string "Reaction: "))))
     (unless (string-null? key)
-      (%matrix-on-message "react" 'key key))))
+      (%matrix-on-message "react" %matrix-reporting 'key key))))
 
 (define-command (matrix-delete)
   "Delete the message at point for everybody in the room."
   (%matrix-item-at-point)
   (when (y-or-n? "Delete this message for everybody? ")
-    (%matrix-on-message "redact")))
+    (%matrix-on-message "redact" %matrix-reporting)))
+
+(define-command (matrix-open-attachment)
+  "Open the file or the picture of the message at point with the program
+that the desktop has for it. The file is fetched first."
+  (let ((item (%matrix-item-at-point)))
+    (unless (%matrix-get item 'file)
+      (error "This message has no file."))
+    (message "Matrix: getting the file…")
+    (%matrix-on-message "download"
+                        (lambda (result problem)
+                          (if (string? result)
+                              (begin (message (string-append "Matrix: " result))
+                                     (browse-url result))
+                              (%matrix-report (or problem "the file did not come")))))))
+
+(define-command (matrix-upload)
+  "Send a file to the room, or the thread, of this buffer."
+  (let* ((view (%matrix-current-view))
+         (file (expand-file-name (read-file-name "Send file: "))))
+    (unless (file-exists? file)
+      (error "There is no such file."))
+    (message "Matrix: sending the file…")
+    (%matrix-request "upload" (%matrix-view-params view 'path file)
+                     (lambda (result problem)
+                       (if problem
+                           (%matrix-report problem)
+                           (message "Matrix: the file is sent."))))))
+
+(define-command (matrix-open-thread)
+  "Show the thread of the message at point in a buffer of its own: the
+message that the thread starts with and the answers to it."
+  (let* ((item (%matrix-item-at-point))
+         (root (or (%matrix-get item 'thread_root) (json-ref item 'id))))
+    (%matrix-show-view! (%matrix-current-room) root)))
 
 (define (%matrix-mark-read)
   ;; A room is read when its buffer is the one in use and point is at its
   ;; end: the program is told, once, while messages are not read.
-  (when (and %matrix-process (eq? (major-mode) 'matrix-room-mode)
+  (when (and %matrix-process (hash-table-contains? %matrix-views (buffer-name))
              (= (point) (string-length (buffer-string))))
-    (let ((room (guard (e (#t #f)) (%matrix-current-room))))
+    (let ((room (hash-table-ref %matrix-rooms (car (%matrix-current-view)) #f)))
       (when (and room (or (> (json-ref room 'unread 0) 0) (> (json-ref room 'mentions 0) 0)))
         ;; Not asked for again before the program tells of the room anew.
         (hash-table-set! %matrix-rooms (json-ref room 'id)
@@ -543,29 +770,28 @@ A reaction that you put there before is taken off."
 (add-hook! 'post-command-hook %matrix-mark-read)
 
 (define-command (matrix-load-earlier)
-  "Show earlier messages of the room of this buffer."
-  (let ((room (%matrix-current-room)))
-    (%matrix-request "paginate-back" (json-object 'room (json-ref room 'id) 'count 30)
-                     (lambda (result error)
-                       (%matrix-report error)
-                       (when (eq? result #f)
-                         (message "There are no earlier messages."))))))
+  "Show earlier messages of the room, or the thread, of this buffer."
+  (%matrix-request "paginate-back" (%matrix-view-params (%matrix-current-view) 'count 30)
+                   (lambda (result problem)
+                     (%matrix-report problem)
+                     (when (eq? result #f)
+                       (message "There are no earlier messages.")))))
 
 (define-command (matrix-close-room)
-  "Close the room of this buffer: its messages are no longer kept up to
-date here."
-  (let* ((room (%matrix-current-room))
-         (id (json-ref room 'id)))
-    (hash-table-delete! %matrix-timelines id)
-    (when %matrix-process
-      (%matrix-request "timeline-close" (json-object 'room id) #f))
-    (kill-buffer (%matrix-room-buffer room))))
+  "Close the room, or the thread, of this buffer: its messages are no
+longer kept up to date here."
+  (let ((name (buffer-name)))
+    (%matrix-current-view)
+    (%matrix-forget-view! name)
+    (kill-buffer name)))
 
 (for-each
  (lambda (binding) (define-key 'matrix-rooms-mode (car binding) (cadr binding)))
- '(("RET" matrix-open-room) ("g" matrix)))
+ '(("RET" matrix-open-room) ("g" matrix) ("s" matrix-switch-room)))
 
 (for-each
  (lambda (binding) (define-key 'matrix-room-mode (car binding) (cadr binding)))
  '(("RET" matrix-send) ("p" matrix-load-earlier) ("l" matrix) ("k" matrix-close-room)
-   ("r" matrix-reply) ("e" matrix-edit) ("a" matrix-react) ("d" matrix-delete)))
+   ("r" matrix-reply) ("e" matrix-edit) ("a" matrix-react) ("d" matrix-delete)
+   ("o" matrix-open-attachment) ("u" matrix-upload) ("t" matrix-open-thread)
+   ("s" matrix-switch-room)))

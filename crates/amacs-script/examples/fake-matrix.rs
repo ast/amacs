@@ -1,6 +1,11 @@
 //! The program that speaks Matrix, for tests: it speaks to the editor as
 //! `amacs-matrix` does, in lines of JSON on standard input and output, and
-//! to no server. It has two rooms and a space. A message that is sent comes
+//! to no server. It has two rooms, a space with a room in it, and a talk
+//! with one person. The first message of a room has a thread, and the last
+//! is a picture, whose file is the one that the environment variable
+//! `FAKE_MATRIX_PICTURE` names. The user "@new:example.org" is on a device
+//! that is not verified, until the emojis are said to match or a recovery
+//! key is given. A message that is sent comes
 //! back as one of the room, and "paginate-back" gives one earlier message,
 //! once. A message of the user's own can be changed, and any can be
 //! answered, reacted to and deleted; to "ping me" it tells of a message
@@ -31,13 +36,22 @@ fn item(id: &str, sender: &str, time: u64, kind: &str, body: &str) -> Value {
     })
 }
 
-fn rooms() {
-    send(&json!({"event": "state", "state": "syncing"}));
+fn rooms(verified: bool) {
+    send(&json!({"event": "state", "state": "syncing", "verified": verified}));
     room("!tea:example.org", "Tea", 0, 0, 100);
     room("!work:example.org", "Work", 3, 1, 200);
     send(&json!({"event": "room", "room": {
-        "id": "!space:example.org", "name": "A space", "unread": 0, "mentions": 0,
+        "id": "!space:example.org", "name": "Garden club", "unread": 0, "mentions": 0,
         "activity": 300, "direct": false, "space": true,
+    }}));
+    send(&json!({"event": "room", "room": {
+        "id": "!roses:example.org", "name": "Roses", "unread": 0, "mentions": 0,
+        "activity": 50, "direct": false, "space": false,
+        "parents": ["!elsewhere:example.org", "!space:example.org"],
+    }}));
+    send(&json!({"event": "room", "room": {
+        "id": "!ada:example.org", "name": "Ada", "unread": 0, "mentions": 0,
+        "activity": 10, "direct": true, "space": false, "parents": [],
     }}));
 }
 
@@ -62,29 +76,80 @@ fn main() {
                 if params["user"] == "@nobody:example.org" {
                     send(&json!({"event": "state", "state": "login"}));
                 } else {
-                    rooms();
+                    rooms(params["user"] != "@new:example.org");
                 }
             }
             "login" => {
                 send(&json!({"event": "login-url", "url": "https://example.org/login"}));
-                rooms();
+                rooms(true);
             }
-            "timeline-open" => send(&json!({
-                "event": "timeline", "room": room_id, "op": "reset",
-                "items": [
-                    item("$1", "Ada", 3600, "text", "Is the kettle on?"),
-                    item("$2", "Brook", 3660, "emote", "puts it on"),
-                    item("$3", "Ada", 3720, "undecryptable", ""),
-                    item("$4", "Brook", 3780, "image", "kettle.jpg"),
-                ],
-            })),
+            "timeline-open" if params["thread"].is_string() => {
+                let mut answer = item("$t1", "Brook", 3610, "text", "Which kettle?");
+                answer["thread_root"] = params["thread"].clone();
+                send(&json!({
+                    "event": "timeline", "room": room_id, "thread": params["thread"],
+                    "op": "reset",
+                    "items": [item("$1", "Ada", 3600, "text", "Is the kettle on?"), answer],
+                }));
+            }
+            "timeline-open" => {
+                let mut first = item("$1", "Ada", 3600, "text", "Is the kettle on?");
+                first["thread"] = json!({"count": 2});
+                let mut picture = item("$4", "Brook", 3780, "image", "kettle.jpg");
+                picture["file"] = json!({
+                    "name": "kettle.jpg",
+                    "thumbnail": std::env::var("FAKE_MATRIX_PICTURE").ok(),
+                });
+                send(&json!({
+                    "event": "timeline", "room": room_id, "op": "reset",
+                    "items": [
+                        first,
+                        item("$2", "Brook", 3660, "emote", "puts it on"),
+                        item("$3", "Ada", 3720, "undecryptable", ""),
+                        picture,
+                    ],
+                }));
+            }
+            "download" => result = json!(std::env::var("FAKE_MATRIX_PICTURE").ok()),
+            "upload" => {
+                let path = params["path"].as_str().unwrap_or_default();
+                let name = path.rsplit('/').next().unwrap_or_default();
+                let mut file = item("$file", "Me", 3900, "file", name);
+                file["own"] = json!(true);
+                file["file"] = json!({"name": name});
+                send(&json!({
+                    "event": "timeline", "room": room_id, "op": "append", "items": [file],
+                }));
+            }
+            "verify-start" => send(&json!({"event": "verify-emojis", "emojis": [
+                {"symbol": "D", "description": "Dog"}, {"symbol": "K", "description": "Key"},
+            ]})),
+            "verify-confirm" => {
+                let ok = params["match"] == true;
+                send(&json!({"event": "verify-done", "ok": ok, "message": if ok {
+                    Value::Null
+                } else {
+                    json!("the emojis are not the same")
+                }}));
+                if ok {
+                    send(&json!({"event": "state", "state": "syncing", "verified": true}));
+                }
+            }
+            "recover" => {
+                if params["key"] != "EsTc 1234" {
+                    send(&json!({"id": id, "error": "The recovery key is not correct."}));
+                    continue;
+                }
+                send(&json!({"event": "state", "state": "syncing", "verified": true}));
+            }
             "send" => {
                 sent += 1;
                 let body = params["body"].as_str().unwrap_or_default();
                 let mut own = item(&format!("$sent{sent}"), "Me", 3840, "text", body);
                 own["own"] = json!(true);
                 send(&json!({
-                    "event": "timeline", "room": room_id, "op": "append",
+                    "event": "timeline", "room": room_id, "thread": params["thread"],
+                    "op": "append",
                     "items": [own],
                 }));
                 if body == "ping me" {
