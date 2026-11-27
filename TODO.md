@@ -198,9 +198,11 @@ The Org that edits a file of notes is there since 2026-11-26: colours,
 folding, headings and their states, lists, tables, links. Left, in the
 order that seems most useful:
 
-- [ ] Running source blocks with `C-c C-c` and their `#+RESULTS:`, and
-      tangling the blocks that have `:tangle`. `define-org-action` on
-      `'block` is the place.
+- [ ] Source blocks are run and tangled since 2026-11-27
+      (`runtime/lib/org-src.scm`). Left: languages that are compiled, such
+      as C; `:var`, `:session` and results as tables; `:shebang` and the
+      mode of a tangled file; `#+PROPERTY: header-args`; running all
+      blocks of a file; a block that runs for long cannot be stopped.
 - [ ] Capture into a file under a heading, and the journal with its tree
       of dates.
 - [ ] The agenda: headings with states and dates over several files.

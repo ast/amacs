@@ -11,7 +11,8 @@
 ;;;   org-parse-heading, org-headings-in   read Org from a string, for code
 ;;;                                        that reads files it does not show
 ;;;   org-element-at                       says what is at a position
-;;;   define-org-action                    gives C-c C-c more to do
+;;;   define-org-action                    gives C-c C-c more to do, as
+;;;                                        org-src.scm does to run blocks
 ;;;   define-link-type                     adds a kind of link
 ;;;   org-mode-hook                        runs in every buffer of Org
 ;;;

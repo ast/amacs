@@ -79,7 +79,7 @@ The sections below describe each of these.
 
 The larger things that the editor cannot do yet:
 
-- More of Org: the agenda, capture, running source blocks, export
+- More of Org: the agenda, capture, export
 - On other hosts: programs, language servers and git. Passwords are not
   asked for, so a host must let you in with a key
 - Narrowing, `repeat`, renaming a buffer, and regular expressions in `C-s`
@@ -343,8 +343,7 @@ in every mode.
 ## Org
 
 Files that end in `.org` open in `org-mode`. This is the Org that edits a
-file of notes: there is no agenda, no capture, and source blocks are not
-run. Headings, lists, tables and links work as in Markdown, above, with
+file of notes: there is no agenda and no capture. Headings, lists, tables and links work as in Markdown, above, with
 what Org writes in its own way.
 
 | Key | Does |
@@ -360,6 +359,8 @@ what Org writes in its own way.
 | `C-c .` | Insert the date of today, `<2026-11-26 Thu>` |
 | `C-c C-l`, `C-c C-o` | Insert a link; follow the link at point |
 | `M-+` after `src`, `quote` or `example` | A block of that kind |
+| `C-c C-c` in a source block, `C-c C-v e` | Run the code of the block and put what it wrote under it |
+| `C-c C-v t` | Write the code of the blocks to the files that they name with `:tangle` |
 
 The states of a heading are those of the `org-todo-keywords` option: the
 words for what is still to do, and the words for what is done.
@@ -383,6 +384,25 @@ A table has a rule of dashes and plus signs, and a column of numbers is
 lined up to the right. The code of a source block is coloured as its
 language. Emphasis markers and the targets of links are shown as they are
 written: nothing is hidden within a line.
+
+A source block is run by the program for its language, which is given the
+code on its standard input, in the directory of the file or the one that
+the block names with `:dir`. What the program wrote goes under the block
+after `#+RESULTS:`, in the place of the result that was there; with
+`:results silent` it is only shown. The editor asks before it runs a block,
+since a file from somebody else can hold code that does harm.
+
+```scheme
+(set-option! 'org-confirm-run #f)             ; do not ask
+(set-option! 'org-src-programs                ; language, program, arguments
+             (cons '("fish" "fish") (option 'org-src-programs)))
+```
+
+There are programs for `sh`, `bash`, `zsh`, `python`, `perl`, `ruby`, `js`
+and `awk`. `C-c C-v t` writes every block that says `:tangle file` to that
+file, the blocks of one file in their order; `:tangle yes` is the name of
+the Org file with the language as its ending, and `:mkdirp yes` makes a
+directory that is missing.
 
 Org is written in Scheme, in `runtime/lib/org.scm`, on libraries that
 Markdown uses too; `docs/extending.md` says how to add to it.

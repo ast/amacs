@@ -383,6 +383,10 @@ them with `(define-prose-style 'mode 'rule 'plus 'tick "[X]" 'star-items?
            (begin (message "A block of " (list-ref block 4)) #t))))
   ```
 
+- `runtime/lib/org-src.scm` is an example of that: it runs source blocks.
+  `(org-src-header block)` gives the language and the keys of a block,
+  `(org-src-code block)` its code and `(org-src-blocks)` the blocks of the
+  buffer. The `org-src-programs` option says which program runs a language.
 - `org-mode-hook` runs in every buffer of Org, and
   `(set-syntax-keywords! not-done done)` tells the colours which words are
   states of headings.
