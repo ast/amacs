@@ -97,3 +97,32 @@ opt-level = 2
 # build of the editor.
 [profile.dev.package.amacs-scheme]
 opt-level = 2
+
+# The crates that every key press goes through are optimised a little:
+# the text, its syntax tree, what a frame shows, and drawing it. Without
+# that, working out what a frame shows took 7 ms for each key in a debug
+# build, and twice that with a language server and a large window, so
+# that scrolling with a key held down was not smooth in the server that
+# the editor is worked on with. At this level it takes under a
+# millisecond. A build after a change to amacs-core takes 12 s where it
+# took 7.
+[profile.dev.package.amacs-core]
+opt-level = 1
+
+[profile.dev.package.amacs-text]
+opt-level = 1
+
+[profile.dev.package.amacs-treesit]
+opt-level = 1
+
+[profile.dev.package.amacs-proto]
+opt-level = 1
+
+[profile.dev.package.amacs-gui]
+opt-level = 1
+
+[profile.dev.package.amacs-tty]
+opt-level = 1
+
+[profile.dev.package.amacs-term]
+opt-level = 1

@@ -45,7 +45,8 @@ reconnects by itself on the next call.
 ## Building
 
 `just restart` builds the dev profile: incremental, with optimised
-dependencies, linked with mold. `cargo test` shares that build. The linker
+dependencies and the crates of the key press path optimised a little
+(`Cargo.toml` says which and why), linked with mold. `cargo test` shares that build. The linker
 flag is an environment variable of the devShell in `flake.nix`, not a
 `.cargo/config.toml`, because the Nix build reads that file and has no
 mold. `AMACS_PROFILE=release just restart` builds a release instead.

@@ -214,8 +214,10 @@ To work on the editor, `just restart` builds the editor and starts a server
 on a socket of its own, `$XDG_RUNTIME_DIR/amacs/dev.sock`, apart from one
 that may be running for real work, and `just open FILE` opens a window on
 it. The build is the dev profile, with the dependencies and the Scheme
-interpreter optimised, so that an edit to Rust is an incremental build and
-`cargo test` finds everything built; `AMACS_PROFILE=release just restart`
+interpreter optimised, and the crates that every key press goes through
+optimised a little, so that an edit to Rust is an incremental build, the
+editor is quick enough to work in, and `cargo test` finds everything
+built; `AMACS_PROFILE=release just restart`
 builds a release instead. `just` alone lists the rest.
 
 With direnv, `direnv allow` once is all it takes: the `.envrc` loads the
