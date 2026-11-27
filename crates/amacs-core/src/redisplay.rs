@@ -374,7 +374,11 @@ impl Editor {
                 trailing_from: line_end - trailing,
                 line_end,
             };
-            let mut end_col = 0;
+            // Text under a heading can be drawn indented: those cells are
+            // of the row and not of the text.
+            let indent = tab.indent(text, start, width);
+            line.push(&" ".repeat(indent), decorations.fill(line_index));
+            let mut end_col = indent;
             let mut point_col = None;
             let mut byte = text.char_to_byte(start);
             // The char that the walk comes to next, unless chars before it
@@ -389,7 +393,7 @@ impl Editor {
                 let highlight = highlights.as_ref().and_then(|found| found.get(byte));
                 byte += c.len_utf8();
                 let base = highlight.map_or(faces::DEFAULT, faces::syntax);
-                let face = decorations.face(base, pos, &context, col);
+                let face = decorations.face(base, pos, &context, col - indent);
                 // In a pane one or two cells wide, a wide char may not fit in
                 // the columns left of the continuation marker.
                 if col + cells <= width.saturating_sub(1).max(1) {

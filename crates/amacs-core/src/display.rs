@@ -47,6 +47,12 @@ pub const VISUAL_LINE_MODE: &str = "visual-line-mode";
 /// The minor mode in which markup is left out of what is drawn.
 pub const HIDE_MARKUP_MODE: &str = "hide-markup-mode";
 
+/// The minor mode in which text is drawn indented under its heading.
+pub const ORG_INDENT_MODE: &str = "org-indent-mode";
+
+/// How many cells a level of headings indents by, in that mode.
+const INDENT_PER_LEVEL: usize = 2;
+
 /// How the text of a buffer flows into rows: how wide its tabs are,
 /// whether a line too long for the pane is broken between words, as
 /// `visual-line-mode` has it, or wherever the pane ends, and which lines
@@ -64,6 +70,29 @@ pub struct Flow<'a> {
     /// on in the window that the rows are for, so that what is edited is
     /// seen as it is written.
     pub reveal: (usize, usize),
+    /// The headings that text is drawn indented under: the char that each
+    /// starts at and its level from 1, in order. Empty for no indentation.
+    pub headings: &'a [(usize, usize)],
+}
+
+impl Flow<'_> {
+    /// How many cells the row that starts at a position is indented by,
+    /// in a pane of some width: the rows of a heading by a cell for each
+    /// level above its own, so that the last of its stars is under the
+    /// text of the heading above, and the rows of text under a heading as
+    /// far as the text of the heading. Never by more than half the pane.
+    pub fn indent(&self, text: &Text, start: usize, width: usize) -> usize {
+        let index = self.headings.partition_point(|(at, _)| *at <= start);
+        let Some((at, level)) = index.checked_sub(1).map(|index| self.headings[index]) else {
+            return 0;
+        };
+        let cells = if text.line_of(start.min(text.len())) == text.line_of(at.min(text.len())) {
+            level - 1
+        } else {
+            INDENT_PER_LEVEL * level
+        };
+        cells.min(width / 2)
+    }
 }
 
 /// Goes over the chars of a row and says which of them are left out.
@@ -109,6 +138,7 @@ impl Flow<'static> {
             folds: &NO_FOLDS,
             hidden: &[],
             reveal: (0, 0),
+            headings: &[],
         }
     }
 }
@@ -164,7 +194,9 @@ pub fn walk_row(
         None
     };
     let mut hidden = Hidden::from(&flow, start);
-    let mut col = 0;
+    // The cells of the indentation come before those of the text.
+    let indent = flow.indent(text, start, width);
+    let mut col = indent;
     let mut pos = start;
     for c in text.chars_from(start) {
         if c != '\n' && hidden.at(pos) {
@@ -188,10 +220,10 @@ pub fn walk_row(
         }
         // A tab never needs more than a whole row.
         let cells = match c {
-            '\t' => char_cells(c, col, tab_width).min(budget),
+            '\t' => char_cells(c, col - indent, tab_width).min(budget),
             _ => char_cells(c, col, tab_width),
         };
-        if word_break == Some(pos) || (col + cells > budget && col > 0) {
+        if word_break == Some(pos) || (col + cells > budget && col > indent) {
             return Row {
                 start,
                 end: pos,
@@ -219,7 +251,8 @@ pub fn walk_row(
 fn word_break(text: &Text, start: usize, budget: usize, flow: &Flow) -> Option<usize> {
     let tab_width = flow.tab_width;
     let mut hidden = Hidden::from(flow, start);
-    let mut col = 0;
+    let indent = flow.indent(text, start, budget + 1);
+    let mut col = indent;
     let mut pos = start;
     let mut last = None;
     for c in text.chars_from(start) {
@@ -231,10 +264,10 @@ fn word_break(text: &Text, start: usize, budget: usize, flow: &Flow) -> Option<u
             continue;
         }
         let cells = match c {
-            '\t' => char_cells(c, col, tab_width).min(budget),
+            '\t' => char_cells(c, col - indent, tab_width).min(budget),
             _ => char_cells(c, col, tab_width),
         };
-        if col + cells > budget && col > 0 {
+        if col + cells > budget && col > indent {
             return last;
         }
         col += cells;

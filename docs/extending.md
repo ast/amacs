@@ -303,8 +303,10 @@ position. `(hidden? pos)` says whether a position is on a hidden line, and
 
 Within a line, `hide-markup-mode` leaves out the chars that the language
 of the buffer says are markup, on all lines but the one that point is on.
-That is decided where the text is coloured, in `crates/amacs-treesit`, and
-not by code in Scheme: there is no procedure to hide a stretch of a line.
+`org-indent-mode` draws the lines under a heading moved in, by the headings
+that the language says there are. Both are decided where the text is
+coloured, in `crates/amacs-treesit`, and not by code in Scheme: there is no
+procedure to hide a stretch of a line or to indent one.
 
 Hidden lines stay hidden as the text changes, and can lie within one
 another: showing the outer ones leaves the inner ones hidden. Motion steps

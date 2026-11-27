@@ -395,8 +395,16 @@ what is there; the other lines are as wide as what they show. Tables keep
 their markup, since their columns are lined up by it. Only how the text is
 shown changes, not the text.
 
+`M-x org-indent-mode` shows the text indented under its headings: a
+heading is moved in by a column for each level above its own, and the text
+under it starts where the text of the heading starts. The lines of the file
+start where they did: the indentation is drawn and is not text.
+
 ```scheme
-(add-hook! 'org-mode-hook (lambda () (enable-mode! 'hide-markup-mode)))
+(add-hook! 'org-mode-hook
+           (lambda ()
+             (enable-mode! 'hide-markup-mode)
+             (enable-mode! 'org-indent-mode)))
 ```
 
 A source block is run by the program for its language, which is given the

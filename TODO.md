@@ -228,9 +228,11 @@ order that seems most useful:
       point is in, not the whole line, as `org-appear` does; the stars of
       headings but the last; jump labels are still made for chars that
       are left out.
-- [ ] Indenting text under its heading as `org-indent-mode` does, and a
-      table that is shown lined up without a change to its text. Both need
-      text that is drawn and is not in the buffer.
+- [ ] Text is shown indented under its heading by `org-indent-mode` since
+      2026-11-27. Left: the stars of a heading but the last are still
+      shown; the indentation is two columns a level, with no option; a
+      table that is shown lined up without a change to its text, which
+      needs text that is drawn within a line and is not in the buffer.
 - [ ] Underlined and struck text have no colour: faces have no line
       through text.
 - [ ] Export.

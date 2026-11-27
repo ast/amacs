@@ -35,6 +35,8 @@ struct Block {
 #[derive(Debug)]
 pub(crate) struct Org {
     blocks: Vec<Block>,
+    /// The headings: the byte that each starts at, and its level.
+    headings: Vec<(usize, usize)>,
     /// The words that say a heading is still to do, and that it is done.
     not_done: Vec<String>,
     done: Vec<String>,
@@ -44,6 +46,7 @@ impl Default for Org {
     fn default() -> Self {
         Self {
             blocks: Vec::new(),
+            headings: Vec::new(),
             not_done: vec!["TODO".to_owned()],
             done: vec!["DONE".to_owned()],
         }
@@ -107,6 +110,7 @@ impl Org {
     /// Finds the blocks of the text whose text is not Org.
     pub(crate) fn scan(&mut self, text: &Text) {
         self.blocks.clear();
+        self.headings.clear();
         let mut line = String::new();
         // The block that is open: where it started, where its text starts,
         // its name and what it holds.
@@ -114,6 +118,9 @@ impl Org {
         for number in 0..text.len_lines() {
             let bytes = line_bytes(text, number);
             read_line(text, bytes.clone(), &mut line);
+            if let Some(level) = heading_level(&line) {
+                self.headings.push((bytes.start, level));
+            }
             if let Some((start, body, name, contents)) = &open {
                 if block_end(&line, name) {
                     self.blocks.push(Block {
@@ -142,6 +149,12 @@ impl Org {
             };
             open = Some((bytes.start, bytes.end, name.to_owned(), contents));
         }
+    }
+
+    /// The headings of the text, in order: the byte that each starts at,
+    /// and its level.
+    pub(crate) fn headings(&self) -> &[(usize, usize)] {
+        &self.headings
     }
 
     /// The markup of the text: the bytes of the marks around emphasis and

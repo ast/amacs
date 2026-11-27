@@ -193,6 +193,14 @@ all, so that what is edited is seen. Only how the text is shown changes,
 not the text. For Org: turn it on in a hook, as in
 (add-hook! 'org-mode-hook (lambda () (enable-mode! 'hide-markup-mode))).")
 
+(define-minor-mode org-indent-mode ""
+  "Show the text of a file of Org indented under its headings: a heading
+is moved in by a column for each level above its own, and the text under
+it starts where the text of the heading starts. Only how the text is shown
+changes: the lines of the file start where they did. For Org: turn it on
+in a hook, as in
+(add-hook! 'org-mode-hook (lambda () (enable-mode! 'org-indent-mode))).")
+
 (define-minor-mode visual-line-mode ""
   "Break lines that are too long for the window between words, where they
 are otherwise broken at the edge of the window with a mark. Only how the

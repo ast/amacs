@@ -59,6 +59,8 @@ pub struct Syntax {
     /// The chars that are markup, as of the last [`Syntax::update_markup`],
     /// and whether the text has changed since.
     markup: Vec<Range<usize>>,
+    /// The headings, likewise: the char that each starts at, and its level.
+    headings: Vec<(usize, usize)>,
     markup_stale: bool,
     /// Whether the text has changed since the tree was parsed.
     stale: bool,
@@ -105,6 +107,7 @@ impl Syntax {
             tree: None,
             lines,
             markup: Vec::new(),
+            headings: Vec::new(),
             markup_stale: true,
             stale: true,
         })
@@ -204,11 +207,20 @@ impl Syntax {
     /// Finds anew the chars of the text that are markup: what stands
     /// around text to say how it is meant, such as the stars of `*strong*`,
     /// and can be left out of what is drawn. Call after [`Syntax::update`];
-    /// cheap when nothing changed. Only Org has markup so far.
+    /// cheap when nothing changed. Only Org has markup so far. The headings
+    /// of the text are found with it.
     pub fn update_markup(&mut self, text: &Text) {
         if !std::mem::take(&mut self.markup_stale) {
             return;
         }
+        self.headings = match self.lines.as_ref().filter(|_| !self.stale) {
+            Some(lines) => lines
+                .headings()
+                .iter()
+                .map(|(byte, level)| (text.byte_to_char(*byte), *level))
+                .collect(),
+            None => Vec::new(),
+        };
         self.markup = match self.lines.as_ref().filter(|_| !self.stale) {
             Some(lines) => lines
                 .markup(text)
@@ -223,6 +235,13 @@ impl Syntax {
     /// last [`Syntax::update_markup`].
     pub fn markup(&self) -> &[Range<usize>] {
         &self.markup
+    }
+
+    /// The headings of the text, in order, each as the char that its line
+    /// starts at and its level from 1, as of the last
+    /// [`Syntax::update_markup`].
+    pub fn headings(&self) -> &[(usize, usize)] {
+        &self.headings
     }
 
     /// The tree as of the last [`Syntax::update`].
