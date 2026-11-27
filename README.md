@@ -1033,7 +1033,8 @@ what the mode of the buffer is for with what each of its keys does, and
 into, such as the file manager, `?` and `h` do what `C-h m` does. `M-x`
 shows each command with its keys. All of it is made from the keymaps and
 from the documentation of the commands. `<f1>` is the same prefix as `C-h`,
-for those who have `C-h` for something else.
+for those who have `C-h` for something else, and `(help-prefix! "C-c h")`
+in the init file puts help on a key of your own as well.
 
 `C-h f` says what a name is: what the command of that name does and its
 keys, and how the procedure or macro of that name is called, its

@@ -286,6 +286,12 @@ fn the_keys_of_a_command_are_said() {
     h.type_text("lonely");
     h.keys("RET");
     assert_eq!(h.echo(), "lonely is not on a key here; M-x runs it");
+    // Help can be put on another key.
+    h.eval("(help-prefix! \"C-c h\")");
+    h.keys("C-c h w");
+    h.type_text("save-buffer");
+    h.keys("RET");
+    assert_eq!(h.echo(), "save-buffer is on C-x C-s");
 }
 
 #[test]

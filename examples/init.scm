@@ -369,6 +369,9 @@
 
 (global-set-key "C-w" 'kill-region-or-backward-kill-word)
 (global-set-key "C-h" 'delete-backward-char)
+;; With C-h deleting, help is on Hyper-h, and on <f1> as always. The
+;; Hyper key of this keyboard sends Ctrl, Meta, Shift and Super together.
+(help-prefix! "C-M-S-s-h")
 (global-set-key "C-x C-m" 'execute-extended-command)
 
 (global-set-key "H-c" 'switch-to-buffer)
@@ -453,7 +456,7 @@
 ;; M-; comments, M-! and M-| shell commands, C-x r m and C-x r b bookmarks.
 
 ;;; Not available yet. These wait for later milestones:
-;;;   ibuffer, repeat (H-z), help beyond describe-key and describe-command
+;;;   repeat (H-z)
 ;;;   rainbow delimiters, matching-bracket highlight
 ;;;   the breadcrumb header line, the debugger, Copilot
 ;;;   on other hosts: programs, passwords, sudo, git and language servers

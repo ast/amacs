@@ -317,15 +317,23 @@ the first of what its documentation says."
   "Show the commands, procedures and options whose names contain a text."
   (%help-show (help-apropos-lines (read-string "Apropos: "))))
 
+;; The keys of help after its prefix, and their commands.
+(define %help-keys
+  '(("m" describe-mode) ("b" describe-bindings)
+    ("k" describe-key) ("f" describe-function) ("x" describe-command)
+    ("v" describe-variable) ("w" where-is) ("a" help-apropos)
+    ("e" view-echo-area-messages)))
+
+(define (help-prefix! prefix)
+  "Puts help on a key as well: the key and then m, b, k, f, x, v, w, a or
+e, as after C-h. For those who have C-h for something else and no <f1>
+within reach: (help-prefix! \"C-c h\")."
+  (for-each
+   (lambda (binding)
+     (global-set-key (string-append prefix " " (car binding)) (cadr binding)))
+   %help-keys))
+
 ;; Help is on C-h, as in Emacs, and on <f1> for those who have C-h for
 ;; something else.
-(for-each
- (lambda (prefix)
-   (for-each
-    (lambda (binding)
-      (global-set-key (string-append prefix " " (car binding)) (cadr binding)))
-    '(("m" describe-mode) ("b" describe-bindings)
-      ("k" describe-key) ("f" describe-function) ("x" describe-command)
-      ("v" describe-variable) ("w" where-is) ("a" help-apropos)
-      ("e" view-echo-area-messages))))
- '("C-h" "<f1>"))
+(help-prefix! "C-h")
+(help-prefix! "<f1>")
