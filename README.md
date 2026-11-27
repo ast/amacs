@@ -225,6 +225,12 @@ flake's shell, puts `target/debug` on the path and points `amacsclient`
 at the development server. Without direnv, `nix develop` and
 `export AMACS_SOCKET="$XDG_RUNTIME_DIR/amacs/dev.sock"` do the same.
 
+The development server is set up by `examples/init.scm`, not by the init
+file in `~/.config`, so that it shows what the example does: the `.envrc`
+and `just restart` name the file in the `AMACS_INIT` variable, which the
+server reads where no `--init` is given. Set the variable to another file
+to try that one, or to your own init file to work with it.
+
 ## Choosing things in the minibuffer
 
 A prompt that has candidates lists them under the input. Typing narrows them:
@@ -1267,7 +1273,8 @@ sequences, and a native clipboard without the helper programs.
 
 ## Scheme
 
-The init file is `$XDG_CONFIG_HOME/amacs/init.scm`. `examples/init.scm` is a
+The init file is `$XDG_CONFIG_HOME/amacs/init.scm`, or the file that
+`--init` or the `AMACS_INIT` variable names. `examples/init.scm` is a
 starting point:
 
 ```scheme

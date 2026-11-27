@@ -41,7 +41,10 @@ start:
     mkdir -p "$(dirname "$AMACS_SOCKET")"
     # The Scheme that is part of the editor is read from this checkout,
     # so that a restart picks up changes to it without a build.
-    AMACS_RUNTIME="$PWD/runtime" setsid nohup {{bindir}}/amacs --daemon >"{{log}}" 2>&1 </dev/null &
+    # It is set up by the example init file, unless AMACS_INIT names
+    # another: the same as in .envrc.
+    AMACS_RUNTIME="$PWD/runtime" AMACS_INIT="${AMACS_INIT:-$PWD/examples/init.scm}" \
+        setsid nohup {{bindir}}/amacs --daemon >"{{log}}" 2>&1 </dev/null &
     for _ in $(seq 50); do
         if [ -S "$AMACS_SOCKET" ]; then
             echo "amacs is running on $AMACS_SOCKET (log: {{log}})"

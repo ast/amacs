@@ -3,7 +3,8 @@
     "amacs": {
       "command": "target/debug/amacs-mcp",
       "env": {
-        "AMACS_SOCKET": "${XDG_RUNTIME_DIR}/amacs/dev.sock"
+        "AMACS_SOCKET": "${XDG_RUNTIME_DIR}/amacs/dev.sock",
+        "AMACS_INIT": "examples/init.scm"
       }
     }
   }

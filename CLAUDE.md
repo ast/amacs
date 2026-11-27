@@ -22,7 +22,9 @@ that nothing is left without.
 
 The `amacs` MCP server (`.mcp.json`, built by `just build`) connects to the
 development server at `$XDG_RUNTIME_DIR/amacs/dev.sock` and starts one if
-none is running. Use it instead of guessing:
+none is running. That server is set up by `examples/init.scm` (the
+`AMACS_INIT` variable of `.envrc`, `justfile` and `.mcp.json`), not by the
+init file in `~/.config`. Use it instead of guessing:
 
 - `describe` and `apropos` before writing code that uses a name.
 - `eval` to try an expression; errors come with their place and trace.

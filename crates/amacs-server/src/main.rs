@@ -21,7 +21,8 @@ Edit FILEs in the terminal. The last one given is shown first.
 Options:
       --daemon      Run as a server for amacsclient, without a terminal
   -q, --no-init     Do not load the init file
-      --init FILE   Load FILE instead of $XDG_CONFIG_HOME/amacs/init.scm
+      --init FILE   Load FILE instead of $XDG_CONFIG_HOME/amacs/init.scm;
+                    the AMACS_INIT variable names such a file too
   -l, --load FILE   Load a Scheme file after the init file
       --eval EXPR   Evaluate a Scheme expression after the init file
       --batch       Run --load and --eval without a terminal, print the
@@ -112,13 +113,19 @@ fn parse_args() -> Result<Option<Options>> {
     Ok(Some(options))
 }
 
-/// The init file to load: the one given, else the default one if it exists.
+/// The init file to load: the one given, else the one that the
+/// environment names, else the default one if it exists.
 fn init_file(options: &Options) -> Option<PathBuf> {
     if options.no_init {
         return None;
     }
     if let Some(path) = &options.init {
         return Some(path.clone());
+    }
+    // A checkout of the editor sets this, so that the servers started in
+    // it are set up alike whoever starts them.
+    if let Some(path) = std::env::var_os("AMACS_INIT").filter(|path| !path.is_empty()) {
+        return Some(PathBuf::from(path));
     }
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
