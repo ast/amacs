@@ -238,3 +238,29 @@ fn the_journal_of_today_gets_an_entry_with_the_time() {
     assert!(text.contains(" First\n** "), "{text}");
     assert!(dir.path().join("journal").join(&file).exists());
 }
+
+#[test]
+fn a_file_whose_bytes_are_not_its_text_is_written_as_saving_writes_it() {
+    let (mut h, dir) = setup();
+    // Files that end in .rev hold their text backwards.
+    h.eval(
+        r#"(define-file-handler ".rev"
+             (lambda (file) (list->string (reverse (string->list (read-file file)))))
+             (lambda (file text) (write-file file (list->string (reverse (string->list text))))))
+           (set-option! 'org-capture-templates
+             '(("t" "Todo" (file+headline "inbox.org.rev" "Inbox") "* TODO %?")))"#,
+    );
+    let file = dir.path().join("inbox.org.rev");
+    let backwards = |text: &str| text.chars().rev().collect::<String>();
+    std::fs::write(&file, backwards("* Inbox\n** TODO old\n")).unwrap();
+
+    h.keys("C-c x").type_text("t");
+    h.type_text("new");
+    h.keys("C-c C-c");
+    h.wait_until(|h| h.echo().starts_with("Captured to "));
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        backwards("* Inbox\n** TODO old\n** TODO new\n")
+    );
+    assert_eq!(h.eval("(buffer-name)"), "\"*scratch*\"");
+}

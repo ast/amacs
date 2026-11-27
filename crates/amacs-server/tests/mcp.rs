@@ -31,6 +31,8 @@ impl Server {
             .env("XDG_CONFIG_HOME", dir.join("config"))
             .env("HOME", dir)
             .env_remove("WAYLAND_DISPLAY")
+            // A checkout names an init file for the servers started in it.
+            .env_remove("AMACS_INIT")
             .stdin(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()

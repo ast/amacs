@@ -30,11 +30,19 @@ from it, as keys and values:
       (error "This mode has no headings"))
     (property-ref entry key)))
 
+;; The headings that were last asked for, and of what text: a pair of a
+;; list of the buffer, its tick and its mode, and the headings. A command
+;; asks for the headings of one text many times.
+(define %outline-found #f)
+
 (define (outline-headings)
   "The headings of the current buffer, in order: a list of lists of the
 position of the line, the level from 1, and the text. It is an error in a
 mode that has no headings."
-  ((%outline-property 'headings)))
+  (let ((text (list (buffer-name) (buffer-tick) (major-mode))))
+    (unless (and %outline-found (equal? (car %outline-found) text))
+      (set! %outline-found (cons text ((%outline-property 'headings)))))
+    (cdr %outline-found)))
 
 (define (outline-heading-at . pos)
   "The heading that the line of a position (default point) is, or #f."
@@ -206,14 +214,6 @@ important."
 
 ;;; Moving subtrees
 
-;; Folds the headings at some positions again that were folded before
-;; their text was moved: moving text shows it.
-(define (%outline-fold-again positions folded)
-  (for-each (lambda (pos folded?)
-              (when folded?
-                (outline-fold (outline-heading-at pos))))
-            positions folded))
-
 ;; Makes two pieces of text that follow one another change places: the
 ;; first is from START to MIDDLE, the second from MIDDLE to END. Only the
 ;; last piece of a buffer can be without a newline at its end, and the
@@ -223,10 +223,25 @@ important."
          (second (buffer-substring middle end))
          (open? (not (string-suffix? "\n" second)))
          (second (if open? (string-append second "\n") second))
-         (first (if open? (substring first 0 (- (string-length first) 1)) first)))
+         (first (if open? (substring first 0 (- (string-length first) 1)) first))
+         ;; Taking text away shows the lines of it that were hidden: what
+         ;; was hidden in either piece is hidden again where it now is.
+         (hidden (filter (lambda (range)
+                           (and (<= start (car range))
+                                (<= (cadr range) end)
+                                (or (<= (cadr range) middle) (<= middle (car range)))))
+                         (hidden-ranges))))
     (delete-region start end)
     (goto-char start)
     (insert second first)
+    (for-each
+     (lambda (range)
+       (let ((moved (if (< (car range) middle)
+                        (string-length second)
+                        (- start middle))))
+         (hide-lines! (+ (car range) moved)
+                      (min (point-max) (+ (cadr range) moved)))))
+     hidden)
     (string-length second)))
 
 (define-command (outline-move-subtree-down)
@@ -237,9 +252,7 @@ the next heading of its level."
          (next (or (%outline-next-sibling here)
                    (error "No heading of this level after this")))
          (offset (- (point) (car here)))
-         (folded (map outline-folded? (list next here)))
          (moved (%outline-swap (car here) (car next) (outline-subtree-end next))))
-    (%outline-fold-again (list (car here) (+ (car here) moved)) folded)
     (goto-char (+ (car here) moved offset))))
 
 (define-command (outline-move-subtree-up)
@@ -249,10 +262,8 @@ the heading of its level that is before it."
                    (error "Point is before the first heading")))
          (previous (or (%outline-previous-sibling here)
                        (error "No heading of this level before this")))
-         (offset (- (point) (car here)))
-         (folded (map outline-folded? (list here previous)))
-         (moved (%outline-swap (car previous) (car here) (outline-subtree-end here))))
-    (%outline-fold-again (list (car previous) (+ (car previous) moved)) folded)
+         (offset (- (point) (car here))))
+    (%outline-swap (car previous) (car here) (outline-subtree-end here))
     (goto-char (+ (car previous) offset))))
 
 ;;; Folding

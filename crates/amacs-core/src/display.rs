@@ -199,6 +199,17 @@ pub fn walk_row(
     let mut col = indent;
     let mut pos = start;
     for c in text.chars_from(start) {
+        // A row that is broken between words ends before the word, and
+        // so before markup that the word starts with and that is left out.
+        if c != '\n' && word_break == Some(pos) {
+            return Row {
+                start,
+                end: pos,
+                next: Some(pos),
+                continued: true,
+                folded: false,
+            };
+        }
         if c != '\n' && hidden.at(pos) {
             pos += 1;
             continue;

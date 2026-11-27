@@ -140,8 +140,13 @@ with its headings at the level under that heading."
 (define (org-capture-write file path entry . prepend?)
   "Puts an entry in a file of Org, as org-capture-edit says, and saves the
 file. A buffer that visits the file gets the entry too; a file that is not
-there is made, with its directory."
-  (let ((buffer (%org-capture-buffer file)))
+there is made, with its directory. A file that is encrypted or on another
+host is visited for it, and stays so."
+  ;; A file whose bytes are not its text, as an encrypted one, and a file
+  ;; on another host are read and written as visiting and saving do it.
+  (let ((buffer (or (%org-capture-buffer file)
+                    (and (or (file-remote? file) (file-handler file))
+                         (begin (find-file file) (buffer-name))))))
     (cond
      [buffer
       (with-current-buffer buffer
@@ -149,7 +154,11 @@ there is made, with its directory."
           (save-excursion
             (goto-char (car edit))
             (insert (cdr edit)))))
-      (%save-buffer buffer file #f)]
+      ;; As the editor saves a buffer: through the handler of the file
+      ;; if it has one.
+      (if (file-handler file)
+          (%save-handled buffer file #f)
+          (%save-buffer buffer file #f))]
      [else
       (let* ((text (if (file-exists? file) (read-file file) ""))
              (edit (apply org-capture-edit text path entry prepend?))

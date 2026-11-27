@@ -144,3 +144,16 @@ fn rows_are_as_long_as_what_is_shown() {
     h.keys("M-v");
     assert!(h.screen.cursor().is_some());
 }
+
+#[test]
+fn a_row_breaks_before_a_word_that_starts_with_hidden_markup() {
+    // Nineteen cells to a row: "some words go here " fills it, and the
+    // next word starts with a mark that is left out.
+    let mut h = setup(20, "* Head\nsome words go here *strong text* more\nend\n");
+    h.eval("(enable-mode! 'visual-line-mode)");
+    h.keys("M-<");
+    assert_eq!(h.screen.row(1), "some words go here");
+    assert_eq!(h.screen.row(2), "strong text more");
+    assert_eq!(h.screen.face_at(2, 0), h.face("strong"));
+    assert_eq!(h.screen.row(3), "end");
+}

@@ -175,8 +175,9 @@ item of a list."
   "Start a new item of a list after the item at point. Elsewhere, start a
 new heading of the level of the heading that point is under, after all
 that is under it."
-  (let ((item (list-item-parts (%org-line (point))))
-        (heading (outline-current-heading)))
+  (let* ((item (list-item-parts (%org-line (point))))
+         (heading (outline-current-heading))
+         (folded? (and heading (outline-folded? heading))))
     (cond
      [item
       (goto-char (line-end-position))
@@ -189,7 +190,11 @@ that is under it."
         (insert "\n"))
       (insert (make-string (if heading (cadr heading) 1) #\*) " ")
       (unless (= (point) (line-end-position))
-        (save-excursion (insert "\n")))])))
+        (save-excursion (insert "\n")))
+      ;; At the end of a text without a last newline, the new heading
+      ;; was put among the lines that are folded away.
+      (when folded?
+        (outline-fold (outline-heading-at (car heading))))])))
 
 (define-command (org-metaleft)
   "On a heading, make it one level more important. Elsewhere, go back a

@@ -124,8 +124,13 @@ fn init_file(options: &Options) -> Option<PathBuf> {
     }
     // A checkout of the editor sets this, so that the servers started in
     // it are set up alike whoever starts them.
-    if let Some(path) = std::env::var_os("AMACS_INIT").filter(|path| !path.is_empty()) {
-        return Some(PathBuf::from(path));
+    // A file that is not there is not the one that was meant, as when
+    // the name is relative and the server was started elsewhere.
+    let named = std::env::var_os("AMACS_INIT")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file());
+    if named.is_some() {
+        return named;
     }
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)

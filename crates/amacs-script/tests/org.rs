@@ -463,3 +463,14 @@ fn a_file_says_how_it_is_folded_when_it_is_visited() {
     assert_eq!(visit(&mut h, &plain), ["* One…", "* Two…"]);
     assert_eq!(visit(&mut h, &all).len(), 7);
 }
+
+#[test]
+fn a_new_heading_after_folded_text_leaves_it_folded() {
+    // With and without a last newline in the text.
+    for text in ["* One\nbody\nmore\n", "* One\nbody\nmore"] {
+        let mut h = setup(text);
+        h.keys("TAB M-RET").type_text("Two");
+        assert_eq!(rows(&h), ["* One…", "* Two"], "{text:?}");
+        assert_eq!(h.text(), "* One\nbody\nmore\n* Two", "{text:?}");
+    }
+}

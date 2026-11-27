@@ -265,3 +265,44 @@ fn a_folded_subtree_stays_folded_when_it_moves() {
     assert_eq!(rows(&h), ["## Two…", "# One…"]);
     assert!(h.text().starts_with("## Two\ntwo\n# One\n"), "{}", h.text());
 }
+
+#[test]
+fn what_is_folded_in_a_subtree_is_folded_the_same_when_it_has_moved() {
+    // All headings shown and all text folded away.
+    let mut h = setup(FOLDED);
+    h.keys("S-TAB S-TAB");
+    assert_eq!(
+        rows(&h),
+        ["# One…", "## One a…", "### Deep…", "## One b…", "# Two…"]
+    );
+    h.keys("M-<down>");
+    assert_eq!(
+        rows(&h),
+        ["# Two…", "# One…", "## One a…", "### Deep…", "## One b…"]
+    );
+    goto(&mut h, "## One b");
+    h.keys("M-<up>");
+    assert_eq!(
+        rows(&h),
+        ["# Two…", "# One…", "## One b…", "## One a…", "### Deep…"]
+    );
+    // Text that was shown stays shown.
+    goto(&mut h, "### Deep");
+    h.keys("TAB C-c C-u M-<down>");
+    assert_eq!(
+        rows(&h),
+        [
+            "# Two…",
+            "# One…",
+            "## One b…",
+            "## One a…",
+            "### Deep",
+            "deep"
+        ]
+    );
+    h.keys("S-TAB S-TAB S-TAB");
+    assert_eq!(
+        h.text(),
+        "# Two\ntwo\n# One\none\n## One b\nb\n## One a\na\n### Deep\ndeep\n"
+    );
+}

@@ -22,26 +22,40 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
+        Self::start_with(|_, _| {})
+    }
+
+    /// Starts a server after `prepare` has had its directory and the
+    /// command that starts it.
+    fn start_with(prepare: impl FnOnce(&Path, &mut Command)) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let child = Self::spawn(dir.path());
+        let mut command = Self::command(dir.path());
+        prepare(dir.path(), &mut command);
+        let child = command.spawn().unwrap();
         let server = Self { child, dir };
         server.wait_until_listening();
         server
     }
 
     fn spawn(dir: &Path) -> Child {
-        Command::new(env!("CARGO_BIN_EXE_amacs"))
+        Self::command(dir).spawn().unwrap()
+    }
+
+    fn command(dir: &Path) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_amacs"));
+        command
             .arg("--daemon")
             .env("AMACS_SOCKET", dir.join("sock"))
             .env("XDG_STATE_HOME", dir.join("state"))
             .env("XDG_CONFIG_HOME", dir.join("config"))
             .env("HOME", dir)
+            // A checkout names an init file for the servers started in it.
+            .env_remove("AMACS_INIT")
             // The server must not reach the clipboard of whoever runs the tests.
             .env_remove("WAYLAND_DISPLAY")
             .stdin(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap()
+            .stderr(Stdio::piped());
+        command
     }
 
     fn socket(&self) -> PathBuf {
@@ -260,6 +274,32 @@ fn a_frame_is_told_whether_to_draw_with_the_gpu() {
 
     let refused = first.eval("(set-option! 'gpu-renderer \"gpu\")");
     assert!(refused.unwrap_err().contains("must be #t or #f"));
+}
+
+#[test]
+fn the_environment_can_name_the_init_file() {
+    let init = |dir: &Path, name: &str, width: u8| {
+        let path = dir.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, format!("(set-option! 'tab-width {width})")).unwrap();
+        path
+    };
+    // The file that AMACS_INIT names is loaded, not the one in the
+    // directory for configuration.
+    let server = Server::start_with(|dir, command| {
+        init(dir, "config/amacs/init.scm", 3);
+        command.env("AMACS_INIT", init(dir, "other.scm", 5));
+    });
+    let mut client = Client::connect(&server);
+    assert_eq!(client.eval("(option 'tab-width)").unwrap(), "5");
+
+    // A name of no file is passed over.
+    let server = Server::start_with(|dir, command| {
+        init(dir, "config/amacs/init.scm", 3);
+        command.env("AMACS_INIT", "no/such/init.scm");
+    });
+    let mut client = Client::connect(&server);
+    assert_eq!(client.eval("(option 'tab-width)").unwrap(), "3");
 }
 
 #[test]
