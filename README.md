@@ -1032,22 +1032,22 @@ for those who have `C-h` for something else.
 The smaller commands of Emacs are there under their names and keys. They
 are written in Scheme, in `runtime/lib/simple.scm`:
 
-| Key | Does |
-|---|---|
-| `C-x i` | Insert a file at point; `M-x insert-buffer` a buffer |
-| `C-t`, `M-t`, `C-x C-t` | Transpose chars, words, lines |
-| `C-S-DEL` | Kill the whole line; `M-x duplicate-line` copies it |
-| `C-x C-o` | Delete blank lines; `M-x delete-trailing-whitespace` |
-| `M-q` | Fill the paragraph to the `fill-column` option (70) |
-| `M-h`, `M-@` | Mark the paragraph, the word |
-| `M-=`, `C-x =` | Count lines, words and chars; say what is at point |
-| `C-x C-e` | Evaluate the Scheme expression before point; `M-x eval-region`, `M-x load-file` |
-| `C-x r SPC`, `C-x r j` | Keep the place of point in a register; go to it |
-| `C-x r s`, `C-x r i` | Keep the region in a register; insert it |
-| `C-q` | Insert the char of the next key: `C-q TAB` |
-| `C-x <left>`, `C-x <right>` | The previous and the next buffer, by name |
-| `C-M-v`, `C-M-S-v` | Scroll the other window |
-| `C-h e` | Show the messages |
+| Key                         | Does                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------- |
+| `C-x i`                     | Insert a file at point; `M-x insert-buffer` a buffer                            |
+| `C-t`, `M-t`, `C-x C-t`     | Transpose chars, words, lines                                                   |
+| `C-S-DEL`                   | Kill the whole line; `M-x duplicate-line` copies it                             |
+| `C-x C-o`                   | Delete blank lines; `M-x delete-trailing-whitespace`                            |
+| `M-q`                       | Fill the paragraph to the `fill-column` option (70)                             |
+| `M-h`, `M-@`                | Mark the paragraph, the word                                                    |
+| `M-=`, `C-x =`              | Count lines, words and chars; say what is at point                              |
+| `C-x C-e`                   | Evaluate the Scheme expression before point; `M-x eval-region`, `M-x load-file` |
+| `C-x r SPC`, `C-x r j`      | Keep the place of point in a register; go to it                                 |
+| `C-x r s`, `C-x r i`        | Keep the region in a register; insert it                                        |
+| `C-q`                       | Insert the char of the next key: `C-q TAB`                                      |
+| `C-x <left>`, `C-x <right>` | The previous and the next buffer, by name                                       |
+| `C-M-v`, `C-M-S-v`          | Scroll the other window                                                         |
+| `C-h e`                     | Show the messages                                                               |
 
 By name: `sort-lines`, `reverse-region`, `delete-duplicate-lines`,
 `flush-lines` and `keep-lines` work on the lines of the region or of the
