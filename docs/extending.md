@@ -387,6 +387,9 @@ them with `(define-prose-style 'mode 'rule 'plus 'tick "[X]" 'star-items?
   `(org-src-header block)` gives the language and the keys of a block,
   `(org-src-code block)` its code and `(org-src-blocks)` the blocks of the
   buffer. The `org-src-programs` option says which program runs a language.
+- `(org-capture-write file '("Inbox") "* TODO Call back")` puts an entry in
+  a file of Org under a heading, whether the file is open or not, and
+  `(org-capture-edit text path entry)` says where it would go in a string.
 - `org-mode-hook` runs in every buffer of Org, and
   `(set-syntax-keywords! not-done done)` tells the colours which words are
   states of headings.

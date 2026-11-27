@@ -203,8 +203,11 @@ order that seems most useful:
       as C; `:var`, `:session` and results as tables; `:shebang` and the
       mode of a tangled file; `#+PROPERTY: header-args`; running all
       blocks of a file; a block that runs for long cannot be stopped.
-- [ ] Capture into a file under a heading, and the journal with its tree
-      of dates.
+- [ ] Capture and the journal are there since 2026-11-27
+      (`runtime/lib/org-capture.scm`). Left: the entry is written in a
+      buffer of its own and not in its place in the file, since there is no
+      narrowing; templates that ask questions (`%^{...}`), start a clock or
+      take text from a web browser; a journal entry for another day.
 - [ ] The agenda: headings with states and dates over several files.
       `org-headings-in` reads a file without a buffer. Dates need parsing
       and arithmetic, which Scheme does not have yet.

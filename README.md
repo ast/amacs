@@ -79,7 +79,7 @@ The sections below describe each of these.
 
 The larger things that the editor cannot do yet:
 
-- More of Org: the agenda, capture, export
+- More of Org: the agenda, export
 - On other hosts: programs, language servers and git. Passwords are not
   asked for, so a host must let you in with a key
 - Narrowing, `repeat`, renaming a buffer, and regular expressions in `C-s`
@@ -343,7 +343,8 @@ in every mode.
 ## Org
 
 Files that end in `.org` open in `org-mode`. This is the Org that edits a
-file of notes: there is no agenda and no capture. Headings, lists, tables and links work as in Markdown, above, with
+file of notes and captures entries to such files: there is no agenda.
+Headings, lists, tables and links work as in Markdown, above, with
 what Org writes in its own way.
 
 | Key | Does |
@@ -361,6 +362,8 @@ what Org writes in its own way.
 | `M-+` after `src`, `quote` or `example` | A block of that kind |
 | `C-c C-c` in a source block, `C-c C-v e` | Run the code of the block and put what it wrote under it |
 | `C-c C-v t` | Write the code of the blocks to the files that they name with `:tangle` |
+| `C-c x`, in any buffer | Capture an entry: choose a template, write, `C-c C-c` to put it in its file, `C-c C-k` to abandon it |
+| `C-c j`, in any buffer | A new entry with the time in the journal of today |
 
 The states of a heading are those of the `org-todo-keywords` option: the
 words for what is still to do, and the words for what is done.
@@ -403,6 +406,37 @@ and `awk`. `C-c C-v t` writes every block that says `:tangle file` to that
 file, the blocks of one file in their order; `:tangle yes` is the name of
 the Org file with the language as its ending, and `:mkdirp yes` makes a
 directory that is missing.
+
+Capture writes something down without leaving what you do. `C-c x` asks
+for a template by its key and shows its text in a buffer, with point where
+the template says. `C-c C-c` there puts the entry in the file of the
+template, under its heading, and saves the file, which need not be open;
+headings and files that are missing are made. A template is a key, a name,
+where the entry goes and its text:
+
+```scheme
+(set-option! 'org-directory "~/brain/org")
+(set-option! 'org-capture-templates
+  '(("t" "Todo" (file+headline "tasks/inbox.org" "Inbox")
+     "* TODO %?\n  %i\n  %a" prepend #t)
+    ("j" "Journal" (file+datetree "journal.org")
+     "* %?\nEntered on %U\n  %i")
+    ("m" "Meeting" (file+headline "tasks/inbox.org" "Meetings")
+     "* MEETING with %? :MEETING:\n  %U\n  - Participants: \n  - Notes: ")))
+(set-option! 'org-journal-dir "~/brain/org/journal")
+```
+
+`(file "notes.org")` is the end of a file, `file+headline` under a heading,
+and `file+datetree` under headings for the year, the month and the day. In
+the text, `%?` is where point goes, `%U` the date and time, `%u` the date
+(`%T` and `%t` the same as dates for an agenda), `%i` the text of the
+region and `%a` a link to where the capture started. `prepend #t` puts the
+entry first under its heading.
+
+`C-c j` visits the file of today in the `org-journal-dir` option, makes it
+with a heading for the date if this is its first entry, and starts an entry
+with the time. The `org-journal-file-format` and `org-journal-date-format`
+options say how the file and the heading are named.
 
 Org is written in Scheme, in `runtime/lib/org.scm`, on libraries that
 Markdown uses too; `docs/extending.md` says how to add to it.
