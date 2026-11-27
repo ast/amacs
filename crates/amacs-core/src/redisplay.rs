@@ -558,6 +558,19 @@ impl Editor {
         // Scroll horizontally just enough to keep the cursor in view.
         let hidden = (cursor_cell + 1).saturating_sub(width);
         let mut line = DisplayLine::default();
+        // Where no candidate is selected, RET takes the input as it is
+        // typed, and the row of the input has the highlight of the
+        // selection.
+        let on_input = state
+            .session
+            .as_ref()
+            .is_some_and(|session| session.selected().is_none());
+        if on_input {
+            line.fill = faces::CURRENT_CANDIDATE;
+            for (_, _, face) in &mut glyphs {
+                *face = self.faces.overlay(*face, &[faces::CURRENT_CANDIDATE]);
+            }
+        }
         let (mut skipped, mut used) = (0, 0);
         for (glyph, cells, face) in &glyphs {
             if skipped < hidden {

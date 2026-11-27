@@ -301,12 +301,24 @@ fn the_selection_moves_through_the_candidates_and_onto_the_input() {
     assert_ne!(h.screen.face_at(8, 0).bg, h.screen.face_at(7, 0).bg);
     h.keys("M->");
     assert_eq!(h.prompt(), format!("{count}/{count} M-x kill-"));
-    h.keys("M-< C-p");
+    h.keys("M-<");
+    let (plain, selected) = (h.screen.face_at(5, 0).bg, h.screen.face_at(6, 0).bg);
+    assert_ne!(plain, selected);
+    h.keys("C-p");
     assert_eq!(
         h.prompt(),
         format!("*/{count} M-x kill-"),
         "above the first candidate, the input is selected"
     );
+    // The input has the highlight then, to the edge of the frame, and no
+    // candidate has.
+    assert_eq!(h.screen.face_at(5, 0).bg, selected);
+    assert_eq!(h.screen.face_at(5, 12).bg, selected);
+    assert_eq!(h.screen.face_at(5, 40).bg, selected);
+    assert_eq!(h.screen.face_at(6, 0).bg, plain);
+    h.keys("C-n");
+    assert_eq!(h.screen.face_at(5, 0).bg, plain);
+    h.keys("C-p");
     h.keys("RET");
     assert_eq!(h.echo(), "Unknown command: kill-");
 
