@@ -57,10 +57,70 @@ pub enum Op {
     Return,
     /// Make a closure of one of the code's inner pieces of code.
     Closure(u32),
-    /// Do what a common built-in procedure does to the values on top of
-    /// the stack, without the call. The number is its place in
-    /// [`Intrinsic::ALL`].
-    Intrinsic(u8),
+    // What follows does what a common built-in procedure does to the
+    // values on top of the stack, without the call, for as long as the
+    // procedure's name means what it did at first and the values are of
+    // the usual kind. Otherwise it calls what the name means now. See
+    // [`Intrinsic`].
+    Add,
+    Sub,
+    Mul,
+    Less,
+    Greater,
+    LessEqual,
+    GreaterEqual,
+    NumberEqual,
+    Eq,
+    Eqv,
+    Cons,
+    Car,
+    Cdr,
+    IsNull,
+    IsPair,
+    Not,
+    /// `+` with a small integer as its second argument, which is not on
+    /// the stack.
+    AddInt(i32),
+    /// `-` in the same way.
+    SubInt(i32),
+    // A test and the jump that depends on it, in one. Where the test is of
+    // the usual kind, the instruction pops its operands and either jumps or
+    // steps over the next instruction. Otherwise it calls what the name
+    // means now, and the next instruction, a `JumpIfFalse` to the same
+    // place, sees to the value.
+    JumpUnlessLess(u32),
+    JumpUnlessGreater(u32),
+    JumpUnlessLessEqual(u32),
+    JumpUnlessGreaterEqual(u32),
+    JumpUnlessNumberEqual(u32),
+    JumpUnlessEq(u32),
+    JumpUnlessEqv(u32),
+    JumpUnlessNull(u32),
+    JumpUnlessPair(u32),
+    JumpUnlessNot(u32),
+}
+
+impl Op {
+    /// The same jump to another place, if this is a jump.
+    pub fn with_target(self, target: u32) -> Self {
+        match self {
+            Op::Jump(_) => Op::Jump(target),
+            Op::JumpIfFalse(_) => Op::JumpIfFalse(target),
+            Op::JumpIfFalseElsePop(_) => Op::JumpIfFalseElsePop(target),
+            Op::JumpIfTrueElsePop(_) => Op::JumpIfTrueElsePop(target),
+            Op::JumpUnlessLess(_) => Op::JumpUnlessLess(target),
+            Op::JumpUnlessGreater(_) => Op::JumpUnlessGreater(target),
+            Op::JumpUnlessLessEqual(_) => Op::JumpUnlessLessEqual(target),
+            Op::JumpUnlessGreaterEqual(_) => Op::JumpUnlessGreaterEqual(target),
+            Op::JumpUnlessNumberEqual(_) => Op::JumpUnlessNumberEqual(target),
+            Op::JumpUnlessEq(_) => Op::JumpUnlessEq(target),
+            Op::JumpUnlessEqv(_) => Op::JumpUnlessEqv(target),
+            Op::JumpUnlessNull(_) => Op::JumpUnlessNull(target),
+            Op::JumpUnlessPair(_) => Op::JumpUnlessPair(target),
+            Op::JumpUnlessNot(_) => Op::JumpUnlessNot(target),
+            other => other,
+        }
+    }
 }
 
 /// The built-in procedures that compiled code does not call but carries
@@ -76,6 +136,7 @@ pub enum Intrinsic {
     GreaterEqual,
     NumberEqual,
     Eq,
+    Eqv,
     Cons,
     Car,
     Cdr,
@@ -85,7 +146,8 @@ pub enum Intrinsic {
 }
 
 impl Intrinsic {
-    /// Each with its name and the number of arguments it is used for.
+    /// Each with its name and the number of arguments it is used for, in
+    /// the order of the enumeration.
     pub const ALL: [(Intrinsic, &'static str, usize); 16] = [
         (Intrinsic::Add, "+", 2),
         (Intrinsic::Sub, "-", 2),
@@ -96,7 +158,7 @@ impl Intrinsic {
         (Intrinsic::GreaterEqual, ">=", 2),
         (Intrinsic::NumberEqual, "=", 2),
         (Intrinsic::Eq, "eq?", 2),
-        (Intrinsic::Eq, "eqv?", 2),
+        (Intrinsic::Eqv, "eqv?", 2),
         (Intrinsic::Cons, "cons", 2),
         (Intrinsic::Car, "car", 1),
         (Intrinsic::Cdr, "cdr", 1),
@@ -104,6 +166,46 @@ impl Intrinsic {
         (Intrinsic::IsPair, "pair?", 1),
         (Intrinsic::Not, "not", 1),
     ];
+
+    /// The instruction that does what the procedure does.
+    pub fn op(self) -> Op {
+        match self {
+            Intrinsic::Add => Op::Add,
+            Intrinsic::Sub => Op::Sub,
+            Intrinsic::Mul => Op::Mul,
+            Intrinsic::Less => Op::Less,
+            Intrinsic::Greater => Op::Greater,
+            Intrinsic::LessEqual => Op::LessEqual,
+            Intrinsic::GreaterEqual => Op::GreaterEqual,
+            Intrinsic::NumberEqual => Op::NumberEqual,
+            Intrinsic::Eq => Op::Eq,
+            Intrinsic::Eqv => Op::Eqv,
+            Intrinsic::Cons => Op::Cons,
+            Intrinsic::Car => Op::Car,
+            Intrinsic::Cdr => Op::Cdr,
+            Intrinsic::IsNull => Op::IsNull,
+            Intrinsic::IsPair => Op::IsPair,
+            Intrinsic::Not => Op::Not,
+        }
+    }
+
+    /// The instruction that jumps unless the procedure's value is true,
+    /// for the procedures that are tests.
+    pub fn jump_unless(self) -> Option<Op> {
+        Some(match self {
+            Intrinsic::Less => Op::JumpUnlessLess(0),
+            Intrinsic::Greater => Op::JumpUnlessGreater(0),
+            Intrinsic::LessEqual => Op::JumpUnlessLessEqual(0),
+            Intrinsic::GreaterEqual => Op::JumpUnlessGreaterEqual(0),
+            Intrinsic::NumberEqual => Op::JumpUnlessNumberEqual(0),
+            Intrinsic::Eq => Op::JumpUnlessEq(0),
+            Intrinsic::Eqv => Op::JumpUnlessEqv(0),
+            Intrinsic::IsNull => Op::JumpUnlessNull(0),
+            Intrinsic::IsPair => Op::JumpUnlessPair(0),
+            Intrinsic::Not => Op::JumpUnlessNot(0),
+            _ => return None,
+        })
+    }
 }
 
 /// Where a closure gets a variable it captures when it is made.
@@ -147,5 +249,18 @@ impl Proto {
     pub fn span_at(&self, pc: usize) -> Option<Span> {
         let after = self.spans.partition_point(|(at, _)| *at as usize <= pc);
         Some(self.spans[after.checked_sub(1)?].1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_intrinsics_are_listed_in_their_order() {
+        for (index, (kind, _, _)) in Intrinsic::ALL.iter().enumerate() {
+            assert_eq!(*kind as usize, index);
+        }
+        assert!(std::mem::size_of::<Op>() <= 8);
     }
 }

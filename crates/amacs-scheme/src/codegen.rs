@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::code::{Capture, Op, Proto};
+use crate::code::{Capture, Intrinsic, Op, Proto};
 use crate::compile::{Expr, Lambda, Var};
 use crate::error::Error;
 use crate::source::Span;
@@ -88,13 +88,37 @@ impl Gen<'_> {
     /// Makes the jump at `at` go to the next instruction.
     fn land(&mut self, at: usize) {
         let target = self.code.len() as u32;
-        self.code[at] = match self.code[at] {
-            Op::Jump(_) => Op::Jump(target),
-            Op::JumpIfFalse(_) => Op::JumpIfFalse(target),
-            Op::JumpIfFalseElsePop(_) => Op::JumpIfFalseElsePop(target),
-            Op::JumpIfTrueElsePop(_) => Op::JumpIfTrueElsePop(target),
-            other => other,
+        self.code[at] = self.code[at].with_target(target);
+    }
+
+    /// The procedure with an instruction of its own that a call is of, if
+    /// it is of one, by the name and the number of arguments.
+    fn intrinsic(&self, callee: &Expr, args: usize) -> Option<Intrinsic> {
+        let Expr::Global(slot, _) = callee else {
+            return None;
         };
+        let (index, count) = self.intrinsics.get(slot)?;
+        (*count == args).then(|| Intrinsic::ALL[usize::from(*index)].0)
+    }
+
+    /// Compiles the test of a conditional. Gives the jumps that are taken
+    /// when it is false, to be made to land where the alternative is.
+    fn test(&mut self, test: &Expr) -> Result<Vec<usize>, Error> {
+        if let Expr::Call(callee, args, span) = test
+            && let Some(jump) = self
+                .intrinsic(callee, args.len())
+                .and_then(Intrinsic::jump_unless)
+        {
+            for arg in args {
+                self.expr(arg, false)?;
+            }
+            self.note(*span);
+            // The second jump is for when the first has to call what the
+            // name has come to mean.
+            return Ok(vec![self.emit(jump), self.emit(Op::JumpIfFalse(0))]);
+        }
+        self.expr(test, false)?;
+        Ok(vec![self.emit(Op::JumpIfFalse(0))])
     }
 
     fn constant(&mut self, value: Value) {
@@ -195,15 +219,18 @@ impl Gen<'_> {
                 self.emit(Op::Void);
             }
             Expr::If(test, then, otherwise) => {
-                self.expr(test, false)?;
-                let to_else = self.emit(Op::JumpIfFalse(0));
+                let to_else = self.test(test)?;
                 self.expr(then, tail)?;
                 if tail {
-                    self.land(to_else);
+                    for jump in to_else {
+                        self.land(jump);
+                    }
                     return self.expr(otherwise, true);
                 }
                 let to_end = self.emit(Op::Jump(0));
-                self.land(to_else);
+                for jump in to_else {
+                    self.land(jump);
+                }
                 self.expr(otherwise, false)?;
                 self.land(to_end);
             }
@@ -259,15 +286,29 @@ impl Gen<'_> {
                 self.emit(Op::Closure(self.protos.len() as u32 - 1));
             }
             Expr::Call(callee, args, span)
-                if let Expr::Global(slot, _) = &**callee
-                    && let Some((index, count)) = self.intrinsics.get(slot)
-                    && *count == args.len() =>
+                if let Some(kind) = self.intrinsic(callee, args.len()) =>
             {
-                for arg in args {
+                // A small integer to add or to take away is part of the
+                // instruction.
+                let fused = match (kind, &args[..]) {
+                    (Intrinsic::Add, [_, Expr::Const(Value::Int(small))]) => {
+                        i32::try_from(*small).ok().map(Op::AddInt)
+                    }
+                    (Intrinsic::Sub, [_, Expr::Const(Value::Int(small))]) => {
+                        i32::try_from(*small).ok().map(Op::SubInt)
+                    }
+                    _ => None,
+                };
+                let operands = if fused.is_some() {
+                    &args[..1]
+                } else {
+                    &args[..]
+                };
+                for arg in operands {
                     self.expr(arg, false)?;
                 }
                 self.note(*span);
-                self.emit(Op::Intrinsic(*index));
+                self.emit(fused.unwrap_or(kind.op()));
             }
             Expr::Call(callee, args, span) if tail && self.calls_itself(callee, args.len()) => {
                 for arg in args {

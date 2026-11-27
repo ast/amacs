@@ -156,6 +156,83 @@ fn a_loop_that_calls_itself_starts_afresh() {
 }
 
 #[test]
+fn built_in_procedures_with_instructions_of_their_own() {
+    // The tests that are part of a conditional.
+    assert_eq!(
+        run("(map (lambda (x)
+                    (list (if (null? x) 'null 'no)
+                          (if (pair? x) 'pair 'no)
+                          (if (not x) 'false 'no)
+                          (if (eq? x 'a) 'a 'no)
+                          (if (eqv? x 2) 'two 'no)))
+                  (list '() '(1) #f 'a 2))"),
+        "((null no no no no) (no pair no no no) (no no false no no) \
+         (no no no a no) (no no no no two))"
+    );
+    assert_eq!(
+        run("(define (order a b)
+               (list (if (< a b) '< '-) (if (> a b) '> '-) (if (<= a b) '<= '-)
+                     (if (>= a b) '>= '-) (if (= a b) '= '-)))
+             (list (order 1 2) (order 2 2) (order 2.5 1.5) (order 1 1.5))"),
+        "((< - <= - -) (- - <= >= =) (- > - >= -) (< - <= - -))"
+    );
+    // A number that is part of the instruction, with numbers of every kind.
+    assert_eq!(
+        run(
+            "(define (both x) (list (+ x 1) (- x 1) (+ x -2) (- x 100000)))
+             (list (both 5) (both 1.5))"
+        ),
+        "((6 4 3 -99995) (2.5 0.5 -0.5 -99998.5))"
+    );
+    assert_eq!(
+        run(
+            "(let ((most 9223372036854775807) (least -9223372036854775808))
+               (list (equal? (+ most 1) (apply + (list most 1)))
+                     (equal? (- least 1) (apply - (list least 1)))))"
+        ),
+        "(#t #t)"
+    );
+    assert_eq!(
+        run("(define (f x) (if (< x 1) 'less 'more)) (f 'a)"),
+        run("(define (f x) (if (apply < (list x 1)) 'less 'more)) (f 'a)")
+    );
+    assert_eq!(
+        run("(define (f x) (+ x 1)) (f \"a\")"),
+        run("(define (f x) (apply + (list x 1))) (f \"a\")")
+    );
+
+    // A name that is given another meaning has it in code compiled before
+    // and after, and has its first meaning again when given it back.
+    assert_eq!(
+        run("(define (uses x)
+               (list (+ x 1) (- x 1) (+ x x) (car (list x)) (if (< x 0) 'below 'not)
+                     (if (null? x) 'null 'not) (if (not x) 'false 'true)))
+             (define before (uses 5))
+             (define first-meanings (list + - car < null? not))
+             (define (+ a b) (list 'plus a b))
+             (define (- a b) (list 'minus a b))
+             (set! car (lambda (pair) 'car))
+             (global-set! '< (lambda (a b) #t))
+             (define (null? x) 'yes)
+             (define (not x) #f)
+             (define changed (uses 5))
+             (define (uses-anew x) (list (+ x 1) (if (< x 0) 'below 'not)))
+             (define anew (uses-anew 5))
+             (set! + (list-ref first-meanings 0))
+             (set! - (list-ref first-meanings 1))
+             (set! car (list-ref first-meanings 2))
+             (set! < (list-ref first-meanings 3))
+             (set! null? (list-ref first-meanings 4))
+             (set! not (list-ref first-meanings 5))
+             (list before changed anew (uses 5))"),
+        "((6 4 10 5 not not true) \
+         ((plus 5 1) (minus 5 1) (plus 5 5) car below null true) \
+         ((plus 5 1) below) \
+         (6 4 10 5 not not true))"
+    );
+}
+
+#[test]
 fn special_forms() {
     assert_eq!(
         run("(list (if #f #f) (if '() 1 2) (when #f 1) (unless #f 1 2))"),

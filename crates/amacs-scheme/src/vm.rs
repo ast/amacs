@@ -96,6 +96,11 @@ pub struct Core {
     /// checks that the variable still holds it.
     intrinsics: Vec<(u32, Value)>,
     intrinsic_slots: Intrinsics,
+    /// One bit for each entry of [`Intrinsic::ALL`]: whether its variable
+    /// still holds the procedure.
+    intact: u32,
+    /// The highest number of a variable that holds such a procedure.
+    intrinsic_last: u32,
 }
 
 impl Core {
@@ -167,6 +172,8 @@ impl Core {
             interrupt_tag,
             intrinsics: Vec::new(),
             intrinsic_slots: Intrinsics::new(),
+            intact: 0,
+            intrinsic_last: 0,
         }
     }
 
@@ -202,7 +209,32 @@ impl Core {
     pub fn define(&mut self, name: &str, value: Value) {
         let symbol = self.symbols.intern(name);
         let slot = self.global_slot(symbol);
+        self.set_global(slot, value);
+    }
+
+    /// Gives the top-level variable with a number a value. Every change of
+    /// such a variable goes through here, which keeps note of whether the
+    /// procedures that have instructions of their own still have their
+    /// names.
+    pub fn set_global(&mut self, slot: u32, value: Value) {
         self.globals[slot as usize].value = value;
+        if slot <= self.intrinsic_last
+            && let Some((index, _)) = self.intrinsic_slots.get(&slot)
+        {
+            let bit = 1 << index;
+            if self.intrinsics[usize::from(*index)].1 == value {
+                self.intact |= bit;
+            } else {
+                self.intact &= !bit;
+            }
+        }
+    }
+
+    /// Whether the name of a procedure with an instruction of its own
+    /// still means that procedure.
+    #[inline]
+    fn intact(&self, kind: Intrinsic) -> bool {
+        self.intact & (1 << kind as u32) != 0
     }
 
     /// The value of a top-level variable, if it has one.
@@ -446,6 +478,78 @@ fn too_deep() -> Error {
     Error::new("too many calls are in progress at once; is a recursion missing its end?")
 }
 
+/// The sum, difference or product of two numbers of the same usual kind.
+/// `None` is for everything else, which the procedure itself sees to.
+#[inline(always)]
+fn arithmetic(kind: Intrinsic, a: Value, b: Value) -> Option<Value> {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => match kind {
+            Intrinsic::Add => x.checked_add(y),
+            Intrinsic::Sub => x.checked_sub(y),
+            Intrinsic::Mul => x.checked_mul(y),
+            _ => None,
+        }
+        .map(Value::Int),
+        (Value::Float(x), Value::Float(y)) => match kind {
+            Intrinsic::Add => Some(Value::Float(x + y)),
+            Intrinsic::Sub => Some(Value::Float(x - y)),
+            Intrinsic::Mul => Some(Value::Float(x * y)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// How two numbers of the same usual kind compare.
+#[inline(always)]
+fn comparison(kind: Intrinsic, a: Value, b: Value) -> Option<bool> {
+    macro_rules! compare {
+        ($x:expr, $y:expr) => {
+            match kind {
+                Intrinsic::Less => Some($x < $y),
+                Intrinsic::Greater => Some($x > $y),
+                Intrinsic::LessEqual => Some($x <= $y),
+                Intrinsic::GreaterEqual => Some($x >= $y),
+                Intrinsic::NumberEqual => Some($x == $y),
+                _ => None,
+            }
+        };
+    }
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => compare!(x, y),
+        (Value::Float(x), Value::Float(y)) => compare!(x, y),
+        _ => None,
+    }
+}
+
+/// Whether two values are the same, as `eq?` and `eqv?` have it.
+#[inline(always)]
+fn same(_: Intrinsic, a: Value, b: Value) -> Option<bool> {
+    Some(crate::builtins::eqv(a, b))
+}
+
+impl Core {
+    /// What a procedure of one argument with an instruction of its own
+    /// says about a value, where it can say it without failing.
+    #[inline(always)]
+    fn about(&self, kind: Intrinsic, value: Value) -> Option<Value> {
+        Some(match kind {
+            Intrinsic::Car | Intrinsic::Cdr => match self.heap.get(value.handle()?) {
+                Object::Pair(car, _) if kind == Intrinsic::Car => *car,
+                Object::Pair(_, cdr) => *cdr,
+                _ => return None,
+            },
+            Intrinsic::IsNull => Value::Bool(value == Value::Nil),
+            Intrinsic::IsPair => Value::Bool(matches!(
+                value.handle().map(|handle| self.heap.get(handle)),
+                Some(Object::Pair(..))
+            )),
+            Intrinsic::Not => Value::Bool(value == Value::Bool(false)),
+            _ => return None,
+        })
+    }
+}
+
 impl Vm {
     /// An interpreter with the standard procedures defined.
     pub fn new() -> Self {
@@ -463,6 +567,8 @@ impl Vm {
             let original = vm.core.globals[slot as usize].value;
             vm.core.intrinsics.push((slot, original));
             vm.core.intrinsic_slots.insert(slot, (index as u8, *count));
+            vm.core.intrinsic_last = vm.core.intrinsic_last.max(slot);
+            vm.core.intact |= 1 << index;
         }
         if let Err(report) = vm.eval(crate::PRELUDE, "prelude.scm") {
             panic!("the prelude does not load: {report}");
@@ -1160,6 +1266,81 @@ impl Vm {
             let mut closure = frame.closure;
             let mut pc = frame.pc;
             let code = &proto.code[..];
+
+            // Calls what the name of a procedure with an instruction of
+            // its own means now, with the arguments that are on the stack.
+            macro_rules! general {
+                ($kind:expr) => {{
+                    self.save_pc(pc);
+                    match self.call_general($kind)? {
+                        Flow::Value => {}
+                        Flow::Frame => continue 'frame,
+                        Flow::Suspended(outcome) => return Ok(outcome),
+                    }
+                }};
+            }
+            // The two values on top of the stack give way to what `$how`
+            // makes of them.
+            macro_rules! binary {
+                ($kind:expr, $how:ident) => {{
+                    let stack = &mut self.fiber.stack;
+                    let top = stack.len() - 1;
+                    if self.core.intact($kind)
+                        && let Some(result) = $how($kind, stack[top - 1], stack[top])
+                    {
+                        stack[top - 1] = result.into();
+                        stack.truncate(top);
+                    } else {
+                        general!($kind);
+                    }
+                }};
+            }
+            macro_rules! unary {
+                ($kind:expr) => {{
+                    let top = self.fiber.stack.len() - 1;
+                    if self.core.intact($kind)
+                        && let Some(result) = self.core.about($kind, self.fiber.stack[top])
+                    {
+                        self.fiber.stack[top] = result;
+                    } else {
+                        general!($kind);
+                    }
+                }};
+            }
+            // The same as a test: the values go, and the code jumps or
+            // steps over the jump that follows.
+            macro_rules! branch {
+                ($kind:expr, $target:expr, $how:ident) => {{
+                    let stack = &mut self.fiber.stack;
+                    let top = stack.len() - 1;
+                    if self.core.intact($kind)
+                        && let Some(result) = $how($kind, stack[top - 1], stack[top])
+                    {
+                        stack.truncate(top - 1);
+                        pc = if result { pc + 1 } else { $target as usize };
+                    } else {
+                        general!($kind);
+                    }
+                }};
+            }
+            macro_rules! branch_on {
+                ($kind:expr, $target:expr) => {{
+                    let top = self.fiber.stack.len() - 1;
+                    if self.core.intact($kind)
+                        && let Some(result) = self.core.about($kind, self.fiber.stack[top])
+                    {
+                        self.fiber.stack.truncate(top);
+                        pc = if result == Value::Bool(false) {
+                            $target as usize
+                        } else {
+                            pc + 1
+                        };
+                    } else {
+                        general!($kind);
+                    }
+                }};
+            }
+
             loop {
                 let op = code[pc];
                 pc += 1;
@@ -1232,11 +1413,11 @@ impl Vm {
                             return Err(self.unbound(pc, slot, "set!: there is no variable "));
                         }
                         let value = self.fiber.stack.pop().expect("a value to store");
-                        self.core.globals[slot as usize].value = value;
+                        self.core.set_global(slot, value);
                     }
                     Op::DefineGlobal(slot) => {
                         let value = self.fiber.stack.pop().expect("a value to store");
-                        self.core.globals[slot as usize].value = value;
+                        self.core.set_global(slot, value);
                     }
                     Op::Pop => {
                         self.fiber.stack.pop();
@@ -1346,23 +1527,74 @@ impl Vm {
                             None => continue 'frame,
                         }
                     }
-                    Op::Intrinsic(index) => {
-                        if !self.intrinsic(index) {
-                            // Not the simple case: an ordinary call of
-                            // whatever the name means now.
-                            let (_, _, count) = Intrinsic::ALL[usize::from(index)];
-                            let (slot, _) = self.core.intrinsics[usize::from(index)];
-                            let callee = self.core.globals[slot as usize].value;
-                            let at = self.fiber.stack.len() - count;
-                            self.fiber.stack.insert(at, callee);
-                            self.save_pc(pc);
-                            match self.call_value(count, false)? {
-                                Flow::Value => {}
-                                Flow::Frame => continue 'frame,
-                                Flow::Suspended(outcome) => return Ok(outcome),
-                            }
+                    Op::Add => binary!(Intrinsic::Add, arithmetic),
+                    Op::Sub => binary!(Intrinsic::Sub, arithmetic),
+                    Op::Mul => binary!(Intrinsic::Mul, arithmetic),
+                    Op::Less => binary!(Intrinsic::Less, comparison),
+                    Op::Greater => binary!(Intrinsic::Greater, comparison),
+                    Op::LessEqual => binary!(Intrinsic::LessEqual, comparison),
+                    Op::GreaterEqual => binary!(Intrinsic::GreaterEqual, comparison),
+                    Op::NumberEqual => binary!(Intrinsic::NumberEqual, comparison),
+                    Op::Eq => binary!(Intrinsic::Eq, same),
+                    Op::Eqv => binary!(Intrinsic::Eqv, same),
+                    Op::Cons => {
+                        if self.core.intact(Intrinsic::Cons) {
+                            let stack = &mut self.fiber.stack;
+                            let top = stack.len() - 1;
+                            stack[top - 1] =
+                                self.core.alloc(Object::Pair(stack[top - 1], stack[top]));
+                            stack.truncate(top);
+                        } else {
+                            general!(Intrinsic::Cons);
                         }
                     }
+                    Op::Car => unary!(Intrinsic::Car),
+                    Op::Cdr => unary!(Intrinsic::Cdr),
+                    Op::IsNull => unary!(Intrinsic::IsNull),
+                    Op::IsPair => unary!(Intrinsic::IsPair),
+                    Op::Not => unary!(Intrinsic::Not),
+                    Op::AddInt(small) => {
+                        let top = self.fiber.stack.len() - 1;
+                        if let Value::Int(value) = self.fiber.stack[top]
+                            && let Some(sum) = value.checked_add(i64::from(small))
+                            && self.core.intact(Intrinsic::Add)
+                        {
+                            self.fiber.stack[top] = Value::Int(sum);
+                        } else {
+                            self.fiber.stack.push(Value::Int(i64::from(small)));
+                            general!(Intrinsic::Add);
+                        }
+                    }
+                    Op::SubInt(small) => {
+                        let top = self.fiber.stack.len() - 1;
+                        if let Value::Int(value) = self.fiber.stack[top]
+                            && let Some(difference) = value.checked_sub(i64::from(small))
+                            && self.core.intact(Intrinsic::Sub)
+                        {
+                            self.fiber.stack[top] = Value::Int(difference);
+                        } else {
+                            self.fiber.stack.push(Value::Int(i64::from(small)));
+                            general!(Intrinsic::Sub);
+                        }
+                    }
+                    Op::JumpUnlessLess(target) => branch!(Intrinsic::Less, target, comparison),
+                    Op::JumpUnlessGreater(target) => {
+                        branch!(Intrinsic::Greater, target, comparison);
+                    }
+                    Op::JumpUnlessLessEqual(target) => {
+                        branch!(Intrinsic::LessEqual, target, comparison);
+                    }
+                    Op::JumpUnlessGreaterEqual(target) => {
+                        branch!(Intrinsic::GreaterEqual, target, comparison);
+                    }
+                    Op::JumpUnlessNumberEqual(target) => {
+                        branch!(Intrinsic::NumberEqual, target, comparison);
+                    }
+                    Op::JumpUnlessEq(target) => branch!(Intrinsic::Eq, target, same),
+                    Op::JumpUnlessEqv(target) => branch!(Intrinsic::Eqv, target, same),
+                    Op::JumpUnlessNull(target) => branch_on!(Intrinsic::IsNull, target),
+                    Op::JumpUnlessPair(target) => branch_on!(Intrinsic::IsPair, target),
+                    Op::JumpUnlessNot(target) => branch_on!(Intrinsic::Not, target),
                     Op::Closure(index) => {
                         let inner = proto.protos[index as usize].clone();
                         let captured = inner
@@ -1384,83 +1616,16 @@ impl Vm {
         }
     }
 
-    /// Does what a built-in procedure does to the values on top of the
-    /// stack, if its name still means that procedure and the values are of
-    /// the usual kind. Otherwise leaves everything as it is and says no.
-    #[inline]
-    fn intrinsic(&mut self, index: u8) -> bool {
-        let (slot, original) = self.core.intrinsics[usize::from(index)];
-        if self.core.globals[slot as usize].value != original {
-            return false;
-        }
-        let stack = &mut self.fiber.stack;
-        let top = stack.len() - 1;
-        let (kind, _, count) = Intrinsic::ALL[usize::from(index)];
-        if count == 1 {
-            let value = stack[top];
-            let result = match kind {
-                Intrinsic::Car | Intrinsic::Cdr => {
-                    let Value::Obj(handle) = value else {
-                        return false;
-                    };
-                    match self.core.heap.get(handle) {
-                        Object::Pair(car, _) if kind == Intrinsic::Car => *car,
-                        Object::Pair(_, cdr) => *cdr,
-                        _ => return false,
-                    }
-                }
-                Intrinsic::IsNull => Value::Bool(value == Value::Nil),
-                Intrinsic::IsPair => Value::Bool(matches!(
-                    value.handle().map(|handle| self.core.heap.get(handle)),
-                    Some(Object::Pair(..))
-                )),
-                Intrinsic::Not => Value::Bool(value == Value::Bool(false)),
-                _ => return false,
-            };
-            stack[top] = result;
-            return true;
-        }
-        let (a, b) = (stack[top - 1], stack[top]);
-        let result = match (kind, a, b) {
-            (Intrinsic::Cons, _, _) => self.core.alloc(Object::Pair(a, b)),
-            (Intrinsic::Eq, _, _) => Value::Bool(crate::builtins::eqv(a, b)),
-            (_, Value::Int(x), Value::Int(y)) => match kind {
-                Intrinsic::Add => match x.checked_add(y) {
-                    Some(sum) => Value::Int(sum),
-                    None => return false,
-                },
-                Intrinsic::Sub => match x.checked_sub(y) {
-                    Some(difference) => Value::Int(difference),
-                    None => return false,
-                },
-                Intrinsic::Mul => match x.checked_mul(y) {
-                    Some(product) => Value::Int(product),
-                    None => return false,
-                },
-                Intrinsic::Less => Value::Bool(x < y),
-                Intrinsic::Greater => Value::Bool(x > y),
-                Intrinsic::LessEqual => Value::Bool(x <= y),
-                Intrinsic::GreaterEqual => Value::Bool(x >= y),
-                Intrinsic::NumberEqual => Value::Bool(x == y),
-                _ => return false,
-            },
-            (_, Value::Float(x), Value::Float(y)) => match kind {
-                Intrinsic::Add => Value::Float(x + y),
-                Intrinsic::Sub => Value::Float(x - y),
-                Intrinsic::Mul => Value::Float(x * y),
-                Intrinsic::Less => Value::Bool(x < y),
-                Intrinsic::Greater => Value::Bool(x > y),
-                Intrinsic::LessEqual => Value::Bool(x <= y),
-                Intrinsic::GreaterEqual => Value::Bool(x >= y),
-                Intrinsic::NumberEqual => Value::Bool(x == y),
-                _ => return false,
-            },
-            _ => return false,
-        };
-        let stack = &mut self.fiber.stack;
-        stack[top - 1] = result;
-        stack.pop();
-        true
+    /// Calls what the name of a procedure with an instruction of its own
+    /// means now, with the arguments that are on the stack.
+    #[cold]
+    fn call_general(&mut self, kind: Intrinsic) -> Result<Flow, Error> {
+        let (_, _, count) = Intrinsic::ALL[kind as usize];
+        let (slot, _) = self.core.intrinsics[kind as usize];
+        let callee = self.core.globals[slot as usize].value;
+        let at = self.fiber.stack.len() - count;
+        self.fiber.stack.insert(at, callee);
+        self.call_value(count, false)
     }
 
     fn captured(&self, closure: Handle, index: u16) -> Value {

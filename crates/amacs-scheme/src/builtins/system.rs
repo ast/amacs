@@ -818,7 +818,7 @@ pub(super) fn install(core: &mut Core) {
         |core, args| {
             let name = symbol(core, "global-set!", args[0])?;
             let slot = core.global_slot(name);
-            core.globals[slot as usize].value = args[1];
+            core.set_global(slot, args[1]);
             Ok(Value::Void)
         },
     );
