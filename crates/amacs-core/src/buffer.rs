@@ -207,6 +207,7 @@ impl Buffer {
                 _ => &[],
             },
             reveal: (0, 0),
+            indent_step: crate::display::DEFAULT_INDENT_STEP,
             tab_width: self.tab_width,
             words: self
                 .minor_modes

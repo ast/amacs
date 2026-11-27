@@ -1,6 +1,8 @@
 //! Markup that is left out of what is drawn, in `hide-markup-mode`. The
 //! rows are laid out in `crates/amacs-core/src/display.rs`; what is markup
-//! is said by the language, for Org in `crates/amacs-treesit/src/org.rs`.
+//! is said by the language: for Org in `crates/amacs-treesit/src/org.rs`,
+//! for a language with a grammar by the captures `conceal` of its query,
+//! as in `crates/amacs-treesit/queries/markdown-inline.scm`.
 
 mod common;
 
@@ -156,4 +158,47 @@ fn a_row_breaks_before_a_word_that_starts_with_hidden_markup() {
     assert_eq!(h.screen.row(2), "strong text more");
     assert_eq!(h.screen.face_at(2, 0), h.face("strong"));
     assert_eq!(h.screen.row(3), "end");
+}
+
+#[test]
+fn the_markup_of_markdown_is_left_out_too() {
+    let mut h = Harness::new(80, 16);
+    h.eval(r#"(switch-to-buffer "notes.md") (markdown-mode)"#);
+    let text = "# Head with `code`
+Some **strong** and *stressed* text, å `code`.
+See [the site](https://example.org/a/long/address \"title\") or [that][ref] or [sic].
+
+| a | *b* |
+|---|-----|
+
+```sh
+echo *not* this
+```
+last
+";
+    h.paste(text);
+    h.eval("(enable-mode! 'hide-markup-mode)");
+    assert_eq!(h.screen.row(0), "# Head with code");
+    assert_eq!(h.screen.row(1), "Some strong and stressed text, å code.");
+    // Text in brackets alone can be other things than a link.
+    assert_eq!(h.screen.row(2), "See the site or that or [sic].");
+    assert_eq!(h.screen.row(4), "| a | *b* |");
+    assert_eq!(h.screen.row(8), "echo *not* this");
+    assert_eq!(h.screen.face_at(1, 5), h.face("strong"));
+    assert_eq!(h.screen.face_at(1, 33), h.face("code"));
+    assert_eq!(h.screen.face_at(2, 4), h.face("link"));
+    assert_eq!(h.screen.face_at(2, 13), h.face("default"));
+
+    // The line that point is on is as it is written, and what is typed
+    // there is markup as soon as it is whole.
+    h.keys("M-< C-n");
+    assert_eq!(
+        h.screen.row(1),
+        "Some **strong** and *stressed* text, å `code`."
+    );
+    h.keys("M-<");
+    h.type_text("*new* ");
+    h.keys("M->");
+    assert_eq!(h.screen.row(0), "new # Head with code");
+    assert_eq!(h.screen.row(1), "Some strong and stressed text, å code.");
 }

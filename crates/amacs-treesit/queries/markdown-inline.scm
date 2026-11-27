@@ -38,3 +38,16 @@
 (full_reference_link ["[" "]"] @punctuation.delimiter)
 (collapsed_reference_link ["[" "]"] @punctuation.delimiter)
 (shortcut_link ["[" "]"] @punctuation.delimiter)
+
+; Markup, which hide-markup-mode leaves out of what is shown: the marks
+; around emphasis and code, and of a link all but its text. A link that is
+; only text in brackets stays as written, since any text in brackets
+; reads as one.
+[
+  (emphasis_delimiter)
+  (code_span_delimiter)
+] @conceal
+
+(inline_link "[" @conceal . (link_text) . "]" @conceal.rest)
+(full_reference_link "[" @conceal . (link_text) . "]" @conceal.rest)
+(collapsed_reference_link "[" @conceal . (link_text) . "]" @conceal.rest)

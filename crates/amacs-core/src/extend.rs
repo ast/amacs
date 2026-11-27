@@ -190,6 +190,12 @@ impl Editor {
         let window = &self.windows[id];
         let buffer = &self.buffers[window.buffer];
         let mut flow = buffer.flow();
+        if !flow.headings.is_empty() {
+            let step = self.option_for(window.buffer, crate::display::ORG_INDENT_STEP);
+            if let Some(crate::script::Value::Int(step)) = step {
+                flow.indent_step = usize::try_from(step).unwrap_or(0);
+            }
+        }
         if !flow.hidden.is_empty() {
             let text = buffer.text();
             let line = text.line_of(buffer.marker(window.point));

@@ -346,6 +346,11 @@ impl ScriptState {
                 "The column that whitespace-mode marks text beyond.",
             ),
             (
+                crate::display::ORG_INDENT_STEP,
+                Value::Int(2),
+                "How many columns org-indent-mode moves the text under a heading in by, for each level of the heading.",
+            ),
+            (
                 "lsp-idle-delay",
                 Value::Int(300),
                 "Milliseconds point rests before what is under it is described; negative for never.",

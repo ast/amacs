@@ -190,13 +190,14 @@ show what the keys of the mode do.")
 the marks around emphasis, as the stars of *strong*, and of a link all but
 its text. The line that point is on is shown as it is written, markup and
 all, so that what is edited is seen. Only how the text is shown changes,
-not the text. For Org: turn it on in a hook, as in
+not the text. For Org and Markdown: turn it on in a hook, as in
 (add-hook! 'org-mode-hook (lambda () (enable-mode! 'hide-markup-mode))).")
 
 (define-minor-mode org-indent-mode ""
   "Show the text of a file of Org indented under its headings: a heading
 is moved in by a column for each level above its own, and the text under
-it starts where the text of the heading starts. Only how the text is shown
+it starts where the text of the heading starts, which the option
+`org-indent-step` moves. Only how the text is shown
 changes: the lines of the file start where they did. For Org: turn it on
 in a hook, as in
 (add-hook! 'org-mode-hook (lambda () (enable-mode! 'org-indent-mode))).")

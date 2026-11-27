@@ -165,6 +165,13 @@ pub(crate) enum Capture {
     /// The text is drawn plainly, whatever an outer or losing pattern says.
     Plain,
     Is(Highlight),
+    /// The text is markup, which can be left out of what is drawn: the
+    /// capture `conceal`.
+    Conceal,
+    /// As `Conceal`, from the start of the node to the end of its parent:
+    /// the capture `conceal.rest`. For what a grammar has no node for, as
+    /// the blanks between the parts of a link.
+    ConcealRest,
 }
 
 impl Capture {
@@ -231,6 +238,11 @@ impl Capture {
             ("variable.builtin", Some(Highlight::Builtin)),
             ("variable.parameter", Some(Highlight::VariableName)),
         ];
+        match name {
+            "conceal" => return Capture::Conceal,
+            "conceal.rest" => return Capture::ConcealRest,
+            _ => {}
+        }
         let mut name = name;
         loop {
             if let Some((_, highlight)) = TABLE.iter().find(|(entry, _)| *entry == name) {

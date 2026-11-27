@@ -183,3 +183,61 @@ fn the_markup_of_org_is_the_marks_of_emphasis_and_what_a_link_has_beside_its_tex
             .all(|pair| pair[0].end <= pair[1].start)
     );
 }
+
+#[test]
+fn the_markup_of_markdown_is_what_its_query_conceals() {
+    let mut syntax = Syntax::new(language("markdown").unwrap()).unwrap();
+    let source = "# å *h*\n\nö **b** `c` [text](http://x \"t\") [a][b] [c][] [sic]\n\n> _q_\n> ~~s~~\n\n| *cell* |\n|--------|\n\n```sh\n*x*\n```\n\n[over\nlines](u) *end*\n";
+    let mut text = Text::from(source);
+    syntax.update(&text);
+    syntax.update_markup(&text);
+    let found = |syntax: &Syntax, source: &str| -> Vec<String> {
+        let chars: Vec<char> = source.chars().collect();
+        syntax
+            .markup()
+            .iter()
+            .map(|range| chars[range.clone()].iter().collect())
+            .collect()
+    };
+    assert_eq!(
+        found(&syntax, source),
+        [
+            "*",
+            "*",
+            "**",
+            "**",
+            "`",
+            "`",
+            "[",
+            "](http://x \"t\")",
+            "[",
+            "][b]",
+            "[",
+            "][]",
+            "_",
+            "_",
+            "~~",
+            "~~",
+            "[",
+            "](u)",
+            "*",
+            "*"
+        ]
+    );
+    // By chars, not bytes, and in order.
+    assert_eq!(syntax.markup()[0], 4..5);
+    assert!(
+        syntax
+            .markup()
+            .windows(2)
+            .all(|pair| pair[0].end <= pair[1].start)
+    );
+    // After an edit the markup of what did not change is where it now is.
+    syntax.before_insert(&text, 0, "new *one*\n\n");
+    text.insert(0, "new *one*\n\n");
+    syntax.update(&text);
+    syntax.update_markup(&text);
+    let after = format!("new *one*\n\n{source}");
+    assert_eq!(found(&syntax, &after)[..4], ["*", "*", "*", "*"]);
+    assert_eq!(found(&syntax, &after).len(), 22);
+}

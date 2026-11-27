@@ -61,6 +61,18 @@ fn text_is_shown_indented_under_its_heading() {
 }
 
 #[test]
+fn an_option_says_how_far_a_level_indents() {
+    let mut h = setup(60, TEXT);
+    h.eval("(set-option! 'org-indent-step 4)");
+    h.keys("C-l");
+    assert_eq!(h.screen.row(2), "    body of one");
+    assert_eq!(h.screen.row(4), " ** Two");
+    assert_eq!(h.screen.row(5), "        - an item");
+    h.keys("C-n C-n");
+    assert_eq!(h.screen.cursor(), Some((2, 4)));
+}
+
+#[test]
 fn the_indentation_follows_the_headings_as_they_change() {
     let mut h = setup(60, TEXT);
     h.keys("C-n M-<right>");

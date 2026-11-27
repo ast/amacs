@@ -1,5 +1,7 @@
 //! The syntax tree of one buffer, kept up to date as the text changes.
 
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 use amacs_text::Text;
@@ -62,6 +64,10 @@ pub struct Syntax {
     /// The headings, likewise: the char that each starts at, and its level.
     headings: Vec<(usize, usize)>,
     markup_stale: bool,
+    /// The markup found in each piece of text in another language, by a
+    /// hash of the piece and as bytes from its start, so that a piece that
+    /// did not change is not parsed again.
+    concealed: HashMap<u64, Vec<Range<usize>>>,
     /// Whether the text has changed since the tree was parsed.
     stale: bool,
 }
@@ -109,6 +115,7 @@ impl Syntax {
             markup: Vec::new(),
             headings: Vec::new(),
             markup_stale: true,
+            concealed: HashMap::new(),
             stale: true,
         })
     }
@@ -207,10 +214,15 @@ impl Syntax {
     /// Finds anew the chars of the text that are markup: what stands
     /// around text to say how it is meant, such as the stars of `*strong*`,
     /// and can be left out of what is drawn. Call after [`Syntax::update`];
-    /// cheap when nothing changed. Only Org has markup so far. The headings
-    /// of the text are found with it.
+    /// cheap when nothing changed. A language with a grammar says what its
+    /// markup is with the captures `conceal` and `conceal.rest` of its
+    /// query. The headings of the text are found with it, in Org.
     pub fn update_markup(&mut self, text: &Text) {
         if !std::mem::take(&mut self.markup_stale) {
+            return;
+        }
+        if self.lines.is_none() {
+            self.markup = self.captured_markup(text);
             return;
         }
         self.headings = match self.lines.as_ref().filter(|_| !self.stale) {
@@ -229,6 +241,79 @@ impl Syntax {
                 .collect(),
             None => Vec::new(),
         };
+    }
+
+    /// The chars that the queries of the language and of the languages
+    /// within it say are markup, in order and apart. Markup that goes
+    /// across the end of a line is not among them: it stays as written.
+    fn captured_markup(&mut self, text: &Text) -> Vec<Range<usize>> {
+        let known = std::mem::take(&mut self.concealed);
+        let (Some(tree), Some(grammar)) = (self.tree(), self.grammar) else {
+            return Vec::new();
+        };
+        let mut found = Vec::new();
+        if grammar.conceals {
+            conceal(grammar, tree.root_node(), text, 0, &mut found);
+        }
+        let mut next = HashMap::new();
+        if let Some(injections) = self.language.injections {
+            let mut parser = Parser::new();
+            each_injection(injections, tree, text, None, |language, content, _| {
+                let grammar = language.compiled().filter(|grammar| grammar.conceals);
+                let bytes = content.byte_range();
+                let (Some(grammar), false, false) = (
+                    grammar,
+                    injections.as_written.contains(&content.kind()),
+                    bytes.len() > MAX_INJECTED_BYTES,
+                ) else {
+                    return;
+                };
+                let pieces = pieces(content);
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                language.name.hash(&mut hasher);
+                for chunk in text.byte_chunks(bytes.clone()) {
+                    hasher.write(chunk.as_bytes());
+                }
+                for piece in &pieces {
+                    (piece.start_byte - bytes.start, piece.end_byte - bytes.start)
+                        .hash(&mut hasher);
+                }
+                let key = hasher.finish();
+                let within = match known.get(&key).or_else(|| next.get(&key)) {
+                    Some(within) => within.clone(),
+                    None => {
+                        let mut within = Vec::new();
+                        if let Some(tree) = parse_pieces(&mut parser, grammar, &pieces, text) {
+                            conceal(grammar, tree.root_node(), text, bytes.start, &mut within);
+                        }
+                        within
+                    }
+                };
+                found.extend(
+                    within
+                        .iter()
+                        .map(|range| range.start + bytes.start..range.end + bytes.start),
+                );
+                next.insert(key, within);
+            });
+        }
+        self.concealed = next;
+        found.retain(|range: &Range<usize>| {
+            range.start < range.end
+                && text.byte_to_line(range.start) == text.byte_to_line(range.end)
+        });
+        found.sort_by_key(|range| (range.start, range.end));
+        let mut markup: Vec<Range<usize>> = Vec::with_capacity(found.len());
+        for range in found {
+            match markup.last_mut() {
+                Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+                _ => markup.push(range),
+            }
+        }
+        for range in &mut markup {
+            *range = text.byte_to_char(range.start)..text.byte_to_char(range.end);
+        }
+        markup
     }
 
     /// The chars that are markup, as ranges in order and apart, as of the
@@ -294,7 +379,7 @@ fn paint(grammar: &Grammar, first_wins: bool, root: Node, text: &Text, out: &mut
     while let Some(found_match) = matches.next() {
         for capture in found_match.captures() {
             let highlight = match grammar.captures[capture.index as usize] {
-                Capture::Ignore => continue,
+                Capture::Ignore | Capture::Conceal | Capture::ConcealRest => continue,
                 Capture::Plain => 0,
                 Capture::Is(highlight) => highlight as u8 + 1,
             };
@@ -322,6 +407,25 @@ fn paint(grammar: &Grammar, first_wins: bool, root: Node, text: &Text, out: &mut
     }
 }
 
+/// Adds what a grammar's query says is markup under `root` to `out`, as
+/// ranges of bytes counted from `origin`.
+fn conceal(grammar: &Grammar, root: Node, text: &Text, origin: usize, out: &mut Vec<Range<usize>>) {
+    let mut cursor = QueryCursor::new();
+    let provider = |node: Node| text.byte_chunks(node.byte_range()).map(str::as_bytes);
+    let mut matches = cursor.matches(&grammar.query, root, provider);
+    while let Some(found) = matches.next() {
+        for capture in found.captures() {
+            let node = capture.node;
+            let end = match grammar.captures[capture.index as usize] {
+                Capture::Conceal => node.end_byte(),
+                Capture::ConcealRest => node.parent().unwrap_or(node).end_byte(),
+                _ => continue,
+            };
+            out.push(node.start_byte().saturating_sub(origin)..end.saturating_sub(origin));
+        }
+    }
+}
+
 /// Text in another language that is longer than this many bytes is left
 /// as the outer language shows it: it is parsed anew whenever it is shown.
 const MAX_INJECTED_BYTES: usize = 128 << 10;
@@ -329,19 +433,42 @@ const MAX_INJECTED_BYTES: usize = 128 << 10;
 /// Paints the text in other languages that is among the highlights asked
 /// for, each piece parsed by itself with the grammar of its language.
 fn paint_injections(injections: &Injections, tree: &Tree, text: &Text, out: &mut Highlights) {
-    let range = out.start..out.start + out.bytes.len();
     let mut parser = Parser::new();
+    let range = out.range();
+    each_injection(
+        injections,
+        tree,
+        text,
+        Some(range),
+        |language, content, whole| {
+            paint_injected(&mut parser, language, content, whole, text, out);
+        },
+    );
+}
+
+/// Calls `found` for each piece of the text that is in another language,
+/// or for those that reach into a range of bytes: with the language, the
+/// node that holds the text, and whether the language owns all of it.
+fn each_injection<'tree>(
+    injections: &Injections,
+    tree: &'tree Tree,
+    text: &Text,
+    range: Option<Range<usize>>,
+    mut found: impl FnMut(&'static Language, Node<'tree>, bool),
+) {
     let mut cursor = tree.walk();
     'walk: loop {
         let node = cursor.node();
-        let shown = node.end_byte() > range.start && node.start_byte() < range.end;
+        let shown = range
+            .as_ref()
+            .is_none_or(|range| node.end_byte() > range.start && node.start_byte() < range.end);
         let injected = if shown {
             injection(injections, node, text)
         } else {
             None
         };
         if let Some((language, content, whole)) = injected {
-            paint_injected(&mut parser, language, content, whole, text, out);
+            found(language, content, whole);
         }
         // What is in another language has nothing of this one within it.
         if !shown || injected.is_some() || !cursor.goto_first_child() {
@@ -399,8 +526,13 @@ fn paint_injected(
     if content.byte_range().len() > MAX_INJECTED_BYTES {
         return;
     }
-    // The node's named children belong to the outer language: the markers
-    // of a quote or a list at the start of each line within it.
+    paint_ranges(parser, language, &pieces(content), whole, text, out);
+}
+
+/// The pieces of a node that are in the language of its text. The node's
+/// named children belong to the outer language: the markers of a quote or
+/// a list at the start of each line within it.
+fn pieces(content: Node) -> Vec<tree_sitter::Range> {
     let mut ranges = Vec::new();
     let mut rest = content.range();
     let mut cursor = content.walk();
@@ -419,7 +551,29 @@ fn paint_injected(
     if rest.start_byte < rest.end_byte {
         ranges.push(rest);
     }
-    paint_ranges(parser, language, &ranges, whole, text, out);
+    ranges
+}
+
+/// Parses pieces of the text as one text in a language.
+fn parse_pieces(
+    parser: &mut Parser,
+    grammar: &Grammar,
+    ranges: &[tree_sitter::Range],
+    text: &Text,
+) -> Option<Tree> {
+    let bytes: usize = ranges
+        .iter()
+        .map(|range| range.end_byte - range.start_byte)
+        .sum();
+    if bytes == 0
+        || bytes > MAX_INJECTED_BYTES
+        || parser.set_language(&grammar.language).is_err()
+        || parser.set_included_ranges(ranges).is_err()
+    {
+        return None;
+    }
+    let mut read = |byte: usize, _: Point| text.chunk_at_byte(byte);
+    parser.parse_with_options(&mut read, None, None)
 }
 
 /// Paints pieces of the text that are in another language, parsed as one
@@ -436,19 +590,7 @@ pub(crate) fn paint_ranges(
     let Some(grammar) = language.compiled() else {
         return;
     };
-    let bytes: usize = ranges
-        .iter()
-        .map(|range| range.end_byte - range.start_byte)
-        .sum();
-    if bytes == 0
-        || bytes > MAX_INJECTED_BYTES
-        || parser.set_language(&grammar.language).is_err()
-        || parser.set_included_ranges(ranges).is_err()
-    {
-        return;
-    }
-    let mut read = |byte: usize, _: Point| text.chunk_at_byte(byte);
-    let Some(tree) = parser.parse_with_options(&mut read, None, None) else {
+    let Some(tree) = parse_pieces(parser, grammar, ranges, text) else {
         return;
     };
     let shown = out.start..out.start + out.bytes.len();

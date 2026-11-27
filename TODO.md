@@ -188,8 +188,14 @@ the ones that are still not there, the ones that need the core first.
 
 - [ ] Tables are lined up by changing the text. Showing an unaligned table
       aligned without touching it needs virtual text in redisplay.
-- [ ] Hiding markup, which Org has in `hide-markup-mode`, and a reading
-      mode, as `markdown-ts-view-mode` has.
+- [ ] `hide-markup-mode` hides the markup of Markdown since 2026-11-27,
+      by the captures `conceal` of `queries/markdown-inline.scm`. Left:
+      images, links that are only text in brackets, the backslash of an
+      escape and the marks of headings are shown; a reading mode, as
+      `markdown-ts-view-mode` has.
+- [ ] A change to a file of Markdown of a megabyte takes 0.4 s to parse
+      again, where Rust of twice the size takes 30 ms
+      (`timings_on_a_large_file`). Finding the markup adds 70 ms to that.
 - [ ] A table of contents, struck-through text drawn struck through (it
       is drawn as a comment).
 
@@ -223,14 +229,13 @@ order that seems most useful:
 - [ ] Links by `id:` to entries of other files, which takes an index of
       the files; `C-c l` to store a link to this place.
 - [ ] Markup is hidden by `hide-markup-mode` since 2026-11-27. Left:
-      Markdown, whose grammar has to say what its markup is
-      (`Syntax::update_markup`); showing only the piece of markup that
+      showing only the piece of markup that
       point is in, not the whole line, as `org-appear` does; the stars of
       headings but the last; jump labels are still made for chars that
       are left out.
 - [ ] Text is shown indented under its heading by `org-indent-mode` since
       2026-11-27. Left: the stars of a heading but the last are still
-      shown; the indentation is two columns a level, with no option; a
+      shown; a
       table that is shown lined up without a change to its text, which
       needs text that is drawn within a line and is not in the buffer.
 - [ ] Underlined and struck text have no colour: faces have no line

@@ -107,6 +107,13 @@
     (enable-mode! 'hide-markup-mode)
     (enable-mode! 'org-indent-mode)))
 
+;; Markdown is read without its markup in the same way.
+(add-hook! 'markdown-mode-hook
+  (lambda () (enable-mode! 'hide-markup-mode)))
+
+;; How many columns a level of headings moves the text under it in by.
+(set-option! 'org-indent-step 2)
+
 ;; C-c x writes something down without leaving what you do: it asks for one
 ;; of these by its key and puts the entry in its file, under its heading,
 ;; with C-c C-c. The files are in the directory of the org-directory

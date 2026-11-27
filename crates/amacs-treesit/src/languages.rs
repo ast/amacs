@@ -137,6 +137,9 @@ pub struct Injections {
     /// fenced block of code does: the kind, the kind of the node with the
     /// name, and the kind of the node with the text.
     pub named: &'static [(&'static str, &'static str, &'static str)],
+    /// Kinds of node among `kinds` in which markup is not left out of what
+    /// is drawn: the cells of a table, which would no longer line up.
+    pub as_written: &'static [&'static str],
 }
 
 const MARKDOWN: Injections = Injections {
@@ -148,6 +151,7 @@ const MARKDOWN: Injections = Injections {
         ("plus_metadata", "toml"),
     ],
     named: &[("fenced_code_block", "language", "code_fence_content")],
+    as_written: &["pipe_table_cell"],
 };
 
 /// A compiled grammar with its highlighting query.
@@ -156,6 +160,8 @@ pub(crate) struct Grammar {
     pub query: Query,
     /// What each capture of the query means, by capture index.
     pub captures: Vec<Capture>,
+    /// Whether the query says of anything that it is markup.
+    pub conceals: bool,
 }
 
 /// A language the editor knows.
@@ -271,10 +277,14 @@ impl Language {
                     .capture_names()
                     .iter()
                     .map(|name| Capture::for_name(name))
-                    .collect();
+                    .collect::<Vec<_>>();
+                let conceals = captures
+                    .iter()
+                    .any(|capture| matches!(capture, Capture::Conceal | Capture::ConcealRest));
                 Some(Grammar {
                     language,
                     query,
+                    conceals,
                     captures,
                 })
             })

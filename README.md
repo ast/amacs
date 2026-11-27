@@ -399,12 +399,15 @@ stars, and of `[[target][text]]` only the text is shown. The line that
 point is on is shown as it is written, markup and all, so what you edit is
 what is there; the other lines are as wide as what they show. Tables keep
 their markup, since their columns are lined up by it. Only how the text is
-shown changes, not the text.
+shown changes, not the text. The mode does the same in Markdown: of
+`**strong**` and `[text](address)` only the text is shown.
 
 `M-x org-indent-mode` shows the text indented under its headings: a
 heading is moved in by a column for each level above its own, and the text
 under it starts where the text of the heading starts. The lines of the file
-start where they did: the indentation is drawn and is not text.
+start where they did: the indentation is drawn and is not text. The option
+`org-indent-step` says how many columns a level moves the text in by, 2
+where nothing says.
 
 ```scheme
 (add-hook! 'org-mode-hook

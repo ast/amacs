@@ -50,8 +50,10 @@ pub const HIDE_MARKUP_MODE: &str = "hide-markup-mode";
 /// The minor mode in which text is drawn indented under its heading.
 pub const ORG_INDENT_MODE: &str = "org-indent-mode";
 
-/// How many cells a level of headings indents by, in that mode.
-const INDENT_PER_LEVEL: usize = 2;
+/// The option that says how many cells a level of headings indents by,
+/// in that mode, and what it is where nothing says.
+pub const ORG_INDENT_STEP: &str = "org-indent-step";
+pub const DEFAULT_INDENT_STEP: usize = 2;
 
 /// How the text of a buffer flows into rows: how wide its tabs are,
 /// whether a line too long for the pane is broken between words, as
@@ -73,6 +75,8 @@ pub struct Flow<'a> {
     /// The headings that text is drawn indented under: the char that each
     /// starts at and its level from 1, in order. Empty for no indentation.
     pub headings: &'a [(usize, usize)],
+    /// How many cells a level of headings indents the text under it by.
+    pub indent_step: usize,
 }
 
 impl Flow<'_> {
@@ -89,7 +93,7 @@ impl Flow<'_> {
         let cells = if text.line_of(start.min(text.len())) == text.line_of(at.min(text.len())) {
             level - 1
         } else {
-            INDENT_PER_LEVEL * level
+            self.indent_step * level
         };
         cells.min(width / 2)
     }
@@ -139,6 +143,7 @@ impl Flow<'static> {
             hidden: &[],
             reveal: (0, 0),
             headings: &[],
+            indent_step: DEFAULT_INDENT_STEP,
         }
     }
 }

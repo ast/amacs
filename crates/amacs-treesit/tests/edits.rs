@@ -134,7 +134,7 @@ proptest! {
 #[test]
 #[ignore = "prints timings; run with --release --ignored --nocapture"]
 fn timings_on_a_large_file() {
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
     let rust = language("rust").unwrap();
     let mut text = Text::from(SOURCE.repeat(2000).as_str());
     println!("{} bytes, {} lines", text.len_bytes(), text.len_lines());
@@ -169,4 +169,29 @@ fn timings_on_a_large_file() {
         let _ = syntax.indent_column(&text, line + i, params);
     }
     println!("indent a line: {:?} each", start.elapsed() / 100);
+
+    // The markup of Markdown is found by a parse of each paragraph, which
+    // is done again only for the paragraphs that changed.
+    let paragraph = "Some **strong** and *stressed* text with `code` and [a link](http://example.org) in it,\nover two lines of the file.\n\n";
+    let mut text = Text::from(paragraph.repeat(8000).as_str());
+    println!("Markdown: {} bytes", text.len_bytes());
+    let mut syntax = Syntax::new(language("markdown").unwrap()).unwrap();
+    syntax.update(&text);
+    let start = Instant::now();
+    syntax.update_markup(&text);
+    println!("first markup: {:?}", start.elapsed());
+    let middle = text.len() / 2;
+    let (mut parse, mut markup) = (Duration::ZERO, Duration::ZERO);
+    for i in 0..100 {
+        let start = Instant::now();
+        syntax.before_insert(&text, middle + i, "x");
+        text.insert(middle + i, "x");
+        syntax.update(&text);
+        parse += start.elapsed();
+        let start = Instant::now();
+        syntax.update_markup(&text);
+        markup += start.elapsed();
+    }
+    println!("edit and reparse: {:?} each", parse / 100);
+    println!("markup after an edit: {:?} each", markup / 100);
 }

@@ -304,9 +304,14 @@ position. `(hidden? pos)` says whether a position is on a hidden line, and
 Within a line, `hide-markup-mode` leaves out the chars that the language
 of the buffer says are markup, on all lines but the one that point is on.
 `org-indent-mode` draws the lines under a heading moved in, by the headings
-that the language says there are. Both are decided where the text is
-coloured, in `crates/amacs-treesit`, and not by code in Scheme: there is no
-procedure to hide a stretch of a line or to indent one.
+that the language says there are, as far as the option `org-indent-step`
+says. Both are decided where the text is coloured, in
+`crates/amacs-treesit`, and not by code in Scheme: there is no procedure to
+hide a stretch of a line or to indent one. A language with a grammar says
+what its markup is in its query, beside its colours: a node captured as
+`@conceal` is markup, and one captured as `@conceal.rest` is markup with
+all that follows it in its parent. `queries/markdown-inline.scm` is the
+example.
 
 Hidden lines stay hidden as the text changes, and can lie within one
 another: showing the outer ones leaves the inner ones hidden. Motion steps
