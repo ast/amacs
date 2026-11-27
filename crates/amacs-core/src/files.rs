@@ -136,6 +136,10 @@ pub(crate) enum Fetched {
         lossy: bool,
         is_new: bool,
         modified: Option<SystemTime>,
+        /// The text's [`Text::content_hash`], if it was worked out where
+        /// the file was read: it takes long for a long text, and says
+        /// whether the undo history on disk is of this text.
+        hash: Option<u64>,
     },
 }
 
@@ -179,14 +183,21 @@ pub(crate) fn fetch(path: &Path, anyway: bool, limit: Option<u64>) -> Result<Fet
     } else {
         meta.and_then(|meta| meta.modified)
     };
+    let hash = Some(text.content_hash());
     Ok(Fetched::File {
         path,
         text,
         lossy,
         is_new,
         modified,
+        hash,
     })
 }
+
+/// A file of this many bytes or more is read on a thread of its own, where
+/// there is Scheme to show it when it is there: reading it takes long
+/// enough to be felt, some ten milliseconds and up.
+const BACKGROUND_READ_BYTES: u64 = 4 << 20;
 
 /// Files on other hosts that buffers visit are looked at this often, to
 /// see whether another program has changed them. Local ones are looked at
@@ -1076,6 +1087,20 @@ impl Editor {
         kind_of(path, meta.as_ref(), self.large_file_limit())
     }
 
+    /// Whether visiting a file reads it on a thread of its own: a file of
+    /// this machine that no buffer visits yet and that is large enough
+    /// for reading it to be felt. Without Scheme, which shows the file
+    /// when it is there, every file is read at once.
+    pub fn reads_in_background(&self, path: &Path) -> bool {
+        if !self.has_script_host() || file_system::is_remote(path) || self.file_is_handled(path) {
+            return false;
+        }
+        let path = file_system::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        self.buffer_visiting(&path).is_none()
+            && file_system::metadata(&path)
+                .is_ok_and(|meta| meta.is_file() && meta.len >= BACKGROUND_READ_BYTES)
+    }
+
     /// The size in bytes above which text is read only when asked to.
     fn large_file_limit(&self) -> Option<u64> {
         match self.option(LARGE_FILE_THRESHOLD) {
@@ -1110,6 +1135,17 @@ impl Editor {
                     vec![Value::Str(path.display().to_string())],
                 );
             }
+            return Ok(());
+        }
+        // A file that takes a while to read is read in the background
+        // as one on another host is, and shown by Scheme when it is
+        // there. What is typed meanwhile waits for it.
+        if self.reads_in_background(path) {
+            let name = path.display().to_string();
+            self.queue_named(
+                "%visit-remote",
+                vec![name.into(), anyway.into(), false.into(), true.into()],
+            );
             return Ok(());
         }
         let (id, note) = self.visit_file(path, anyway)?;
@@ -1194,6 +1230,7 @@ impl Editor {
             lossy,
             is_new,
             modified,
+            hash,
         } = file
         else {
             unreachable!("only a file that was read becomes a buffer");
@@ -1216,7 +1253,7 @@ impl Editor {
             // Text that is not what the file holds has no history of the
             // file.
             if !lossy && let Some(journal) = self.undo_journal_path(&path, None) {
-                buffer.keep_undo_journal(journal);
+                buffer.keep_undo_journal(journal, hash);
             }
             self.history.visit(&path);
             self.note_project(&path);
@@ -1270,6 +1307,7 @@ impl Editor {
             lossy: false,
             is_new: modified.is_none(),
             modified,
+            hash: None,
         };
         self.adopt(file, secret).0
     }
@@ -1391,7 +1429,7 @@ impl Editor {
         if let Some(journal) = journal
             && !buffer.read_only
         {
-            buffer.keep_undo_journal(journal);
+            buffer.keep_undo_journal(journal, None);
         }
         let current = tick.is_none_or(|tick| tick == buffer.tick());
         if tick.is_none() {

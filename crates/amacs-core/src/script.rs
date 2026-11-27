@@ -699,11 +699,22 @@ impl Editor {
         self.script.active_hooks.contains(name)
     }
 
-    /// Queues a run of a hook's functions, if it has any.
+    /// Queues a run of a hook's functions, if it has any. They run in the
+    /// frame that is current now, whichever is by then: a hook is about
+    /// what happened here, as a file shown in this frame's window, and
+    /// code that went on after waiting is in its own frame only for as
+    /// long as it runs.
     pub fn run_hook(&mut self, name: &str, mut args: Vec<Value>) {
         if self.script.active_hooks.contains(name) {
             args.insert(0, Value::sym(name));
-            self.queue_named("%run-hook", args);
+            // Without a host there is nobody to call, which is not an error.
+            let _ = self.queue_script(ScriptCall {
+                target: ScriptTarget::Named("%run-hook"),
+                args,
+                command: None,
+                echo_result: false,
+                frame: Some(self.current_frame()),
+            });
         }
     }
 

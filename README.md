@@ -83,7 +83,6 @@ The larger things that the editor cannot do yet:
 - On other hosts: programs, language servers and git. Passwords are not
   asked for, so a host must let you in with a key
 - Narrowing, `repeat`, renaming a buffer, and regular expressions in `C-s`
-- Reading a large file in the background. Now the editor waits for it
 - Drag and drop with other programs
 - The mouse in a terminal
 - Interactive rebase in git

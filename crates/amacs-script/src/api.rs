@@ -485,6 +485,11 @@ pub const API: &[ApiFn] = api! {
                 .map(|binary| (!binary).into())
                 .map_err(|error| CmdError::msg(format!("cannot read {}: {error}", path.display())))
         };
+    "%file-read-in-background?" (1, Some(1)) "Whether visiting a file reads it in the background: a file of this machine that no buffer visits and that is large enough for reading it to be felt." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            Ok(ed.reads_in_background(&path).into())
+        };
     "file-large?" (1, Some(1)) "Whether a file is text above the size of the large-file-threshold option, which is read only when asked to in so many words." =>
         |ed, args| {
             let path = expand_path(string(args, 0)?, ed.working_directory());

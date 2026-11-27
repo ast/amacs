@@ -73,19 +73,21 @@ key is an error."
           [(= (string-length key) 1) (string-ref key 0)]
           [else (error "That is not a character:" key)])))
 
-;; Files on other hosts
+;; Files that take a while to read
 ;;
-;; Their names are tramp's, /ssh:user@host:/path. Reading and writing them
-;; takes the time that the way there takes, so both happen in the background
-;; and are waited for here, while the editor goes on working.
+;; A file on another host, whose name is tramp's, /ssh:user@host:/path,
+;; takes the time that the way there takes to read and to write, so both
+;; happen in the background and are waited for here, while the editor goes
+;; on working. A large file of this machine is read the same way.
 
-;; The editor comes here to visit a file on another host. With `ask?`, a
-;; person asked for it at a prompt: what they type meanwhile waits for the
-;; file, and a file above large-file-threshold is asked about, which is
-;; else an error unless `anyway`.
-(define (%visit-remote path anyway ask?)
+;; The editor comes here to visit such a file. With `ask?`, a person asked
+;; for it at a prompt: what they type meanwhile waits for the file, and a
+;; file above large-file-threshold is asked about, which is else an error
+;; unless `anyway`. With a fourth argument that is not #f, what is typed
+;; waits too, without the question.
+(define (%visit-remote path anyway ask? . hold?)
   (message "Reading " path "...")
-  (let* ((found (await (%fetch-file path anyway ask?)))
+  (let* ((found (await (%fetch-file path anyway (or ask? (and (pair? hold?) (car hold?))))))
          (what (car found)))
     (cond ((eq? what 'buffer)
            (switch-to-buffer (cadr found))
@@ -106,10 +108,12 @@ key is an error."
 error, and so is one above the size of the large-file-threshold option,
 unless the second argument is given and not #f. A file on another host,
 named as tramp names it, /ssh:user@host:/path, is read while the editor
-goes on working, and is there when this returns."
+goes on working, and so is a file of some megabytes; either is there when
+this returns."
   (let ((anyway (and (pair? anyway) (car anyway))))
     (cond
-     [(file-remote? name) (%visit-remote (expand-file-name name) anyway #f)]
+     [(or (file-remote? name) (%file-read-in-background? name))
+      (%visit-remote (expand-file-name name) anyway #f)]
      [(file-handler name) (%visit-handled (expand-file-name name))]
      [else (%find-file name anyway)])))
 

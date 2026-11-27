@@ -457,9 +457,13 @@ impl Syntax {
         let Some(grammar) = self.grammar else {
             return self.update(text);
         };
-        if self.language.injections.is_some()
-            || text.len_bytes() > REPARSE_BYTES
-            || self.tree.is_none()
+        // A long text is parsed here once it has a tree, since a change
+        // to it is quick to parse and it is not parsed afresh. Its first
+        // parse takes long, and is left to the other thread: the text is
+        // drawn without highlights until then.
+        let long = text.len_bytes() > REPARSE_BYTES;
+        let first = self.tree.is_none();
+        if self.language.injections.is_some() || long != first || text.len_bytes() > MAX_PARSE_BYTES
         {
             return self.update(text);
         }
@@ -468,7 +472,7 @@ impl Syntax {
         };
         self.stale = false;
         let doubtful = self.doubtful.take();
-        if !self.broken && !self.rough {
+        if !first && !self.broken && !self.rough {
             let mut read = |byte: usize, _: Point| text.chunk_at_byte(byte);
             let started = Instant::now();
             let mut in_time = |_: &ParseState| {

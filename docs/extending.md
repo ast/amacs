@@ -475,7 +475,10 @@ this way and can be advised or replaced. What takes long on another
 host (listing, copying, moving, deleting) waits as `run-process` does,
 while the editor goes on working.
 
-A file is read into a buffer in one go, so the editor looks first:
+A file of 4 MB or more is read while the editor goes on working, as one
+on another host is, and `find-file` returns when it is there; what is
+typed meanwhile waits for the file. A file is held in memory whole, so
+the editor looks first:
 `(find-file name)` is an error for a file that is not text, and for one
 above the `large-file-threshold` option (megabytes; 50 unless changed, `#f`
 for no limit) unless called as `(find-file name #t)`. `(file-text? name)`

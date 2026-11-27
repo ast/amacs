@@ -20,8 +20,7 @@ What I would take first, across the sections below:
 
 1. The GPU backend keeps the rows that did not change, and then becomes
    the default if it measures better (see "Drawing").
-2. Files are read in the background (see "Files").
-3. Dropping files from other programs into the editor (see "Mouse").
+2. Dropping files from other programs into the editor (see "Mouse").
 
 ## Extension surface
 
@@ -89,9 +88,9 @@ the ones that are still not there, the ones that need the core first.
 
 ## Files
 
-- [ ] Files are read in one go on the editor's thread. A large file that
-      was agreed to (`large-file-threshold`) blocks while it is read. Read
-      in the background.
+- [ ] A file of 4 MB or more is read on a thread of its own, but what
+      follows is done on the editor's thread: the undo history on disk is
+      read there, and a language server is sent the whole text.
 - [ ] No way to look inside a file that is not text (a hex view, or
       `find-file-literally`). `C-x C-f` refuses such a file; only the file
       manager hands it to `xdg-open`.

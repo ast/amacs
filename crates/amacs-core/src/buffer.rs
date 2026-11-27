@@ -829,7 +829,7 @@ impl Buffer {
     /// `path`. A buffer that was just read from its file, with no history
     /// yet, takes the history that the journal has of that file, if it is
     /// of the text as it is on disk now.
-    pub(crate) fn keep_undo_journal(&mut self, path: PathBuf) {
+    pub(crate) fn keep_undo_journal(&mut self, path: PathBuf, hash: Option<u64>) {
         if let Some(journal) = &mut self.undo_journal {
             journal.move_to(path);
             return;
@@ -840,7 +840,9 @@ impl Buffer {
             self.undo_journal = Some(UndoJournal::new(path));
             return;
         }
-        let hash = self.text.content_hash();
+        // The text's hash, which whoever read the text may have worked
+        // out already, away from the thread that the editor runs on.
+        let hash = hash.unwrap_or_else(|| self.text.content_hash());
         let read = UndoJournal::open(path.clone(), undo_journal::READ_LIMIT)
             .and_then(|(journal, records)| Some((journal, UndoTree::from_records(records)?)))
             .filter(|(_, tree)| tree.saved_hash() == Some(hash));
