@@ -83,7 +83,6 @@ The larger things that the editor cannot do yet:
 - On other hosts: programs, language servers and git. Passwords are not
   asked for, so a host must let you in with a key
 - Narrowing, `repeat`, renaming a buffer, and regular expressions in `C-s`
-- Help in the editor for more than commands and keys
 - Reading a large file in the background. Now the editor waits for it
 - Drag and drop with other programs
 - The mouse in a terminal
@@ -1028,13 +1027,21 @@ Editing: `M-%` query-replace, `M-;` comment or uncomment the region or line,
 `C-x C-u` and `C-x C-l` for the region, `M-m`, `M-^`, `M-\` and `M-SPC`,
 `C-x C-q` read-only, `M-!` and `M-|` for shell commands (with `C-u`, the
 output replaces the region), and `scroll-up-line` and `scroll-down-line`.
-`C-h k` says what a key runs and `C-h f` what a command does. `C-h m` shows
+`C-h k` says what a key runs. `C-h m` shows
 what the mode of the buffer is for with what each of its keys does, and
 `C-h b` adds the keys that hold everywhere; in a buffer that is not typed
 into, such as the file manager, `?` and `h` do what `C-h m` does. `M-x`
 shows each command with its keys. All of it is made from the keymaps and
 from the documentation of the commands. `<f1>` is the same prefix as `C-h`,
 for those who have `C-h` for something else.
+
+`C-h f` says what a name is: what the command of that name does and its
+keys, and how the procedure or macro of that name is called, its
+documentation and where it is defined. `C-h x` does so for commands only.
+`C-h v` shows the value of an option and what it is for, `C-h w` says
+which keys run a command, and `C-h a` lists the commands, procedures and
+options whose names contain a text. They show what `describe` and
+`apropos` give to code, so a person and a program are told the same.
 
 The smaller commands of Emacs are there under their names and keys. They
 are written in Scheme, in `runtime/lib/simple.scm`:

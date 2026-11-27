@@ -36,7 +36,8 @@ init file in `~/.config`. Use it instead of guessing:
   output of `(trace! 'name)`.
 - `eval` of `(display (telemetry-report))` for what ran and how long it
   took: commands, hooks, events, redisplay. With `#t` as its argument the
-  report is of every session, the user's own among them.
+  report is of every session of the development server, and with
+  `'everyday` of the editor that the user works in.
 
 Only changes to Rust need `just restart`. After a restart the MCP server
 reconnects by itself on the next call.

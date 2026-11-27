@@ -193,3 +193,134 @@ fn a_command_is_shown_with_its_keys_when_it_is_asked_for_by_name() {
         .unwrap_or_else(|| panic!("{screen}"));
     assert!(row.contains("z  Pack the marked files"), "{row}");
 }
+
+#[test]
+fn a_name_is_described_as_a_command_and_as_a_procedure() {
+    let mut h = Harness::new(100, 30);
+    h.keys("<f1> f");
+    h.type_text("find-file");
+    h.keys("RET");
+    assert!(h.mode_line().contains("*Help*"), "{}", h.mode_line());
+    let text = h.text();
+    assert!(
+        text.starts_with("find-file\n\nfind-file is a command.\n"),
+        "{text}"
+    );
+    assert!(text.contains("\nKeys: C-x C-f\n"), "{text}");
+    assert!(
+        text.contains("\nfind-file is a procedure: (find-file name . anyway)\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nDefined at runtime/core/buffers.scm:"),
+        "{text}"
+    );
+
+    // A procedure that is no command, a macro, and a command that is
+    // built in and so no procedure.
+    let text = h.eval("(apply string-append (map (lambda (line) (apply string-append (map (lambda (piece) (if (pair? piece) (car piece) piece)) line))) (help-function-lines \"hook-functions\")))");
+    assert!(
+        text.contains("hook-functions is a procedure: (hook-functions name)"),
+        "{text}"
+    );
+    assert!(!text.contains("is a command"), "{text}");
+    assert_eq!(
+        h.eval("(car (list-ref (help-function-lines \"define-command\") 2))"),
+        "\"define-command is a macro.\""
+    );
+    assert_eq!(
+        h.eval("(list-ref (help-function-lines \"forward-char\") 2)"),
+        "(\"forward-char\" \" is a command.\")"
+    );
+    assert!(
+        h.session
+            .eval("(help-function-lines \"no-such-thing\")")
+            .unwrap_err()
+            .summary
+            .contains("Nothing is named no-such-thing")
+    );
+    // What is offered has the commands and the procedures, not the names
+    // that only the runtime uses.
+    assert_eq!(
+        h.eval(
+            "(let ((names (help-function-names)))
+               (list (and (member \"forward-char\" names) #t)
+                     (and (member \"hook-functions\" names) #t)
+                     (and (member \"define-command\" names) #t)
+                     (and (member \"%run-hook\" names) #t)))"
+        ),
+        "(#t #t #t #f)"
+    );
+}
+
+#[test]
+fn an_option_is_described_with_its_value() {
+    let mut h = Harness::new(100, 30);
+    h.eval("(set-option! 'fill-column 60)");
+    h.keys("<f1> v");
+    h.type_text("fill-column");
+    h.keys("RET");
+    let text = h.text();
+    assert!(
+        text.starts_with(
+            "fill-column\n\nfill-column is an option. Its value here is 60\n\
+             Where it has not been set it is 70\n\nThe column that"
+        ),
+        "{text}"
+    );
+    assert_eq!(
+        h.eval("(list (option-default 'fill-column) (and (member \"fill-column\" (option-names)) #t) (option-documentation \"none\"))"),
+        "(70 #t #f)"
+    );
+}
+
+#[test]
+fn the_keys_of_a_command_are_said() {
+    let mut h = Harness::new(100, 30);
+    h.keys("<f1> w");
+    h.type_text("save-buffer");
+    h.keys("RET");
+    assert_eq!(h.echo(), "save-buffer is on C-x C-s");
+    h.eval("(define-command (lonely) \"Do nothing.\" #t)");
+    h.keys("<f1> w");
+    h.type_text("lonely");
+    h.keys("RET");
+    assert_eq!(h.echo(), "lonely is not on a key here; M-x runs it");
+}
+
+#[test]
+fn names_are_found_by_a_part_of_them() {
+    let mut h = Harness::new(100, 30);
+    h.keys("<f1> a");
+    h.type_text("telemetr");
+    h.keys("RET");
+    let text = h.text();
+    assert!(
+        text.starts_with("Commands\n  clear-telemetry  Forget what ran"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nProcedures and macros\n  telemetry "),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nOptions\n  telemetry  Whether the editor counts"),
+        "{text}"
+    );
+    // A command is listed with its keys, and once.
+    h.keys("<f1> a");
+    h.type_text("save-buffer");
+    h.keys("RET");
+    let text = h.text();
+    let row = text
+        .lines()
+        .find(|line| line.starts_with("  save-buffer "))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(row.contains("  C-x C-s  Save the current buffer"), "{row}");
+    assert_eq!(text.matches("  save-buffer ").count(), 1, "{text}");
+    assert!(!text.contains("Procedures and macros"), "{text}");
+    h.keys("<f1> a");
+    h.type_text("zzzz");
+    h.keys("RET");
+    assert_eq!(h.text().trim(), "Nothing has a name with zzzz in it.");
+}

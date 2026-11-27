@@ -42,10 +42,6 @@ the ones that are still not there, the ones that need the core first.
       keep a buffer to a part of its text, for point, search and display.
 - [ ] `repeat` (`C-x z`), which needs the last command with its argument
       and its keys, and `negative-argument` (`M--`).
-- [ ] Help in the editor for more than commands and keys:
-      `describe-function`, `describe-variable`, `describe-bindings`,
-      `describe-mode`, `where-is`, `apropos`. The MCP server has all of it
-      (`describe`, `apropos`); the commands only have to show it.
 - [ ] Regular expressions in `C-s` (`search-lines`) and `C-c /`
       (`search-files`), and a way not to mind case in `M-%` and `C-M-%`
       without writing `(?i)`. The syntax is Rust's, not Emacs's, and no

@@ -5,6 +5,11 @@
 ;;; the numbers of all sessions are summed in the file `telemetry` of the
 ;;; state directory. `(set-option! 'telemetry #f)` stops the counting.
 ;;;
+;;; A server on a socket of its own, as the one that the editor is worked
+;;; on with, is not what the user works in. Its numbers go to a file of
+;;; its own, named after the socket, such as `telemetry-dev`; it reads
+;;; those of the everyday editor with (telemetry 'everyday).
+;;;
 ;;; The kinds of things that are counted:
 ;;;   event      one thing from the user or the system, with all it leads
 ;;;              to: key, paste, mouse, resize, and poll for a timer or
@@ -39,7 +44,9 @@
 (define (telemetry . all?)
   "(telemetry [all?]) What ran and how long it took: a list of entries,
 the one that took most time in all first. With a true argument the numbers
-are of every session, else of this one. An entry has a kind, a symbol such
+are of every session, else of this one; with 'everyday they are of every
+session of the editor that the user works in, which is another one when
+this one is for working on the editor. An entry has a kind, a symbol such
 as command or hook, a name, a string, a count, the milliseconds in all and
 of the longest time, and the count of slow times, those of 16 ms or more;
 `telemetry-entry-kind` and its like give them."
@@ -50,7 +57,9 @@ of the longest time, and the count of slow times, those of 16 ms or more;
                                       (/ (list-ref row 3) 1000.0)
                                       (/ (list-ref row 4) 1000.0)
                                       (list-ref row 5)))
-             (%telemetry (and (pair? all?) (car all?) #t)))
+             (%telemetry (cond [(null? all?) #f]
+                               [(eq? (car all?) 'everyday) 'everyday]
+                               [else (and (car all?) #t)])))
         (lambda (a b) (> (telemetry-entry-total a) (telemetry-entry-total b)))))
 
 (define (telemetry-of kind . all?)

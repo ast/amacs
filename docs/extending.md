@@ -770,7 +770,10 @@ An entry has a kind (`event`, `redisplay`, `command`, `hook`, `call`,
 longest time, and the count of slow times, those of 16 ms or more. With a
 true argument, `telemetry`, `telemetry-of` and `telemetry-report` give
 the sums of all sessions, which are kept in the file `telemetry` of the
-state directory. Only names and times are kept, nothing of what was typed
+state directory. A server on a socket of its own, as the one for working
+on the editor, keeps its numbers apart, in `telemetry-dev` for `dev.sock`,
+and gives those of the everyday editor with `'everyday` as the argument.
+Only names and times are kept, nothing of what was typed
 or of any buffer, and nothing leaves the machine. `(set-option! 'telemetry
 #f)` stops the counting.
 

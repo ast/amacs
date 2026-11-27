@@ -204,9 +204,19 @@ fn state_directory() -> Option<PathBuf> {
 /// Problems in the user's files are shown in the echo area and logged to
 /// `*Messages*`. They must not keep the editor from starting.
 fn start_session(options: &Options, cols: u16, rows: u16) -> Result<Session> {
+    amacs_core::prepare_languages();
     let mut session = Session::new(cols, rows)
         .map_err(|error| anyhow!("the Scheme runtime failed to load:\n{}", error.report))?;
     session.editor_mut().set_state_directory(state_directory());
+    // A server on a socket of its own, such as the one for working on
+    // the editor, is not what the user works in: its telemetry is kept
+    // apart, in a file named after the socket.
+    let socket = amacs_proto::socket_path();
+    if let Some(name) = socket.file_stem().and_then(|name| name.to_str())
+        && name != "server"
+    {
+        session.editor_mut().set_telemetry_name(name);
+    }
     if let Some(clipboard) = clipboard::WaylandClipboard::detect() {
         session.editor_mut().set_clipboard(Box::new(clipboard));
     }

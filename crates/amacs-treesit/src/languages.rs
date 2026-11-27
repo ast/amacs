@@ -263,6 +263,13 @@ impl Language {
         self.grammar.is_some()
     }
 
+    /// Compiles the grammar's query now, if that is not done, so that the
+    /// first buffer in the language does not wait for it. The query of a
+    /// large grammar takes tens of milliseconds.
+    pub fn prepare(&self) {
+        self.compiled();
+    }
+
     /// The compiled grammar and query, or `None` if the language has no
     /// grammar. Compiling happens once, on first use.
     pub(crate) fn compiled(&self) -> Option<&Grammar> {
@@ -555,4 +562,20 @@ pub fn language_called(name: &str) -> Option<&'static Language> {
 /// All languages, in alphabetical order.
 pub fn languages() -> impl Iterator<Item = &'static Language> {
     LANGUAGES.iter()
+}
+
+/// Compiles the queries of every language on a thread of its own, so that
+/// the first file in a language does not wait for its query: 40 ms for
+/// C++, 27 ms for Rust. For a program that will show many files; a buffer
+/// that needs a query before the thread has come to it waits for that one.
+pub fn prepare_languages() {
+    let spawned = std::thread::Builder::new()
+        .name("grammars".to_owned())
+        .spawn(|| {
+            for language in &LANGUAGES {
+                language.prepare();
+            }
+        });
+    // Without the thread each query is compiled when it is first needed.
+    drop(spawned);
 }

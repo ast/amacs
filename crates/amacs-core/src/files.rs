@@ -451,12 +451,26 @@ impl Editor {
         }
     }
 
-    /// What ran, as (kind, name, numbers): in this session, or with `all`
-    /// in every session that saved to the state directory.
-    pub fn telemetry(&self, all: bool) -> Vec<(String, String, crate::telemetry::Stat)> {
+    /// Keeps the telemetry of this editor apart from that of the user's
+    /// everyday one, in a file with the name in its own.
+    pub fn set_telemetry_name(&mut self, name: &str) {
+        self.telemetry.set_name(name);
+    }
+
+    /// What ran, as (kind, name, numbers), in this session.
+    pub fn telemetry(&self) -> Vec<(String, String, crate::telemetry::Stat)> {
+        self.telemetry.session()
+    }
+
+    /// What ran in every session that saved to the state directory: of
+    /// this editor, or with `everyday` of the one the user works in, which
+    /// is another when this one has a name. Without a state directory,
+    /// what ran in this session.
+    pub fn telemetry_saved(&self, everyday: bool) -> Vec<(String, String, crate::telemetry::Stat)> {
         match &self.state_directory {
-            Some(dir) if all => self.telemetry.all(dir),
-            _ => self.telemetry.session(),
+            Some(dir) if everyday => self.telemetry.everyday(dir),
+            Some(dir) => self.telemetry.all(dir),
+            None => self.telemetry.session(),
         }
     }
 

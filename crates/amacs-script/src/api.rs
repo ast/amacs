@@ -827,13 +827,28 @@ pub const API: &[ApiFn] = api! {
         };
     "option" (1, Some(1)) "Value of an option in the current buffer." =>
         |ed, args| ed.option(name(args, 0)?);
+    "option-names" (0, Some(0)) "The names of all options, as strings, in order." =>
+        |ed, _| Ok(Value::List(ed.option_names().into_iter().map(Value::Str).collect()));
+    "option-documentation" (1, Some(1)) "What an option is for, or #f if there is no such option." =>
+        |ed, args| Ok(ed.option_doc(name(args, 0)?).map_or(Value::Bool(false), Value::str));
+    "option-default" (1, Some(1)) "The value that an option has where it has not been set. An option that is not there is an error." =>
+        |ed, args| {
+            let name = name(args, 0)?;
+            ed.option_default(name)
+                .cloned()
+                .ok_or_else(|| CmdError::msg(format!("Unknown option: {name}")))
+        };
     "set-option!" (2, Some(2)) "Set the global value of an option." =>
         |ed, args| ed.set_option(name(args, 0)?, args[1].clone()).map(|()| Value::Void);
     "set-local!" (2, Some(2)) "Set the value of an option in the current buffer only." =>
         |ed, args| ed.set_local_option(name(args, 0)?, args[1].clone()).map(|()| Value::Void);
-    "%telemetry" (1, Some(1)) "What ran and how long it took, as lists of kind, name, count, microseconds in all, microseconds of the longest time, and count of slow times: of this session, or with a true argument of every session." =>
+    "%telemetry" (1, Some(1)) "What ran and how long it took, as lists of kind, name, count, microseconds in all, microseconds of the longest time, and count of slow times: of this session with #f, of every session of this editor with #t, and of every session of the editor that the user works in with 'everyday." =>
         |ed, args| {
-            let entries = ed.telemetry(boolean(args, 0));
+            let entries = match &args[0] {
+                Value::Bool(false) => ed.telemetry(),
+                Value::Sym(scope) if scope == "everyday" => ed.telemetry_saved(true),
+                _ => ed.telemetry_saved(false),
+            };
             Ok(Value::List(
                 entries
                     .into_iter()

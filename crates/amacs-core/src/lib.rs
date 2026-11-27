@@ -66,4 +66,8 @@ pub use lsp::ServerConfig;
 pub use minibuffer::Accepted;
 pub use script::{FUNDAMENTAL_MODE, ScriptCall, ScriptFn, ScriptOutcome, ScriptTarget, Value};
 pub use telemetry::Stat;
+
+/// Compiles the highlight queries of every language in the background,
+/// so that the first file in a language does not wait for its query.
+pub use amacs_treesit::prepare_languages;
 pub use window::{Rect, SplitDir, Window, WindowId};

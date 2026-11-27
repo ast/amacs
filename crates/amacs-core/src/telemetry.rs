@@ -15,7 +15,7 @@ use std::time::Duration;
 /// than a screen takes to show one picture, so it can be noticed.
 const SLOW_MICROS: u64 = 16_000;
 
-/// The file in the state directory.
+/// The file in the state directory, unless another is named.
 const FILE: &str = "telemetry";
 
 /// The numbers of one thing that ran.
@@ -43,15 +43,33 @@ impl Stat {
 /// The numbers by kind, such as "command", and name.
 type Stats = BTreeMap<String, BTreeMap<String, Stat>>;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Telemetry {
+    /// The name of the file in the state directory.
+    file: String,
     /// What ran in this session.
     session: Stats,
     /// The part of it that is not in the file yet.
     unsaved: Stats,
 }
 
+impl Default for Telemetry {
+    fn default() -> Self {
+        Self {
+            file: FILE.to_owned(),
+            session: Stats::new(),
+            unsaved: Stats::new(),
+        }
+    }
+}
+
 impl Telemetry {
+    /// Keeps the numbers in a file of their own, `telemetry-` and the
+    /// name: for an editor whose use is not the user's everyday use.
+    pub fn set_name(&mut self, name: &str) {
+        self.file = format!("{FILE}-{name}");
+    }
+
     /// Notes that something ran `count` times, which took `took` together.
     pub fn add(&mut self, kind: &str, name: &str, count: u64, took: Duration) {
         if count == 0 {
@@ -86,9 +104,19 @@ impl Telemetry {
     /// The numbers of all sessions: what the file in `dir` holds and what
     /// is not in it yet.
     pub fn all(&self, dir: &Path) -> Vec<(String, String, Stat)> {
-        let mut stats = read(dir);
+        let mut stats = read(&dir.join(&self.file));
         merge(&mut stats, &self.unsaved);
         listed(&stats)
+    }
+
+    /// The numbers of all sessions of the user's everyday editor, which
+    /// is this one unless it has a name.
+    pub fn everyday(&self, dir: &Path) -> Vec<(String, String, Stat)> {
+        if self.file == FILE {
+            self.all(dir)
+        } else {
+            listed(&read(&dir.join(FILE)))
+        }
     }
 
     /// Forgets the numbers of this session, and those in `dir` if one is
@@ -96,7 +124,7 @@ impl Telemetry {
     pub fn clear(&mut self, dir: Option<&Path>) -> io::Result<()> {
         self.session.clear();
         self.unsaved.clear();
-        match dir.map(|dir| fs::remove_file(dir.join(FILE))) {
+        match dir.map(|dir| fs::remove_file(dir.join(&self.file))) {
             Some(Err(error)) if error.kind() != io::ErrorKind::NotFound => Err(error),
             _ => Ok(()),
         }
@@ -109,7 +137,7 @@ impl Telemetry {
         if self.unsaved.is_empty() {
             return Ok(());
         }
-        let mut stats = read(dir);
+        let mut stats = read(&dir.join(&self.file));
         merge(&mut stats, &self.unsaved);
         let mut content = String::new();
         for (kind, name, stat) in listed(&stats) {
@@ -119,9 +147,9 @@ impl Telemetry {
             ));
         }
         fs::create_dir_all(dir)?;
-        let temp = dir.join(format!(".{FILE}.{}.tmp", std::process::id()));
+        let temp = dir.join(format!(".{}.{}.tmp", self.file, std::process::id()));
         fs::write(&temp, content)?;
-        fs::rename(&temp, dir.join(FILE))?;
+        fs::rename(&temp, dir.join(&self.file))?;
         self.unsaved.clear();
         Ok(())
     }
@@ -148,11 +176,11 @@ fn merge(into: &mut Stats, from: &Stats) {
     }
 }
 
-/// What the file in a directory holds. A missing file and lines that are
-/// not as expected give nothing: the numbers are a convenience.
-fn read(dir: &Path) -> Stats {
+/// What a file holds. A missing file and lines that are not as expected
+/// give nothing: the numbers are a convenience.
+fn read(file: &Path) -> Stats {
     let mut stats = Stats::new();
-    let Ok(text) = fs::read_to_string(dir.join(FILE)) else {
+    let Ok(text) = fs::read_to_string(file) else {
         return stats;
     };
     for line in text.lines() {
@@ -240,6 +268,18 @@ mod tests {
             }
         );
         assert_eq!(first.session()[0].2.count, 2);
+
+        // An editor with a name keeps its numbers apart.
+        let mut named = Telemetry::default();
+        named.set_name("dev");
+        named.add("command", "undo", 1, Duration::from_micros(7));
+        named.save(&dir).unwrap();
+        assert_eq!(named.all(&dir)[0].2.count, 1);
+        assert_eq!(first.all(&dir)[0].2.count, 3);
+        assert!(dir.join("telemetry-dev").exists());
+        // What the other editor has not saved yet is not there to read.
+        assert_eq!(named.everyday(&dir)[0].2.count, 2);
+        assert_eq!(first.everyday(&dir)[0].2.count, 3);
 
         first.clear(Some(&dir)).unwrap();
         assert!(first.all(&dir).is_empty());

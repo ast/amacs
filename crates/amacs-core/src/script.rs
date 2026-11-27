@@ -721,6 +721,18 @@ impl Editor {
         self.apply_options();
     }
 
+    /// The names of the options there are, in order.
+    pub fn option_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.script.options.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// The value that an option has where it has not been set.
+    pub fn option_default(&self, name: &str) -> Option<&Value> {
+        self.script.options.get(name).map(|def| &def.default)
+    }
+
     pub fn option_doc(&self, name: &str) -> Option<&str> {
         self.script.options.get(name).map(|def| def.doc.as_str())
     }
