@@ -185,6 +185,14 @@ show what the keys of the mode do.")
 (define-minor-mode whitespace-mode ""
   "Mark trailing whitespace and text beyond `whitespace-line-column`.")
 
+(define-minor-mode hide-markup-mode ""
+  "Leave markup out of what is shown, so that text reads as it is meant:
+the marks around emphasis, as the stars of *strong*, and of a link all but
+its text. The line that point is on is shown as it is written, markup and
+all, so that what is edited is seen. Only how the text is shown changes,
+not the text. For Org: turn it on in a hook, as in
+(add-hook! 'org-mode-hook (lambda () (enable-mode! 'hide-markup-mode))).")
+
 (define-minor-mode visual-line-mode ""
   "Break lines that are too long for the window between words, where they
 are otherwise broken at the edge of the window with a mark. Only how the

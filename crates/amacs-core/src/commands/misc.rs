@@ -24,7 +24,7 @@ use crate::files::{abbreviate_path, expand_typed_path};
 /// if it would otherwise leave the window.
 pub(crate) fn scroll_rows(ed: &mut Editor, rows: i64) -> CmdResult {
     let width = ed.text_width(ed.selected());
-    let tab = ed.buffer().flow();
+    let tab = ed.window_flow(ed.selected());
     let start = ed.buffer().marker(ed.window().start);
     let count = rows.unsigned_abs() as usize;
     let new_start = if rows >= 0 {
@@ -35,7 +35,7 @@ pub(crate) fn scroll_rows(ed: &mut Editor, rows: i64) -> CmdResult {
     let marker = ed.window().start;
     ed.buffer_mut().set_marker(marker, new_start);
     // Keep point on a row that is shown.
-    let tab = ed.buffer().flow();
+    let tab = ed.window_flow(ed.selected());
     let height = ed.window().text_rows().max(1);
     let last = rows_forward(ed.text(), new_start, height - 1, width, tab);
     let point = ed.point();

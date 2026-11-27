@@ -385,8 +385,19 @@ the `ID` of an entry of the same file, or the text of a heading or of a
 
 A table has a rule of dashes and plus signs, and a column of numbers is
 lined up to the right. The code of a source block is coloured as its
-language. Emphasis markers and the targets of links are shown as they are
-written: nothing is hidden within a line.
+language.
+
+`M-x hide-markup-mode` leaves the markup out of what is shown, so that the
+text reads as it is meant: `*strong*` is shown as strong text without its
+stars, and of `[[target][text]]` only the text is shown. The line that
+point is on is shown as it is written, markup and all, so what you edit is
+what is there; the other lines are as wide as what they show. Tables keep
+their markup, since their columns are lined up by it. Only how the text is
+shown changes, not the text.
+
+```scheme
+(add-hook! 'org-mode-hook (lambda () (enable-mode! 'hide-markup-mode)))
+```
 
 A source block is run by the program for its language, which is given the
 code on its standard input, in the directory of the file or the one that

@@ -183,6 +183,21 @@ impl Editor {
         }
     }
 
+    /// How the text of a window's buffer flows into the rows of that
+    /// window: as [`Buffer::flow`] has it, with nothing left out of the
+    /// line that the window's point is on.
+    pub(crate) fn window_flow(&self, id: WindowId) -> crate::display::Flow<'_> {
+        let window = &self.windows[id];
+        let buffer = &self.buffers[window.buffer];
+        let mut flow = buffer.flow();
+        if !flow.hidden.is_empty() {
+            let text = buffer.text();
+            let line = text.line_of(buffer.marker(window.point));
+            flow.reveal = (text.line_start(line), text.line_end(line) + 1);
+        }
+        flow
+    }
+
     /// The chars a window shows: from its start to the end of its last row.
     pub fn visible_range(&self, id: WindowId) -> std::ops::Range<usize> {
         let window = &self.windows[id];
@@ -191,7 +206,13 @@ impl Editor {
         let start = buffer.marker(window.start);
         let mut pos = start;
         for _ in 0..window.text_rows() {
-            let row = walk_row(buffer.text(), pos, width, buffer.flow(), |_, _, _, _| {});
+            let row = walk_row(
+                buffer.text(),
+                pos,
+                width,
+                self.window_flow(id),
+                |_, _, _, _| {},
+            );
             match row.next {
                 Some(next) => pos = next,
                 None => return start..buffer.len(),

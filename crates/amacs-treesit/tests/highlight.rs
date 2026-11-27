@@ -158,3 +158,28 @@ fn any_lines_match_the_whole(name: &str, file: &str) {
         }
     }
 }
+
+#[test]
+fn the_markup_of_org_is_the_marks_of_emphasis_and_what_a_link_has_beside_its_text() {
+    let mut syntax = Syntax::new(language("org").unwrap()).unwrap();
+    let source = "* å ~c~\nö *b* [[target][text]] [[t]]\n| *cell* |\n#+begin_src sh\n*x*\n#+end_src\n_u_ a*b*c\n";
+    let text = Text::from(source);
+    syntax.update(&text);
+    assert!(syntax.markup().is_empty(), "not asked for yet");
+    syntax.update_markup(&text);
+    let chars: Vec<char> = source.chars().collect();
+    let found: Vec<String> = syntax
+        .markup()
+        .iter()
+        .map(|range| chars[range.clone()].iter().collect())
+        .collect();
+    assert_eq!(found, ["~", "~", "*", "*", "[[target][", "]]", "[[", "]]"]);
+    // In order and by chars, not bytes.
+    assert_eq!(syntax.markup()[0], 4..5);
+    assert!(
+        syntax
+            .markup()
+            .windows(2)
+            .all(|pair| pair[0].end <= pair[1].start)
+    );
+}

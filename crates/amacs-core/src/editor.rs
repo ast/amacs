@@ -716,7 +716,7 @@ impl Editor {
                 buffer.text(),
                 start,
                 width,
-                buffer.flow(),
+                self.window_flow(id),
                 |_, _, _, _| {},
             );
             match walked.next {
@@ -730,7 +730,7 @@ impl Editor {
             buffer.text(),
             start,
             width,
-            buffer.flow(),
+            self.window_flow(id),
             |pos, _, column, cells| {
                 if found.is_none() && col < column + cells {
                     found = Some(pos);

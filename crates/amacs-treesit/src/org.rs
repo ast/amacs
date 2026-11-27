@@ -144,6 +144,35 @@ impl Org {
         }
     }
 
+    /// The markup of the text: the bytes of the marks around emphasis and
+    /// of what a link has beside its text, in order. The blocks must be
+    /// those of the text, as [`Org::scan`] leaves them.
+    pub(crate) fn markup(&self, text: &Text) -> Vec<Range<usize>> {
+        let mut found = Vec::new();
+        let mut line = String::new();
+        for number in 0..text.len_lines() {
+            let bytes = line_bytes(text, number);
+            if self.block_at(bytes.start).is_some() {
+                continue;
+            }
+            read_line(text, bytes.clone(), &mut line);
+            // Most lines have nothing of the kind: those are not read
+            // further.
+            if !line.contains(['*', '/', '=', '~', '[']) {
+                continue;
+            }
+            Line {
+                org: self,
+                text: &line,
+                start: bytes.start,
+                out: None,
+                markup: Some(&mut found),
+            }
+            .paint();
+        }
+        found
+    }
+
     /// The block that a byte is in, if it is in one.
     fn block_at(&self, byte: usize) -> Option<&Block> {
         let index = self.blocks.partition_point(|block| block.end <= byte);
@@ -179,7 +208,8 @@ impl Org {
                         org: self,
                         text: &line,
                         start: bytes.start,
-                        out: &mut *out,
+                        out: Some(&mut *out),
+                        markup: None,
                     }
                     .paint();
                 }
@@ -213,7 +243,12 @@ struct Line<'a> {
     text: &'a str,
     /// The byte of the whole text that the line starts at.
     start: usize,
-    out: &'a mut Highlights,
+    /// Where the highlights go, when the line is read for them.
+    out: Option<&'a mut Highlights>,
+    /// Where the bytes of markup go, when the line is read for those: the
+    /// marks around emphasis and the parts of a link that are not its
+    /// text, which can be left out of what is drawn.
+    markup: Option<&'a mut Vec<Range<usize>>>,
 }
 
 /// What may stand before the mark that opens emphasis, and after the one
@@ -262,10 +297,19 @@ fn url_end(line: &str, start: usize) -> Option<usize> {
 
 impl Line<'_> {
     fn fill(&mut self, range: Range<usize>, highlight: Highlight) {
-        self.out.fill(
-            self.start + range.start..self.start + range.end,
-            Some(highlight),
-        );
+        if let Some(out) = &mut self.out {
+            out.fill(
+                self.start + range.start..self.start + range.end,
+                Some(highlight),
+            );
+        }
+    }
+
+    /// Notes bytes of the line as markup.
+    fn mark(&mut self, range: Range<usize>) {
+        if let Some(markup) = &mut self.markup {
+            markup.push(self.start + range.start..self.start + range.end);
+        }
     }
 
     fn paint(&mut self) {
@@ -280,7 +324,11 @@ impl Line<'_> {
             self.fill(0..line.len(), Highlight::Comment);
         } else if trimmed.starts_with('|') {
             self.fill(indent..line.len(), Highlight::Table);
-            self.inline(indent, false);
+            // The cells of a table are lined up by their text as it is
+            // written, so nothing of it counts as markup to leave out.
+            if self.markup.is_none() {
+                self.inline(indent, false);
+            }
         } else if let Some(end) = property_end(trimmed) {
             self.fill(indent..indent + end, Highlight::Metadata);
         } else if let Some(marker) = item_marker(trimmed, indent) {
@@ -410,13 +458,16 @@ impl Line<'_> {
                 let middle = at + 2 + middle;
                 self.fill(at..middle + 2, Highlight::Delimiter);
                 self.fill(middle + 2..close, Highlight::Link);
+                self.mark(at..middle + 2);
             }
             None => {
                 self.fill(at..at + 2, Highlight::Delimiter);
                 self.fill(at + 2..close, Highlight::Link);
+                self.mark(at..at + 2);
             }
         }
         self.fill(close..close + 2, Highlight::Delimiter);
+        self.mark(close..close + 2);
         Some(close + 2)
     }
 
@@ -461,6 +512,8 @@ impl Line<'_> {
             self.fill(at..at + 1, Highlight::Delimiter);
             self.fill(at + 1..close, highlight);
             self.fill(close..close + 1, Highlight::Delimiter);
+            self.mark(at..at + 1);
+            self.mark(close..close + 1);
         }
         Some(close + 1)
     }

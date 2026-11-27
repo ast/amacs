@@ -188,7 +188,8 @@ the ones that are still not there, the ones that need the core first.
 
 - [ ] Tables are lined up by changing the text. Showing an unaligned table
       aligned without touching it needs virtual text in redisplay.
-- [ ] Hiding markup and a reading mode, as `markdown-ts-view-mode` has.
+- [ ] Hiding markup, which Org has in `hide-markup-mode`, and a reading
+      mode, as `markdown-ts-view-mode` has.
 - [ ] A table of contents, struck-through text drawn struck through (it
       is drawn as a comment).
 
@@ -221,9 +222,15 @@ order that seems most useful:
 - [ ] `C-c '` to edit a source block in a buffer of its language.
 - [ ] Links by `id:` to entries of other files, which takes an index of
       the files; `C-c l` to store a link to this place.
-- [ ] Hiding emphasis markers and the targets of links, and indenting
-      text under its heading as `org-indent-mode` does. Both need text
-      hidden or added within a line, in redisplay.
+- [ ] Markup is hidden by `hide-markup-mode` since 2026-11-27. Left:
+      Markdown, whose grammar has to say what its markup is
+      (`Syntax::update_markup`); showing only the piece of markup that
+      point is in, not the whole line, as `org-appear` does; the stars of
+      headings but the last; jump labels are still made for chars that
+      are left out.
+- [ ] Indenting text under its heading as `org-indent-mode` does, and a
+      table that is shown lined up without a change to its text. Both need
+      text that is drawn and is not in the buffer.
 - [ ] Underlined and struck text have no colour: faces have no line
       through text.
 - [ ] Export.

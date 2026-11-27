@@ -194,8 +194,17 @@ impl Buffer {
     /// How the text flows into rows in a window: by the width of its tabs,
     /// and between words while `visual-line-mode` is on in the buffer.
     pub fn flow(&self) -> crate::display::Flow<'_> {
+        let hide_markup = self
+            .minor_modes
+            .iter()
+            .any(|mode| mode == crate::display::HIDE_MARKUP_MODE);
         crate::display::Flow {
             folds: &self.folds,
+            hidden: match &self.syntax {
+                Some(syntax) if hide_markup => syntax.markup(),
+                _ => &[],
+            },
+            reveal: (0, 0),
             tab_width: self.tab_width,
             words: self
                 .minor_modes
@@ -265,8 +274,15 @@ impl Buffer {
 
     /// Brings the syntax tree up to date with the text.
     pub fn update_syntax(&mut self) {
+        let hide_markup = self
+            .minor_modes
+            .iter()
+            .any(|mode| mode == crate::display::HIDE_MARKUP_MODE);
         if let Some(syntax) = &mut self.syntax {
             syntax.update(&self.text);
+            if hide_markup {
+                syntax.update_markup(&self.text);
+            }
         }
     }
 

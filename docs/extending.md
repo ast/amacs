@@ -301,6 +301,11 @@ positions, `(show-lines!)` all of them, and `(reveal! pos)` those around a
 position. `(hidden? pos)` says whether a position is on a hidden line, and
 `(hidden-ranges)` lists what is hidden, as pairs that `hide-lines!` takes.
 
+Within a line, `hide-markup-mode` leaves out the chars that the language
+of the buffer says are markup, on all lines but the one that point is on.
+That is decided where the text is coloured, in `crates/amacs-treesit`, and
+not by code in Scheme: there is no procedure to hide a stretch of a line.
+
 Hidden lines stay hidden as the text changes, and can lie within one
 another: showing the outer ones leaves the inner ones hidden. Motion steps
 over them. A command that leaves point among them, as a jump to a line or

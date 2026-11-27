@@ -272,7 +272,7 @@ impl Editor {
         if rows == 0 || width == 0 {
             return;
         }
-        let (text, tab) = (buffer.text(), buffer.flow());
+        let (text, tab) = (buffer.text(), self.window_flow(id));
         let point = buffer.marker(window.point);
         // Edits can leave the start marker in the middle of a row.
         let (mut start, _) = row_containing(text, buffer.marker(window.start), width, tab);
@@ -317,13 +317,13 @@ impl Editor {
             return (lines, Some((0, 0)));
         }
         let (gutter, width) = text_area(window, buffer);
-        let (text, tab) = (buffer.text(), buffer.flow());
+        let (text, tab) = (buffer.text(), self.window_flow(id));
         let point = buffer.marker(window.point);
         let point_line = text.line_of(point);
         let window_start = buffer.marker(window.start);
         // What the window can show at most: a char per cell, unless lines
         // are hidden between those that it shows.
-        let shown = if buffer.folds().is_empty() {
+        let shown = if buffer.folds().is_empty() && tab.hidden.is_empty() {
             window_start..(window_start + rows * width).min(text.len())
         } else {
             self.visible_range(id)
@@ -377,8 +377,15 @@ impl Editor {
             let mut end_col = 0;
             let mut point_col = None;
             let mut byte = text.char_to_byte(start);
+            // The char that the walk comes to next, unless chars before it
+            // are left out.
+            let mut expected = start;
             labels.clear();
             let row = walk_row(text, start, width, tab, |pos, c, col, cells| {
+                if pos != expected {
+                    byte = text.char_to_byte(pos);
+                }
+                expected = pos + 1;
                 let highlight = highlights.as_ref().and_then(|found| found.get(byte));
                 byte += c.len_utf8();
                 let base = highlight.map_or(faces::DEFAULT, faces::syntax);

@@ -56,6 +56,10 @@ pub struct Syntax {
     parser: Parser,
     tree: Option<Tree>,
     lines: Option<Org>,
+    /// The chars that are markup, as of the last [`Syntax::update_markup`],
+    /// and whether the text has changed since.
+    markup: Vec<Range<usize>>,
+    markup_stale: bool,
     /// Whether the text has changed since the tree was parsed.
     stale: bool,
 }
@@ -100,6 +104,8 @@ impl Syntax {
             parser,
             tree: None,
             lines,
+            markup: Vec::new(),
+            markup_stale: true,
             stale: true,
         })
     }
@@ -110,6 +116,7 @@ impl Syntax {
         if let Some(lines) = &mut self.lines {
             lines.set_keywords(not_done, done);
             self.stale = true;
+            self.markup_stale = true;
         }
     }
 
@@ -121,6 +128,7 @@ impl Syntax {
     /// `text`. Must be called before the text changes.
     pub fn before_insert(&mut self, text: &Text, pos: usize, inserted: &str) {
         self.stale = true;
+        self.markup_stale = true;
         let Some(tree) = &mut self.tree else { return };
         let start_byte = text.char_to_byte(pos);
         let start_position = point(text, start_byte);
@@ -138,6 +146,7 @@ impl Syntax {
     /// removed. Must be called before the text changes.
     pub fn before_delete(&mut self, text: &Text, range: Range<usize>) {
         self.stale = true;
+        self.markup_stale = true;
         let Some(tree) = &mut self.tree else { return };
         let start_byte = text.char_to_byte(range.start);
         let old_end_byte = text.char_to_byte(range.end);
@@ -156,6 +165,7 @@ impl Syntax {
     pub fn reset(&mut self) {
         self.tree = None;
         self.stale = true;
+        self.markup_stale = true;
     }
 
     /// Brings the tree up to date with the text. Cheap when nothing changed,
@@ -189,6 +199,30 @@ impl Syntax {
         if reused && broken && text.len_bytes() <= REPARSE_BYTES {
             self.tree = self.parser.parse_with_options(&mut read, None, None);
         }
+    }
+
+    /// Finds anew the chars of the text that are markup: what stands
+    /// around text to say how it is meant, such as the stars of `*strong*`,
+    /// and can be left out of what is drawn. Call after [`Syntax::update`];
+    /// cheap when nothing changed. Only Org has markup so far.
+    pub fn update_markup(&mut self, text: &Text) {
+        if !std::mem::take(&mut self.markup_stale) {
+            return;
+        }
+        self.markup = match self.lines.as_ref().filter(|_| !self.stale) {
+            Some(lines) => lines
+                .markup(text)
+                .into_iter()
+                .map(|bytes| text.byte_to_char(bytes.start)..text.byte_to_char(bytes.end))
+                .collect(),
+            None => Vec::new(),
+        };
+    }
+
+    /// The chars that are markup, as ranges in order and apart, as of the
+    /// last [`Syntax::update_markup`].
+    pub fn markup(&self) -> &[Range<usize>] {
+        &self.markup
     }
 
     /// The tree as of the last [`Syntax::update`].

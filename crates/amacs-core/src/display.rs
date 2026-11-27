@@ -2,6 +2,8 @@
 
 use amacs_proto::{DisplayLine, FaceId};
 use amacs_text::Text;
+use std::ops::Range;
+
 use unicode_width::UnicodeWidthChar;
 
 use crate::fold::Folds;
@@ -42,6 +44,9 @@ pub fn str_cells(s: &str) -> usize {
 /// The minor mode in which long lines are broken between words.
 pub const VISUAL_LINE_MODE: &str = "visual-line-mode";
 
+/// The minor mode in which markup is left out of what is drawn.
+pub const HIDE_MARKUP_MODE: &str = "hide-markup-mode";
+
 /// How the text of a buffer flows into rows: how wide its tabs are,
 /// whether a line too long for the pane is broken between words, as
 /// `visual-line-mode` has it, or wherever the pane ends, and which lines
@@ -51,6 +56,46 @@ pub struct Flow<'a> {
     pub tab_width: usize,
     pub words: bool,
     pub folds: &'a Folds,
+    /// Chars within lines that get no cells: markup, while it is hidden.
+    /// Ranges in order and apart, none across the end of a line.
+    pub hidden: &'a [Range<usize>],
+    /// The chars among which nothing is left out, from the first to before
+    /// the second: the line that point is
+    /// on in the window that the rows are for, so that what is edited is
+    /// seen as it is written.
+    pub reveal: (usize, usize),
+}
+
+/// Goes over the chars of a row and says which of them are left out.
+struct Hidden<'a> {
+    ranges: &'a [Range<usize>],
+    reveal: (usize, usize),
+    next: usize,
+}
+
+impl<'a> Hidden<'a> {
+    fn from(flow: &Flow<'a>, start: usize) -> Self {
+        Self {
+            ranges: flow.hidden,
+            reveal: flow.reveal,
+            next: flow.hidden.partition_point(|range| range.end <= start),
+        }
+    }
+
+    /// Whether the char at a position is left out. Positions are asked
+    /// about in rising order.
+    fn at(&mut self, pos: usize) -> bool {
+        while self
+            .ranges
+            .get(self.next)
+            .is_some_and(|range| range.end <= pos)
+        {
+            self.next += 1;
+        }
+        self.ranges.get(self.next).is_some_and(|range| {
+            range.start <= pos && !(self.reveal.0 <= pos && pos < self.reveal.1)
+        })
+    }
 }
 
 static NO_FOLDS: Folds = Folds::new();
@@ -62,6 +107,8 @@ impl Flow<'static> {
             tab_width,
             words: false,
             folds: &NO_FOLDS,
+            hidden: &[],
+            reveal: (0, 0),
         }
     }
 }
@@ -112,13 +159,18 @@ pub fn walk_row(
     let budget = width.saturating_sub(1).max(1);
     let tab_width = flow.tab_width;
     let word_break = if flow.words {
-        word_break(text, start, budget, tab_width)
+        word_break(text, start, budget, &flow)
     } else {
         None
     };
+    let mut hidden = Hidden::from(&flow, start);
     let mut col = 0;
     let mut pos = start;
     for c in text.chars_from(start) {
+        if c != '\n' && hidden.at(pos) {
+            pos += 1;
+            continue;
+        }
         if c == '\n' {
             // The row after this one is that of the next line that is
             // shown, if there is one.
@@ -164,13 +216,19 @@ pub fn walk_row(
 /// Where the row that starts at `start` is broken between words: just
 /// after the last whitespace that fits in `budget` cells, if the line does
 /// not fit and has whitespace to break at.
-fn word_break(text: &Text, start: usize, budget: usize, tab_width: usize) -> Option<usize> {
+fn word_break(text: &Text, start: usize, budget: usize, flow: &Flow) -> Option<usize> {
+    let tab_width = flow.tab_width;
+    let mut hidden = Hidden::from(flow, start);
     let mut col = 0;
     let mut pos = start;
     let mut last = None;
     for c in text.chars_from(start) {
         if c == '\n' {
             return None;
+        }
+        if hidden.at(pos) {
+            pos += 1;
+            continue;
         }
         let cells = match c {
             '\t' => char_cells(c, col, tab_width).min(budget),

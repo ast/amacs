@@ -247,7 +247,11 @@ fn page_rows(ed: &Editor) -> usize {
 
 fn window_geometry(ed: &Editor) -> (usize, usize, Flow<'_>) {
     let width = ed.text_width(ed.selected());
-    (ed.window().text_rows(), width, ed.buffer().flow())
+    (
+        ed.window().text_rows(),
+        width,
+        ed.window_flow(ed.selected()),
+    )
 }
 
 fn window_start(ed: &Editor) -> usize {
@@ -285,7 +289,7 @@ pub fn scroll_down(ed: &mut Editor) -> CmdResult {
     set_window_start(ed, new_start);
 
     // Find the last row now shown and pull point up to it if it is below.
-    let tab = ed.buffer().flow();
+    let tab = ed.window_flow(ed.selected());
     let text = ed.text();
     let mut last_row = new_start;
     let mut visible = false;
