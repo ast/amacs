@@ -1,5 +1,6 @@
 //! The syntax tree of one buffer, kept up to date as the text changes.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -27,6 +28,14 @@ pub struct Highlights {
 }
 
 impl Highlights {
+    /// The highlights of a range within these.
+    fn part(&self, range: Range<usize>) -> Highlights {
+        Highlights {
+            start: range.start,
+            bytes: self.bytes[range.start - self.start..range.end - self.start].to_vec(),
+        }
+    }
+
     /// The highlight of the char that starts at byte `byte`.
     pub fn get(&self, byte: usize) -> Option<Highlight> {
         let index = *self.bytes.get(byte.checked_sub(self.start)?)?;
@@ -70,7 +79,17 @@ pub struct Syntax {
     concealed: HashMap<u64, Vec<Range<usize>>>,
     /// Whether the text has changed since the tree was parsed.
     stale: bool,
+    /// Whether the tree has syntax errors.
+    broken: bool,
+    /// The highlights that were asked for since the tree was parsed: the
+    /// same are asked for each time the text is drawn, and most of the
+    /// time the text has not changed in between.
+    painted: RefCell<Vec<Highlights>>,
 }
+
+/// The ranges of highlights that are remembered: one for each of a few
+/// windows on the same text.
+const PAINTED_KEPT: usize = 4;
 
 impl std::fmt::Debug for Syntax {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -117,6 +136,8 @@ impl Syntax {
             markup_stale: true,
             concealed: HashMap::new(),
             stale: true,
+            broken: false,
+            painted: RefCell::new(Vec::new()),
         })
     }
 
@@ -185,6 +206,7 @@ impl Syntax {
             return;
         }
         self.stale = false;
+        self.painted.get_mut().clear();
         if let Some(lines) = &mut self.lines {
             lines.scan(text);
             return;
@@ -194,21 +216,25 @@ impl Syntax {
             return;
         }
         let mut read = |byte: usize, _: Point| text.chunk_at_byte(byte);
-        let reused = self.tree.is_some();
-        self.tree = self
-            .parser
-            .parse_with_options(&mut read, self.tree.as_ref(), None);
         // Reusing a tree across edits can recover from a syntax error in
         // another way than parsing afresh does, in some grammars. Where
         // parsing afresh is cheap, text with errors gets that, so that the
-        // tree depends on the text alone.
-        let broken = self
-            .tree
-            .as_ref()
-            .is_some_and(|tree| tree.root_node().has_error());
-        if reused && broken && text.len_bytes() <= REPARSE_BYTES {
+        // tree depends on the text alone. A tree that had errors is not
+        // tried first: text that is being typed has them for a while, and
+        // each key would have the text parsed twice.
+        let afresh = text.len_bytes() <= REPARSE_BYTES;
+        let old = self.tree.take().filter(|_| !(self.broken && afresh));
+        let broken = |tree: &Option<Tree>| {
+            tree.as_ref()
+                .is_some_and(|tree| tree.root_node().has_error())
+        };
+        self.tree = self
+            .parser
+            .parse_with_options(&mut read, old.as_ref(), None);
+        if old.is_some() && afresh && broken(&self.tree) {
             self.tree = self.parser.parse_with_options(&mut read, None, None);
         }
+        self.broken = broken(&self.tree);
     }
 
     /// Finds anew the chars of the text that are markup: what stands
@@ -341,6 +367,48 @@ impl Syntax {
 
     /// Highlights for a range of bytes, which must lie on char boundaries.
     pub fn highlights(&self, text: &Text, range: Range<usize>) -> Highlights {
+        if self.stale {
+            return self.paint(text, range);
+        }
+        // What was found for the tree as it is holds until the text
+        // changes.
+        let mut painted = self.painted.borrow_mut();
+        let ends = |found: &Highlights| found.start..found.start + found.bytes.len();
+        let holds = |found: &Highlights| {
+            let known = ends(found);
+            known.start <= range.start && range.end <= known.end
+        };
+        if let Some(found) = painted.iter().find(|found| holds(found)) {
+            return found.part(range);
+        }
+        // A window that scrolls asks for a range next to the one before:
+        // more is painted then, on both sides, so that the next rows it
+        // scrolls to are known. After a change to the text only what is
+        // asked for is painted, since typing would pay for the rest with
+        // each key.
+        let scrolled = painted.iter().position(|found| {
+            let known = ends(found);
+            known.start < range.end && range.start < known.end
+        });
+        let wanted = match scrolled {
+            Some(at) => {
+                painted.remove(at);
+                let snap = |byte: usize| text.char_to_byte(text.byte_to_char(byte));
+                snap(range.start.saturating_sub(range.len()))
+                    ..snap((range.end + range.len()).min(text.len_bytes()))
+            }
+            None => range.clone(),
+        };
+        let out = self.paint(text, wanted);
+        let part = out.part(range);
+        if painted.len() == PAINTED_KEPT {
+            painted.remove(0);
+        }
+        painted.push(out);
+        part
+    }
+
+    fn paint(&self, text: &Text, range: Range<usize>) -> Highlights {
         let mut out = Highlights {
             start: range.start,
             bytes: vec![0; range.len()],

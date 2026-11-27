@@ -234,7 +234,9 @@ to try that one, or to your own init file to work with it.
 The editor counts what it runs and how long that takes, by name:
 commands, hooks, key presses, redisplay. `M-x show-telemetry` shows the
 numbers, and `docs/extending.md` says how code reads them. They stay on the
-machine, in the state directory.
+machine, in the state directory. `cargo run --release -p amacs-script
+--example redisplay` times what a key press costs, the command and working
+out what the frame shows after it, for moving, typing and scrolling.
 
 ## Choosing things in the minibuffer
 

@@ -195,3 +195,44 @@ fn timings_on_a_large_file() {
     println!("edit and reparse: {:?} each", parse / 100);
     println!("markup after an edit: {:?} each", markup / 100);
 }
+
+/// The highlights of a window are remembered between edits, and more is
+/// painted than asked for when the window scrolls. What is given is what
+/// painting just that range gives.
+#[test]
+fn remembered_highlights_are_those_of_the_text() {
+    let rust = language("rust").unwrap();
+    let mut text = Text::from(SOURCE);
+    let mut syntax = Syntax::new(rust).unwrap();
+    syntax.update(&text);
+    let exact = |text: &Text, range: std::ops::Range<usize>| {
+        let mut fresh = Syntax::new(rust).unwrap();
+        fresh.update(text);
+        fresh.highlights(text, range)
+    };
+    let window = 300.min(text.len_bytes() / 4);
+    // Asked twice, scrolled down by parts of a window and back up, and
+    // somewhere else altogether.
+    let last = text.len_bytes() - window;
+    let starts = [0, 0, 40, 90, 200, 520, 480, 100, last, last - 70, 3];
+    for start in starts {
+        let range = start..start + window;
+        assert_eq!(
+            syntax.highlights(&text, range.clone()),
+            exact(&text, range.clone()),
+            "at {range:?}"
+        );
+    }
+    // After a change, nothing of before is given.
+    syntax.before_insert(&text, 0, "/* ");
+    text.insert(0, "/* ");
+    syntax.update(&text);
+    for start in [0, 40, 0] {
+        let range = start..start + window;
+        assert_eq!(
+            syntax.highlights(&text, range.clone()),
+            exact(&text, range.clone()),
+            "after the change, at {range:?}"
+        );
+    }
+}
