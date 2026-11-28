@@ -143,7 +143,7 @@ thread starts with, beside `room`; so do the `timeline` events of a thread.
 | `edit` | `room`, `id`, `body` | Another text for a message of one's own |
 | `react` | `room`, `id`, `key` | A reaction, or the end of one's own of that key |
 | `redact` | `room`, `id` | Delete a message |
-| `mark-read` | `room` | The room is read to its end |
+| `mark-read` | `room`, `thread`? | The room, or the thread, is read to its end |
 | `upload` | `room`, `thread`?, `path` | Send a file |
 | `download` | `room`, `id` | Fetch the file of a message. The result is where it is |
 | `verify-start` | | Ask the other devices of the account to verify this one |

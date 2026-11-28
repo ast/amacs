@@ -32,6 +32,7 @@ use matrix_sdk::encryption::secret_storage::SecretStorageError;
 use matrix_sdk::encryption::verification::{
     SasState, SasVerification, Verification, VerificationRequest, VerificationRequestState,
 };
+use matrix_sdk::event_handler::EventHandlerDropGuard;
 use matrix_sdk::ruma::events::key::verification::request::ToDeviceKeyVerificationRequestEvent;
 use serde_json::Value;
 
@@ -91,10 +92,12 @@ pub fn recovery_error(error: &RecoveryError) -> String {
 }
 
 impl Verifier {
-    /// A verifier for a client that is logged in, and the task that tells
-    /// the editor whether the device is verified. Requests of other devices
-    /// are heard from now on.
-    pub fn start(client: &Client, out: &Output) -> (Self, Task) {
+    /// A verifier for a client that is logged in, the task that tells the
+    /// editor whether the device is verified, and the guard of the handler
+    /// that hears the requests of other devices from now on. The handler
+    /// holds the verifier, and so the client, which holds the handler: only
+    /// dropping the guard lets the client go.
+    pub fn start(client: &Client, out: &Output) -> (Self, Task, EventHandlerDropGuard) {
         let verifier = Self {
             client: client.clone(),
             out: out.clone(),
@@ -113,7 +116,7 @@ impl Verifier {
         };
 
         let incoming = verifier.clone();
-        client.add_event_handler(
+        let handler = client.add_event_handler(
             move |event: ToDeviceKeyVerificationRequestEvent, client: Client| {
                 let verifier = incoming.clone();
                 async move {
@@ -127,7 +130,7 @@ impl Verifier {
                 }
             },
         );
-        (verifier, watch)
+        (verifier, watch, client.event_handler_drop_guard(handler))
     }
 
     fn current(&self) -> std::sync::MutexGuard<'_, Current> {

@@ -31,6 +31,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use matrix_sdk::Client;
+use matrix_sdk::event_handler::EventHandlerDropGuard;
 use matrix_sdk::ruma::{EventId, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UserId};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt as _, BufReader};
@@ -106,6 +107,9 @@ struct Live {
     /// place.
     cache: Result<Cache, String>,
     _tasks: Vec<Task>,
+    /// Removes the event handlers that hold the client, so that it goes
+    /// with this.
+    _handlers: Vec<EventHandlerDropGuard>,
 }
 
 /// A room, or a thread in it by the name that the editor has for it.
@@ -312,7 +316,7 @@ async fn go_live(
     };
     // Whether the device is verified is known, as far as it is, before
     // the first "syncing" is said, which carries it.
-    let (verifier, verified) = Verifier::start(&client, &app.out);
+    let (verifier, verified, verify_requests) = Verifier::start(&client, &app.out);
     notify::start(&client, &app.out).await;
 
     let cache = match (&app.cache_root, client.user_id()) {
@@ -341,6 +345,7 @@ async fn go_live(
         thumbnailer,
         cache,
         _tasks: tasks,
+        _handlers: vec![verify_requests],
     })
 }
 
@@ -579,10 +584,10 @@ async fn redact(app: &Arc<App>, request: &Request) -> Outcome {
     timeline::redact(&timeline, &params.id).await
 }
 
-/// "mark-read": the user has read the room to its end.
+/// "mark-read": the user has read the room, or a thread of it, to its end.
 async fn mark_read(app: &Arc<App>, request: &Request) -> Outcome {
     let params: RoomParams = request.params()?;
-    let (_, timeline) = timeline_of(app, &params.room, None).await?;
+    let (_, timeline) = timeline_of(app, &params.room, params.thread).await?;
     timeline::mark_read(&timeline).await
 }
 

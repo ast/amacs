@@ -391,6 +391,11 @@ impl Thumbnailer {
         None
     }
 
+    /// A picture could not be fetched: the next to want it asks again.
+    fn failed(&self, key: &str) {
+        self.state().asked.remove(key);
+    }
+
     /// The keys of the pictures that come to be on disk, from now on.
     pub fn listen(&self) -> broadcast::Receiver<String> {
         self.done.subscribe()
@@ -412,7 +417,12 @@ impl Thumbnailer {
                 // Not a picture that the editor can draw: the message stays
                 // without one.
                 Ok(None) => {}
-                Err(error) => log(format!("no picture to show for a message: {error}")),
+                // Asked for again when the message is next made an item, as
+                // when its room is opened again: the network may be back.
+                Err(error) => {
+                    self.failed(&request.key);
+                    log(format!("no picture to show for a message: {error}"));
+                }
             }
         }
     }
@@ -680,5 +690,19 @@ mod tests {
         );
         assert_eq!(thumbnailer.get("k"), Some(PathBuf::from("/c/k.png")));
         assert_eq!(Thumbnailer::idle().get_or_ask("k", &source), None);
+    }
+
+    #[test]
+    fn a_picture_that_could_not_be_fetched_is_asked_for_again() {
+        let (thumbnailer, mut requests) = Thumbnailer::new();
+        let source = plain("mxc://example.org/abc");
+        assert_eq!(thumbnailer.get_or_ask("k", &source), None);
+        assert!(requests.try_recv().is_ok());
+        thumbnailer.failed("k");
+        assert_eq!(thumbnailer.get_or_ask("k", &source), None);
+        assert_eq!(
+            requests.try_recv().map(|request| request.key),
+            Ok("k".to_owned())
+        );
     }
 }

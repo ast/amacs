@@ -83,6 +83,9 @@ draws pictures. 0 is to show no pictures, only their names.")
 (define %matrix-item-starts (make-hash-table))
 ;; Whether a redraw is on its way.
 (define %matrix-redraw-due #f)
+;; The rooms that the program was asked to mark as read, by their ids: not
+;; asked again before the program tells of the room anew.
+(define %matrix-marking (make-hash-table))
 
 (define %matrix-rooms-buffer "*matrix*")
 
@@ -104,13 +107,30 @@ draws pictures. 0 is to show no pictures, only their names.")
   (if thread (string-append room " " thread) room))
 
 (define (%matrix-view-buffer room thread)
-  ;; The name of the buffer of a room, or of a thread in it.
-  (string-append "*matrix: " (%matrix-room-name room)
-                 (if thread
-                     (string-append " / thread "
-                                    (substring thread 0 (min 9 (string-length thread))))
-                     "")
-                 "*"))
+  ;; The name of the buffer of a room, or of a thread in it: the one that
+  ;; shows it already, else one that no other buffer has, since rooms and
+  ;; the starts of threads can share a name.
+  (let* ((view (cons (json-ref room 'id) thread))
+         (base (string-append
+                "*matrix: " (%matrix-room-name room)
+                (if thread
+                    (string-append " / thread "
+                                   (substring thread 0 (min 9 (string-length thread))))
+                    "")))
+         (buffers (buffer-list)))
+    (let loop ((names (hash-table-keys %matrix-views)))
+      (cond
+       [(pair? names)
+        (if (equal? (hash-table-ref %matrix-views (car names) #f) view)
+            (car names)
+            (loop (cdr names)))]
+       [else
+        (let free ((n 1))
+          (let ((name (string-append base (if (= n 1) "" (string-append "<" (number->string n) ">"))
+                                     "*")))
+            (if (or (hash-table-contains? %matrix-views name) (member name buffers))
+                (free (+ n 1))
+                name)))]))))
 
 ;;; The connection
 
@@ -189,6 +209,7 @@ draws pictures. 0 is to show no pictures, only their names.")
    [(equal? event "room")
     (let ((room (json-ref data 'room)))
       (hash-table-set! %matrix-rooms (json-ref room 'id) room)
+      (hash-table-delete! %matrix-marking (json-ref room 'id))
       (%matrix-changed!))]
    [(equal? event "room-removed")
     (hash-table-delete! %matrix-rooms (json-ref data 'id))
@@ -583,6 +604,7 @@ shows its thread.")
       (set! %matrix-timelines (make-hash-table))
       (set! %matrix-views (make-hash-table))
       (set! %matrix-item-starts (make-hash-table))
+      (set! %matrix-marking (make-hash-table))
       (set! %matrix-state "starting")
       (set! %matrix-state-note #f)
       (set! %matrix-verified #t)
@@ -831,17 +853,33 @@ of its own, for a message of more than one line."
 
 (define (%matrix-mark-read)
   ;; A room is read when its buffer is the one in use and point is at its
-  ;; end: the program is told, once, while messages are not read.
+  ;; end: the program is told, once, while messages are not read. A thread
+  ;; is marked as read through its own list, which is open while its
+  ;; buffer is, whether the room's is or not. The room shows as read when
+  ;; the server has taken it.
   (when (and %matrix-process (hash-table-contains? %matrix-views (buffer-name))
-             (= (point) (string-length (buffer-string))))
-    (let ((room (hash-table-ref %matrix-rooms (car (%matrix-current-view)) #f)))
-      (when (and room (or (> (json-ref room 'unread 0) 0) (> (json-ref room 'mentions 0) 0)))
-        ;; Not asked for again before the program tells of the room anew.
-        (hash-table-set! %matrix-rooms (json-ref room 'id)
-                         (map (lambda (field)
-                                (if (memq (car field) '(unread mentions)) (cons (car field) 0) field))
-                              room))
-        (%matrix-request "mark-read" (json-object 'room (json-ref room 'id)) #f)))))
+             (= (point) (point-max)))
+    (let* ((view (%matrix-current-view))
+           (id (car view))
+           (room (hash-table-ref %matrix-rooms id #f)))
+      (when (and room (not (hash-table-contains? %matrix-marking id))
+                 (or (> (json-ref room 'unread 0) 0) (> (json-ref room 'mentions 0) 0)))
+        (hash-table-set! %matrix-marking id #t)
+        (%matrix-request
+         "mark-read" (%matrix-view-params view)
+         (lambda (result problem)
+           (let ((room (hash-table-ref %matrix-rooms id #f)))
+             (cond
+              [problem (%matrix-report problem)]
+              ;; A thread that is read leaves the rest of the room as it is.
+              [(and room (not (cdr view)))
+               (hash-table-set! %matrix-rooms id
+                                (map (lambda (field)
+                                       (if (memq (car field) '(unread mentions))
+                                           (cons (car field) 0)
+                                           field))
+                                     room))
+               (%matrix-changed!)]))))))))
 
 (add-hook! 'post-command-hook %matrix-mark-read)
 

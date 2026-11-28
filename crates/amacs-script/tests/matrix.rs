@@ -182,11 +182,41 @@ fn a_message_that_names_you_is_told_of() {
 fn a_room_that_is_looked_at_is_read() {
     let mut h = harness("@me:example.org");
     start(&mut h);
-    assert_eq!(h.screen.row(9), "  1@  Work");
+    // The rooms come one by one: Tea is not the last.
+    h.wait_until(|h| h.screen.row(9) == "  1@  Work");
     h.keys("s").type_text("Work").keys("RET");
     h.wait_until(|h| h.screen.text().contains("kettle on?"));
     h.keys("l");
     h.wait_until(|h| h.screen.row(9) == "      Work");
+}
+
+#[test]
+fn rooms_of_the_same_name_have_buffers_of_their_own() {
+    let mut h = harness("@me:example.org");
+    start(&mut h);
+    // Another room that is called Tea, as the program would tell of it.
+    h.eval(
+        "(%matrix-event \"room\" (json-object 'room (json-object
+           'id \"!tea2:example.org\" 'name \"Tea\" 'unread 0 'mentions 0
+           'activity 1 'direct #f 'space #f)))",
+    );
+    let show = |h: &mut Harness, id: &str| {
+        h.eval(&format!(
+            "(begin (%matrix-show-view! (hash-table-ref %matrix-rooms {id:?} #f) #f)
+                    (buffer-name))"
+        ))
+    };
+    let first = show(&mut h, "!tea:example.org");
+    let second = show(&mut h, "!tea2:example.org");
+    assert_eq!(first, "\"*matrix: Tea*\"");
+    assert_eq!(second, "\"*matrix: Tea<2>*\"");
+    // Each buffer keeps its own room, and showing a room again finds its
+    // buffer.
+    assert_eq!(show(&mut h, "!tea:example.org"), first);
+    assert_eq!(
+        h.eval("(car (hash-table-ref %matrix-views \"*matrix: Tea<2>*\" #f))"),
+        "\"!tea2:example.org\""
+    );
 }
 
 /// Writes a picture of 16 by 32 pixels.
