@@ -21,6 +21,20 @@ pub use wire::{
 };
 
 use serde::{Deserialize, Serialize};
+use unicode_width::UnicodeWidthChar;
+
+/// How many cells a char of a [`DisplayLine`] takes: two for a wide one,
+/// none for one that joins the char before it, as a combining accent does,
+/// and one for any other. The server lays lines out by this and every
+/// frontend draws them by it, so that both agree on where a column is.
+pub fn char_cells(c: char) -> usize {
+    c.width().unwrap_or(1)
+}
+
+/// How many cells a text of a [`DisplayLine`] takes: the sum of its chars'.
+pub fn text_cells(text: &str) -> usize {
+    text.chars().map(char_cells).sum()
+}
 
 /// Something the user did in a frontend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

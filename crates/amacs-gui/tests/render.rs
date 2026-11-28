@@ -366,14 +366,14 @@ fn the_mode_line_has_a_line_above_and_below() {
 }
 
 /// How unevenly the channels of the pixels are covered: the largest
-/// difference, over the pixels above the mode line, between how much of
-/// the red and how much of the blue of the background a pixel has lost.
-/// Grey text loses both alike.
-fn channel_unevenness(renderer: &Renderer, rows: u16) -> f32 {
+/// difference, over the pixels of the first row, between how much of the
+/// red and how much of the blue of the background a pixel has lost. Grey
+/// text loses both alike.
+fn channel_unevenness(renderer: &Renderer) -> f32 {
     let pixels = renderer.pixels();
     let (width, _) = renderer.size();
     let (_, cell_h) = renderer.cell_size();
-    let text_rows = usize::from(rows - 2) * cell_h as usize;
+    let text_rows = cell_h as usize;
     let mut counts = std::collections::HashMap::new();
     for &pixel in &pixels[..text_rows * width as usize] {
         *counts.entry(pixel).or_insert(0usize) += 1;
@@ -406,11 +406,12 @@ fn text_is_drawn_per_subpixel_when_the_order_is_known() {
         renderer.resize(u32::from(cols) * cell_w, u32::from(rows) * cell_h);
         let mut editor = Editor::new(cols, rows);
         editor.handle_event(InputEvent::Paste(
-            "The quick brown fox jumps over it".to_owned(),
+            // The cursor, of the theme's colour, goes to the next row.
+            "The quick brown fox jumps over it\n".to_owned(),
         ));
         renderer.apply(&editor.redisplay());
         renderer.paint();
-        channel_unevenness(&renderer, rows)
+        channel_unevenness(&renderer)
     };
     let grey = unevenness(SubpixelOrder::None);
     let rgb = unevenness(SubpixelOrder::Rgb);
@@ -487,4 +488,29 @@ fn a_picture_is_drawn_in_the_cells_under_its_line() {
     assert_eq!(at(0, top), blue);
     assert_eq!(at(2 * cell_h - 1, top + 2 * cell_h - 1), blue);
     assert_ne!(at(2 * cell_h, top), blue);
+}
+
+#[test]
+fn a_cursor_of_the_theme_has_its_colour_and_the_letter_shows_on_it() {
+    let mut h = Harness::new("cursor-color", 40, 6);
+    h.editor
+        .faces_mut()
+        .set_overrides(vec![("cursor".to_owned(), "#cc2200".to_owned())]);
+    h.type_text("Hm");
+    h.keys("C-a");
+    let red = rgb(Color::rgb(0xcc, 0x22, 0x00));
+    let on = h.cell(0, 0);
+    let filled = on.iter().filter(|pixel| **pixel == red).count();
+    // Most of the cell is the cursor's colour; the H is drawn over it in
+    // the colour of the paper, which is light.
+    assert!(filled > on.len() / 2, "{filled} of {}", on.len());
+    let light = on
+        .iter()
+        .filter(|pixel| (*pixel >> 16 & 0xff) + (*pixel >> 8 & 0xff) + (*pixel & 0xff) > 600)
+        .count();
+    assert!(light > 0, "the H shows on the cursor");
+    // Moving away leaves the H dark on light, with nothing of the cursor.
+    h.keys("C-e");
+    assert!(!h.cell(0, 0).contains(&red));
+    assert!(h.ink(0, 0) > 0.05);
 }

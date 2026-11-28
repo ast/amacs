@@ -23,7 +23,6 @@ use crossterm::terminal::{
     LeaveAlternateScreen,
 };
 use crossterm::{execute, queue};
-use unicode_width::UnicodeWidthStr;
 
 /// What tells a terminal to draw its cursor in a colour (OSC 12). The
 /// terminal's own cursor is drawn in a colour chosen for the terminal's
@@ -245,7 +244,9 @@ impl Tty {
         for (segment, face) in line.segments() {
             self.set_face(face.0)?;
             queue!(self.out, Print(segment))?;
-            used += segment.width();
+            // As the server counts, which a terminal's own count of a string
+            // can differ from for a sequence of emojis.
+            used += amacs_proto::text_cells(segment);
         }
         let padding = usize::from(rect.w).saturating_sub(used);
         if padding > 0 {

@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use amacs_proto::{DisplayLine, FaceId};
 use amacs_text::MarkerId;
 use serde_json::Value as Json;
-use unicode_width::UnicodeWidthChar;
 
 use crate::buffer::BufferId;
 use crate::display::{column_of, overlay_cells, str_cells};
@@ -571,7 +570,7 @@ impl Editor {
             cells.push((' ', face));
             cells.extend(item.label.chars().map(|c| (c, face)));
             let detail: Vec<char> = item.detail.chars().collect();
-            let used: usize = cells.iter().map(|(c, _)| c.width().unwrap_or(1)).sum();
+            let used: usize = cells.iter().map(|(c, _)| amacs_proto::char_cells(*c)).sum();
             let detail_width = str_cells(&item.detail);
             if detail_width > 0 && used + 2 + detail_width < box_width {
                 let gap = box_width - 1 - detail_width - used;

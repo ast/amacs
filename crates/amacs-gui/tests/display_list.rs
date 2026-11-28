@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use amacs_gui::render::{Backend, Fonts, Frame, GlyphSource, Rect, Renderer, Row};
+use amacs_gui::render::{Backend, Cursor, Fonts, Frame, GlyphSource, Rect, Renderer, Row};
 use amacs_proto::{Color, CursorShape, DisplayLine, DrawOp, FaceAttrs, FaceId, PaneId, PaneRect};
 
 const RED: Color = Color::rgb(0xff, 0, 0);
@@ -23,7 +23,7 @@ struct Painted {
     full: bool,
     rows: Vec<Row>,
     changed: Vec<usize>,
-    cursor: Option<Rect>,
+    cursor: Option<Cursor>,
     /// How many of the glyphs have a picture.
     pictures: usize,
 }
@@ -58,7 +58,7 @@ impl Backend for Recording {
             full: frame.full,
             rows: frame.rows.to_vec(),
             changed: frame.changed.to_vec(),
-            cursor: frame.cursor,
+            cursor: frame.cursor.cloned(),
             pictures,
         });
         None
@@ -272,7 +272,7 @@ fn a_backend_is_told_what_changed_and_where_the_cursor_is() {
     );
     assert_eq!(frame.rows[2].glyphs.len(), 5);
     assert_eq!(
-        frame.cursor,
+        frame.cursor.as_ref().map(|cursor| cursor.cell),
         Some(Rect {
             x: 4 * cell_w,
             y: 3 * cell_h,
@@ -354,4 +354,60 @@ fn a_wavy_underline_is_a_line_that_steps_down_and_up() {
     for pair in wave.windows(2) {
         assert!(pair[0].rect.y.abs_diff(pair[1].rect.y) <= pair[0].rect.h);
     }
+}
+
+#[test]
+fn a_cursor_of_a_colour_shows_the_letter_it_is_on_in_the_colour_of_the_paper() {
+    let mut r = renderer();
+    let (cell_w, cell_h) = r.cell_size();
+    r.resize(10 * cell_w, 4 * cell_h);
+    let cursor = |shape, color| DrawOp::Cursor {
+        pane: PaneId(1),
+        row: 0,
+        col: 1,
+        shape,
+        color,
+    };
+    r.apply(&[
+        faces(),
+        layout(),
+        lines(1, 0, vec![DisplayLine::plain("abc", FaceId(0))]),
+        cursor(CursorShape::Block, Some(RED)),
+        DrawOp::Flush,
+    ]);
+    r.paint();
+    let cell = Rect {
+        x: cell_w,
+        y: 0,
+        w: cell_w,
+        h: cell_h,
+    };
+    let block = last(&r).cursor.clone().expect("a cursor");
+    assert_eq!(
+        (block.cell, block.area, block.color),
+        (cell, cell, Some(RED))
+    );
+    // The glyphs of its row, cut to the cursor when drawn, in the colour
+    // of the background that it hides.
+    assert_eq!(block.glyphs.len(), 3);
+    assert!(block.glyphs.iter().all(|glyph| glyph.color == PAPER));
+
+    // A bar is a thin part of the cell at its left and covers no letter.
+    r.apply(&[cursor(CursorShape::Bar, Some(RED)), DrawOp::Flush]);
+    r.paint();
+    let bar = last(&r).cursor.clone().expect("a cursor");
+    assert_eq!(
+        (bar.area.x, bar.area.y, bar.area.h),
+        (cell.x, cell.y, cell.h)
+    );
+    assert!(bar.area.w >= 1 && bar.area.w < cell_w, "{:?}", bar.area);
+    assert!(bar.glyphs.is_empty());
+
+    // Without a colour, what the cursor covers is inverted, and nothing
+    // is drawn again over it.
+    r.apply(&[cursor(CursorShape::Block, None), DrawOp::Flush]);
+    r.paint();
+    let inverted = last(&r).cursor.clone().expect("a cursor");
+    assert_eq!(inverted.color, None);
+    assert!(inverted.glyphs.is_empty());
 }

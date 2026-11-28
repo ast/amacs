@@ -4,8 +4,6 @@
 
 use std::collections::HashMap;
 
-use unicode_width::UnicodeWidthChar;
-
 use crate::{DisplayLine, DrawOp, FaceAttrs, FaceId, ImageId, PaneId, PaneRect};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,7 +144,7 @@ impl Screen {
         let mut col = 0;
         for (segment, face) in line.segments() {
             for c in segment.chars() {
-                let cells = c.width().unwrap_or(1);
+                let cells = crate::char_cells(c);
                 if cells == 0 {
                     // A combining char joins the cell before it.
                     if col > 0 {

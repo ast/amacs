@@ -21,7 +21,7 @@ use anyhow::{Context, Result, bail};
 use wayland_client::Connection;
 use wayland_client::protocol::wl_surface::WlSurface;
 
-use super::list::{Frame, Row, ink_clips};
+use super::list::{Cursor, Frame, GlyphQuad, Row, ink_clips};
 use super::scene::{Image, Images};
 use super::text::{GlyphContent, GlyphKey, GlyphSource};
 use super::{Backend, Rect};
@@ -239,7 +239,9 @@ impl Atlas {
                         .flat_map(|parts| [parts[0], parts[1], parts[2], 255])
                         .collect(),
                     // Without two-source blending, the mean of the three
-                    // parts is the coverage of the whole pixel.
+                    // parts is the coverage of the whole pixel. The window
+                    // asks for glyphs in grey in the first place (see
+                    // `Gpu::draws_subpixels`); this is for any that come.
                     GlyphContent::Subpixel => {
                         content = GlyphContent::Mask;
                         image
@@ -442,7 +444,7 @@ pub struct Gpu {
     pictures: Pictures,
     width: u32,
     height: u32,
-    drawn_cursor: Option<Rect>,
+    drawn_cursor: Option<Cursor>,
     /// What is shown is not what was last painted, as after a resize.
     lost: bool,
 }
@@ -737,13 +739,13 @@ impl Gpu {
         Ok(())
     }
 
-    /// The name of the GPU and how it is driven, for a person.
     /// Whether glyphs drawn per subpixel are shown as such. A GPU that
     /// cannot blend with two sources shows them in shades of grey.
     pub fn draws_subpixels(&self) -> bool {
         self.dual_source
     }
 
+    /// The name of the GPU and how it is driven, for a person.
     pub fn adapter(&self) -> &str {
         &self.adapter
     }
@@ -768,7 +770,7 @@ impl Gpu {
         }
         for index in 0..frame.rows.len() {
             for clip in ink_clips(frame.rows, index, |_| true) {
-                self.build_glyphs(&frame.rows[index], clip, glyphs, &mut out)?;
+                self.build_glyphs(&frame.rows[index].glyphs, clip, glyphs, &mut out)?;
             }
         }
         for row in frame.rows {
@@ -782,8 +784,16 @@ impl Gpu {
                 );
             }
         }
-        if let Some(cell) = frame.cursor {
-            push(&mut out, quad(cell), [0.0; 4], [1.0; 4], 0.0);
+        // A cursor of a colour is drawn as the rest is. One without is the
+        // last instance, which inverts what it covers.
+        if let Some(cursor) = frame.cursor {
+            match cursor.color {
+                Some(color) => {
+                    push(&mut out, quad(cursor.area), [0.0; 4], rgba(color), 0.0);
+                    self.build_glyphs(&cursor.glyphs, cursor.area, glyphs, &mut out)?;
+                }
+                None => push(&mut out, quad(cursor.area), [0.0; 4], [1.0; 4], 0.0),
+            }
         }
         Ok(out)
     }
@@ -843,10 +853,10 @@ impl Gpu {
         Ok(())
     }
 
-    /// The glyphs of a row, the parts of them that are in `clip`.
+    /// Glyphs, the parts of them that are in `clip`.
     fn build_glyphs(
         &mut self,
-        row: &Row,
+        quads: &[GlyphQuad],
         clip: Rect,
         glyphs: &mut dyn GlyphSource,
         out: &mut Vec<f32>,
@@ -857,7 +867,7 @@ impl Gpu {
             (clip.x + clip.w).min(self.width) as i32,
             (clip.y + clip.h).min(self.height) as i32,
         );
-        for glyph in &row.glyphs {
+        for glyph in quads {
             let Some(slot) = self.atlas.slot(&self.queue, glyphs, glyph.key)? else {
                 continue;
             };
@@ -965,8 +975,8 @@ impl Gpu {
             .collect();
         self.queue.write_buffer(&self.globals, 0, &size);
 
-        // The cursor is the last instance, and is drawn another way.
-        let cursor = u64::from(frame.cursor.is_some());
+        // A cursor that inverts is the last instance, drawn another way.
+        let cursor = u64::from(frame.cursor.is_some_and(|cursor| cursor.color.is_none()));
         let background = rgba(frame.background);
         let mut encoder = self
             .device
@@ -1064,7 +1074,8 @@ impl Backend for Gpu {
         if self.width == 0 || self.height == 0 {
             return None;
         }
-        let same = !frame.full && frame.changed.is_empty() && frame.cursor == self.drawn_cursor;
+        let same =
+            !frame.full && frame.changed.is_empty() && frame.cursor == self.drawn_cursor.as_ref();
         if same && !self.lost {
             return None;
         }
@@ -1109,7 +1120,7 @@ impl Backend for Gpu {
                 self.queue.present(texture);
             }
         }
-        self.drawn_cursor = frame.cursor;
+        self.drawn_cursor = frame.cursor.cloned();
         self.lost = false;
         Some(Rect {
             x: 0,

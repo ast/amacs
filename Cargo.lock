@@ -117,7 +117,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tungstenite",
- "unicode-width",
  "zune-jpeg",
 ]
 
@@ -146,7 +145,6 @@ dependencies = [
  "pollster",
  "smithay-client-toolkit",
  "swash",
- "unicode-width",
  "wayland-backend",
  "wayland-client",
  "wgpu",
@@ -318,7 +316,6 @@ version = "0.1.0"
 dependencies = [
  "amacs-proto",
  "crossterm",
- "unicode-width",
 ]
 
 [[package]]

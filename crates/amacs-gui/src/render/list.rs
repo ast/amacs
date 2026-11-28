@@ -2,8 +2,7 @@
 //! list that every backend draws from. How text looks is decided here and
 //! nowhere else.
 
-use amacs_proto::{Color, DisplayLine, ImageId, PaneRect};
-use unicode_width::UnicodeWidthChar;
+use amacs_proto::{Color, CursorShape, DisplayLine, ImageId, PaneRect};
 
 use super::Rect;
 use super::scene::{Images, Scene};
@@ -93,6 +92,69 @@ pub fn ink_clips(rows: &[Row], index: usize, keep: impl Fn(usize) -> bool) -> Ve
     clips
 }
 
+/// The cursor as it is drawn, after everything else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cursor {
+    /// The cell that it is in. What is drawn of the cursor stays in it.
+    pub cell: Rect,
+    /// What it covers: the whole cell for a block, a bar at its left for a
+    /// bar.
+    pub area: Rect,
+    /// The colour that it is filled with, or `None` for the colours of
+    /// what it covers inverted.
+    pub color: Option<Color>,
+    /// For a block of a colour, the glyphs of its row again, in the colour
+    /// of the background under the cursor, to be drawn over it and only in
+    /// [`Cursor::area`], so that the letter it is on can be read.
+    pub glyphs: Vec<GlyphQuad>,
+}
+
+/// How the cursor looks in a cell of a row, the row being the one it is
+/// on if it is on one.
+pub fn build_cursor(
+    row: Option<&Row>,
+    cell: Rect,
+    shape: CursorShape,
+    color: Option<Color>,
+) -> Cursor {
+    let area = match shape {
+        CursorShape::Block => cell,
+        CursorShape::Bar => Rect {
+            w: (cell.h / 9).clamp(1, cell.w.max(1)),
+            ..cell
+        },
+    };
+    let glyphs = match (row, shape, color) {
+        (Some(row), CursorShape::Block, Some(_)) => {
+            // The background that the cursor hides is the colour of the text
+            // on it.
+            let under = row
+                .backgrounds
+                .iter()
+                .find(|quad| cell.intersect(quad.rect).is_some())
+                .map(|quad| quad.color);
+            match under {
+                Some(under) => row
+                    .glyphs
+                    .iter()
+                    .map(|glyph| GlyphQuad {
+                        color: under,
+                        ..*glyph
+                    })
+                    .collect(),
+                None => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    };
+    Cursor {
+        cell,
+        area,
+        color,
+        glyphs,
+    }
+}
+
 /// What is to be on screen.
 pub struct Frame<'a> {
     /// The size of what is drawn on, in pixels.
@@ -109,9 +171,8 @@ pub struct Frame<'a> {
     /// Which of them changed since the last paint, in rising order. In a
     /// full frame, all.
     pub changed: &'a [usize],
-    /// The cell that the cursor is in, which is shown with its colours
-    /// inverted.
-    pub cursor: Option<Rect>,
+    /// The cursor, if it is shown.
+    pub cursor: Option<&'a Cursor>,
 }
 
 /// Lays out one row of a pane.
@@ -139,7 +200,7 @@ pub fn build_row(
     let mut col = 0;
     for (text, face) in line.segments() {
         let index = face.0 as usize;
-        let cells: u32 = text.chars().map(|c| c.width().unwrap_or(1) as u32).sum();
+        let cells = amacs_proto::text_cells(text) as u32;
         let cells = cells.min(u32::from(rect.w).saturating_sub(col));
         let span = Rect {
             x: area.x + col * cell_w,

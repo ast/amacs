@@ -38,7 +38,7 @@ use std::path::Path;
 use amacs_proto::{Color, DrawOp, SubpixelOrder};
 
 pub use gpu::Gpu;
-pub use list::{Frame, GlyphQuad, ImageQuad, Quad, Row};
+pub use list::{Cursor, Frame, GlyphQuad, ImageQuad, Quad, Row};
 pub use scene::{Image, Images, Scene};
 pub use software::Software;
 pub use text::{Fonts, GlyphContent, GlyphImage, GlyphKey, GlyphSource};
@@ -226,11 +226,19 @@ impl<B: Backend> Renderer<B> {
             }
         }
         let (cell_w, cell_h) = self.fonts.cell_size();
-        let cursor = self.scene.cursor_cell().map(|(col, row)| Rect {
-            x: col * cell_w,
-            y: row * cell_h,
-            w: cell_w,
-            h: cell_h,
+        let cursor = self.scene.cursor_cell().map(|(col, row)| {
+            let cell = Rect {
+                x: col * cell_w,
+                y: row * cell_h,
+                w: cell_w,
+                h: cell_h,
+            };
+            let on = self
+                .rows
+                .iter()
+                .find(|row| row.area.intersect(cell).is_some());
+            let (shape, color) = self.scene.cursor_look();
+            list::build_cursor(on, cell, shape, color)
         });
         let frame = Frame {
             size: (self.width, self.height),
@@ -240,7 +248,7 @@ impl<B: Backend> Renderer<B> {
             rows: &self.rows,
             images: self.scene.images(),
             changed: &changed,
-            cursor,
+            cursor: cursor.as_ref(),
         };
         let damage = self.backend.paint(&frame, &mut self.fonts);
         self.scene.painted();

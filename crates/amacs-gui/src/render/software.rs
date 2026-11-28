@@ -6,7 +6,7 @@
 
 use amacs_proto::Color;
 
-use super::list::{Frame, ImageQuad, Row, ink_clips};
+use super::list::{Cursor, Frame, ImageQuad, Row, ink_clips};
 use super::scene::Image;
 use super::text::{GlyphContent, GlyphKey, GlyphSource};
 use super::{Backend, DEFAULT_BG, Rect};
@@ -21,8 +21,8 @@ pub struct Software {
     height: u32,
     /// The frame as XRGB, one `u32` per pixel.
     pixels: Vec<u32>,
-    /// The cell that the cursor is drawn in.
-    drawn_cursor: Option<Rect>,
+    /// The cursor as it was drawn.
+    drawn_cursor: Option<Cursor>,
     /// For each row, by its index in the frame, whether its glyphs as last
     /// drawn reach into the row above and into the row below.
     overhangs: Vec<(bool, bool)>,
@@ -142,6 +142,34 @@ impl Software {
         }
     }
 
+    /// Draws the cursor: what it covers inverted, or filled with its
+    /// colour and the letter on it drawn again over that.
+    fn draw_cursor(&mut self, cursor: &Cursor, glyphs: &mut dyn GlyphSource) {
+        let area = cursor.area;
+        let Some(color) = cursor.color else {
+            let x1 = (area.x + area.w).min(self.width);
+            let y1 = (area.y + area.h).min(self.height);
+            for y in area.y.min(y1)..y1 {
+                for x in area.x.min(x1)..x1 {
+                    let index = y as usize * self.width as usize + x as usize;
+                    self.pixels[index] ^= 0x00ff_ffff;
+                }
+            }
+            return;
+        };
+        self.fill(area, pixel(color));
+        for glyph in &cursor.glyphs {
+            self.draw_glyph(
+                glyphs,
+                glyph.key,
+                glyph.x,
+                glyph.y,
+                pixel(glyph.color),
+                area,
+            );
+        }
+    }
+
     /// Draws the part of a picture that is in `clip`, over what is there.
     fn draw_image(&mut self, quad: &ImageQuad, image: &Image, clip: Rect) {
         let clip_x1 = (clip.x + clip.w).min(self.width) as i32;
@@ -190,11 +218,12 @@ impl Backend for Software {
         let mut damage: Option<Rect> = None;
         let mut add = |rect: Rect| damage = Some(damage.map_or(rect, |old| old.union(rect)));
 
-        // The cursor is drawn by inverting its cell. When it moves, the row
-        // it was on is painted afresh to erase it. A row that is painted
-        // for any other reason loses its cursor too, which is then redrawn.
-        let cursor_moved = frame.cursor != self.drawn_cursor;
-        let old_cursor_y = self.drawn_cursor.map(|cell| cell.y);
+        // The cursor is drawn over its cell. When it moves or changes, the
+        // row it was on is painted afresh to erase it. A row that is
+        // painted for any other reason loses its cursor too, which is then
+        // redrawn.
+        let cursor_moved = frame.cursor != self.drawn_cursor.as_ref();
+        let old_cursor_y = self.drawn_cursor.as_ref().map(|cursor| cursor.cell.y);
 
         if frame.full {
             let whole = Rect {
@@ -254,7 +283,9 @@ impl Backend for Software {
                 }
             }
             add(row.area);
-            cursor_row_painted |= frame.cursor.is_some_and(|cell| cell.y == row.area.y);
+            cursor_row_painted |= frame
+                .cursor
+                .is_some_and(|cursor| cursor.cell.y == row.area.y);
         }
 
         // The glyphs of the repainted rows and of the rows next to them,
@@ -284,20 +315,13 @@ impl Backend for Software {
             }
         }
 
-        if let Some(cell) = frame.cursor
+        if let Some(cursor) = frame.cursor
             && (cursor_moved || cursor_row_painted || frame.full)
         {
-            let x1 = (cell.x + cell.w).min(self.width);
-            let y1 = (cell.y + cell.h).min(self.height);
-            for y in cell.y.min(y1)..y1 {
-                for x in cell.x.min(x1)..x1 {
-                    let index = y as usize * self.width as usize + x as usize;
-                    self.pixels[index] ^= 0x00ff_ffff;
-                }
-            }
-            add(cell);
+            self.draw_cursor(cursor, glyphs);
+            add(cursor.cell);
         }
-        self.drawn_cursor = frame.cursor;
+        self.drawn_cursor = frame.cursor.cloned();
 
         damage.map(|rect| Rect {
             w: rect.w.min(self.width.saturating_sub(rect.x)),

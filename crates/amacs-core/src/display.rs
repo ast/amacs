@@ -4,8 +4,6 @@ use amacs_proto::{DisplayLine, FaceId};
 use amacs_text::Text;
 use std::ops::Range;
 
-use unicode_width::UnicodeWidthChar;
-
 use crate::fold::Folds;
 
 /// Number of cells `c` occupies when drawn starting at column `col`.
@@ -13,7 +11,7 @@ pub fn char_cells(c: char, col: usize, tab_width: usize) -> usize {
     match c {
         '\t' => tab_width - col % tab_width,
         c if c.is_control() => 2,
-        c => c.width().unwrap_or(1),
+        c => amacs_proto::char_cells(c),
     }
 }
 
@@ -514,7 +512,7 @@ pub(crate) fn overlay_cells(
     let mut cells: Vec<(Option<char>, FaceId)> = Vec::new();
     for (segment, face) in line.segments() {
         for c in segment.chars() {
-            match c.width().unwrap_or(1) {
+            match amacs_proto::char_cells(c) {
                 0 => {}
                 cells_wide => {
                     cells.push((Some(c), face));
@@ -545,7 +543,7 @@ pub(crate) fn overlay_cells(
 
     let mut boxed: Vec<(Option<char>, FaceId)> = Vec::with_capacity(width);
     for (c, face) in content {
-        let wide = c.width().unwrap_or(1);
+        let wide = amacs_proto::char_cells(*c);
         if wide == 0 || boxed.len() + wide > width {
             break;
         }

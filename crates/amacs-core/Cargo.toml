@@ -26,7 +26,6 @@ slotmap.workspace = true
 spellbook.workspace = true
 thiserror.workspace = true
 tungstenite.workspace = true
-unicode-width.workspace = true
 zune-jpeg.workspace = true
 
 [dev-dependencies]

@@ -2,7 +2,7 @@
 //! into memory shared with the compositor, or drawn by the GPU.
 
 use amacs_gui::render::{Fonts, Gpu, Renderer, Software};
-use amacs_proto::DrawOp;
+use amacs_proto::{DrawOp, SubpixelOrder};
 use anyhow::Result;
 use smithay_client_toolkit::reexports::client::Connection;
 use smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface;
@@ -42,7 +42,7 @@ impl Output {
     /// CPU draws, and standard error says why.
     pub fn new(
         kind: RendererKind,
-        fonts: Fonts,
+        mut fonts: Fonts,
         connection: &Connection,
         surface: &WlSurface,
     ) -> Self {
@@ -50,6 +50,11 @@ impl Output {
             match Gpu::for_window(connection, surface) {
                 Ok(gpu) => {
                     eprintln!("amacs-gui: drawing with {}", gpu.adapter());
+                    // A GPU that can not blend per subpixel gets glyphs drawn
+                    // in grey: sharper than those for subpixels made grey.
+                    if !gpu.draws_subpixels() {
+                        fonts.set_subpixel(SubpixelOrder::None);
+                    }
                     return Self::Gpu(Box::new(Renderer::with_backend(fonts, gpu)));
                 }
                 Err(error) => {

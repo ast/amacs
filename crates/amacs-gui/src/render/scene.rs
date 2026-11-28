@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use amacs_proto::{Color, DisplayLine, DrawOp, FaceAttrs, ImageId, PaneId, PaneRect};
+use amacs_proto::{Color, CursorShape, DisplayLine, DrawOp, FaceAttrs, ImageId, PaneId, PaneRect};
 
 use super::{DEFAULT_BG, DEFAULT_FG};
 
@@ -32,6 +32,9 @@ pub struct Scene {
     /// In the order of the layout.
     panes: Vec<Pane>,
     cursor: Option<(PaneId, u16, u16)>,
+    /// How the cursor looks, as the server last said.
+    cursor_shape: CursorShape,
+    cursor_color: Option<Color>,
     images: Images,
     /// Everything must be drawn afresh, as after a resize.
     stale: bool,
@@ -43,6 +46,8 @@ impl Default for Scene {
             faces: Vec::new(),
             panes: Vec::new(),
             cursor: None,
+            cursor_shape: CursorShape::Block,
+            cursor_color: None,
             images: Images::new(),
             stale: true,
         }
@@ -97,7 +102,17 @@ impl Scene {
                         }
                     }
                 }
-                DrawOp::Cursor { pane, row, col, .. } => self.cursor = Some((*pane, *row, *col)),
+                DrawOp::Cursor {
+                    pane,
+                    row,
+                    col,
+                    shape,
+                    color,
+                } => {
+                    self.cursor = Some((*pane, *row, *col));
+                    self.cursor_shape = *shape;
+                    self.cursor_color = *color;
+                }
                 DrawOp::DefineImage {
                     id,
                     width,
@@ -164,6 +179,11 @@ impl Scene {
         let fg = face.fg.unwrap_or(DEFAULT_FG);
         let bg = face.bg.unwrap_or(DEFAULT_BG);
         if face.inverse { (bg, fg) } else { (fg, bg) }
+    }
+
+    /// The shape of the cursor and the colour that the theme gives it.
+    pub fn cursor_look(&self) -> (CursorShape, Option<Color>) {
+        (self.cursor_shape, self.cursor_color)
     }
 
     /// The cell the cursor is in, as (column, row) on the frame.

@@ -9,7 +9,6 @@ publish.workspace = true
 [dependencies]
 amacs-proto.workspace = true
 crossterm.workspace = true
-unicode-width.workspace = true
 
 [lints]
 workspace = true

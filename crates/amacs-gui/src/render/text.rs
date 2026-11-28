@@ -14,7 +14,6 @@ use cosmic_text::{
 use swash::scale::image::{Content as SwashContent, Image as SwashImage};
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Angle, Format, Transform, Vector};
-use unicode_width::UnicodeWidthChar;
 
 /// Shaped lines kept for reuse. Scrolling shows mostly lines seen before.
 const SHAPE_CACHE_LIMIT: usize = 4096;
@@ -222,7 +221,7 @@ impl Fonts {
         let mut col = 0;
         for (offset, c) in line.text.char_indices() {
             columns[offset..offset + c.len_utf8()].fill(col);
-            col += c.width().unwrap_or(1) as u32;
+            col += amacs_proto::char_cells(c) as u32;
         }
         columns[line.text.len()] = col;
 
