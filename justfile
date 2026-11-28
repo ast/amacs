@@ -4,6 +4,11 @@
 # one that may be running for real work. Same as in .envrc.
 export AMACS_SOCKET := env("AMACS_SOCKET", env("XDG_RUNTIME_DIR", "/tmp") / "amacs/dev.sock")
 
+# The init file of the server that these recipes start: init.local.scm,
+# which is not committed and holds what is private, if it is there, and
+# else the example. AMACS_INIT names another. Same as in .envrc.
+export AMACS_INIT := env("AMACS_INIT", if path_exists(justfile_directory() / "init.local.scm") == "true" { justfile_directory() / "init.local.scm" } else { justfile_directory() / "examples/init.scm" })
+
 # "dev" or "release". The dev loop builds dev: incremental, with optimised
 # dependencies, and shared with `cargo test`. Same as in .envrc and .mcp.json.
 profile := env("AMACS_PROFILE", "dev")
@@ -41,9 +46,8 @@ start:
     mkdir -p "$(dirname "$AMACS_SOCKET")"
     # The Scheme that is part of the editor is read from this checkout,
     # so that a restart picks up changes to it without a build.
-    # It is set up by the example init file, unless AMACS_INIT names
-    # another: the same as in .envrc.
-    AMACS_RUNTIME="$PWD/runtime" AMACS_INIT="${AMACS_INIT:-$PWD/examples/init.scm}" \
+    # It is set up by the init file that AMACS_INIT names, above.
+    AMACS_RUNTIME="$PWD/runtime" \
         setsid nohup {{bindir}}/amacs --daemon >"{{log}}" 2>&1 </dev/null &
     for _ in $(seq 50); do
         if [ -S "$AMACS_SOCKET" ]; then

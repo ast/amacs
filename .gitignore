@@ -2,3 +2,5 @@
 /result
 *.snap.new
 /.direnv
+# The init file of this machine, with what is private: see the justfile.
+/init.local.scm
