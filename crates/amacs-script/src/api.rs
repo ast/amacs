@@ -1885,6 +1885,61 @@ pub const API: &[ApiFn] = api! {
                     .collect(),
             ))
         };
+    "feed-parse-file" (1, Some(2)) "A feed of news read from a file: RSS, Atom or JSON Feed, in any character encoding that the feed says. The optional argument is the address it was fetched from, against which relative links are made whole. Returns a list of (key value) lists: title, link and entries, which is a list of entries, each with id, title, link, author, date (seconds since 1970) and content (HTML). A value that the feed does not give is #f. A file that is not a feed is an error." =>
+        |ed, args| {
+            let path = expand_path(string(args, 0)?, ed.working_directory());
+            let bytes = file_system::read(&path)
+                .map_err(|error| CmdError::msg(format!("cannot read {}: {error}", path.display())))?;
+            let url = if args.len() > 1 { Some(string(args, 1)?) } else { None };
+            let feed = amacs_core::feed::parse_feed(&bytes, url)
+                .map_err(|error| CmdError::msg(format!("not a feed: {error}")))?;
+            let field = |key: &str, value: Value| Value::List(vec![Value::sym(key), value]);
+            let text = |value: Option<String>| value.map_or(Value::Bool(false), Value::Str);
+            let entries = feed
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    Value::List(vec![
+                        field("id", Value::Str(entry.id)),
+                        field("title", Value::Str(entry.title)),
+                        field("link", text(entry.link)),
+                        field("author", text(entry.author)),
+                        field("date", entry.date.map_or(Value::Bool(false), Value::Int)),
+                        field("content", text(entry.content)),
+                    ])
+                })
+                .collect();
+            Ok(Value::List(vec![
+                field("title", text(feed.title)),
+                field("link", text(feed.link)),
+                field("entries", Value::List(entries)),
+            ]))
+        };
+    "html-render" (2, Some(3)) "HTML laid out as text that fits in a width of columns, as a list of three: the text; the spans of faces over it, as (start end face) lists; and the links, as (start end target) lists. Positions count chars from 0. The faces are feeds-bold, feeds-italic, feeds-strikeout, feeds-code, feeds-heading and feeds-link. A picture is the text [image: its alt text], with a link to it. The optional argument is an address against which relative links are made whole." =>
+        |_, args| {
+            let width = usize::try_from(int(args, 1)?).unwrap_or(80);
+            let base = if args.len() > 2 { Some(string(args, 2)?) } else { None };
+            let out = amacs_core::html::render_html(string(args, 0)?, width, base);
+            Ok(Value::List(vec![
+                Value::Str(out.text),
+                Value::List(
+                    out.spans
+                        .into_iter()
+                        .map(|(start, end, face)| {
+                            Value::List(vec![start.into(), end.into(), Value::sym(face)])
+                        })
+                        .collect(),
+                ),
+                Value::List(
+                    out.links
+                        .into_iter()
+                        .map(|(start, end, target)| {
+                            Value::List(vec![start.into(), end.into(), Value::Str(target)])
+                        })
+                        .collect(),
+                ),
+            ]))
+        };
     "regexp-replace" (3, Some(3)) "A string with every match of a regular expression replaced: the expression, the string, the replacement, in which \\& is what matched, \\1 to \\9 what a group matched and \\\\ a backslash. Returns a list of the new string and how many matches there were." =>
         |_, args| {
             let regex = amacs_core::regexp::compile(string(args, 0)?)?;

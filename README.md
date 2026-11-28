@@ -61,6 +61,7 @@ Programs inside the editor:
 - A terminal (`C-c v`) that runs a shell or any other program
 - A coding agent (`C-c c c`): Claude Code, or another agent that speaks
   the Agent Client Protocol
+- A reader of RSS and Atom feeds (`C-x w`), after elfeed
 
 The editor itself:
 
@@ -994,6 +995,39 @@ is built and installed with the editor and has to be on the `PATH`.
 `docs/matrix.md` has the setting up at length, what to do when something
 is wrong, the keys and what the lines say; the editor's side is
 `runtime/lib/matrix.scm`.
+
+## Feeds
+
+`C-x w` lists the entries of RSS, Atom and JSON feeds in one buffer, the
+newest first, as elfeed does in Emacs. The feeds and the tags that their
+entries get are an option:
+
+```scheme
+(set-option! 'feeds
+             '(("https://planet.emacslife.com/atom.xml" emacs)
+               ("https://lwn.net/headlines/rss" linux news)))
+```
+
+`G` fetches them, and so does a timer, every `feeds-refresh-minutes`. A
+filter on the mode line chooses what is listed: `+unread @6-months-ago` at
+first, `s` changes it, and the list follows as it is typed, and `c` sets it
+back. `+tag` and `-tag` are entries
+with and without a tag, `@2-weeks-ago` those newer than that, `=planet`
+those of feeds whose title or address matches, `#20` the first 20, and other
+words what the title must match.
+
+`RET` shows an entry, with its HTML laid out as text, and marks it read; in
+it, `TAB` goes from link to link, `RET` follows one and `n` and `p` go to the
+next and the previous entry. `b` opens the page in the browser and `y`
+copies its address. Read and unread are tags like any other: `r` and `u`
+take `unread` off and put it on, `+` and `-` any tag, on the entry of the
+line or on those of the region. An entry that is read stays listed until
+`g` draws the list again.
+
+`curl` fetches the feeds, some at the same time, and asks the server for
+nothing that has not changed. What was fetched is kept in
+`~/.local/share/amacs/feeds`, for ever. `M-x feeds-show-errors` lists the
+feeds whose last fetch failed. The code is `runtime/lib/feeds.scm`.
 
 ## Pictures
 

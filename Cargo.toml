@@ -31,6 +31,10 @@ anyhow = "1"
 bitflags = { version = "2", features = ["serde"] }
 cosmic-text = "0.19"
 crossterm = "0.29"
+# Feeds: RSS, Atom and JSON Feed are parsed by feed-rs, and the HTML of
+# their entries is laid out as text by html2text.
+feed-rs = "3.1"
+html2text = "0.17"
 indexmap = "2"
 insta = "1"
 jiff = "0.2"
@@ -62,6 +66,7 @@ tempfile = "3"
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 thiserror = "2"
 unicode-width = "0.2"
+url = "2"
 # The driver of a GPU talks to the system's libwayland, so the window's
 # connection has to be libwayland's too.
 wayland-backend = { version = "0.3", features = ["client_system"] }

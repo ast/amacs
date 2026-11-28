@@ -14,7 +14,9 @@ amacs-remote.workspace = true
 amacs-text.workspace = true
 amacs-treesit.workspace = true
 anyhow.workspace = true
+feed-rs.workspace = true
 gif.workspace = true
+html2text.workspace = true
 image-webp.workspace = true
 nucleo.workspace = true
 png.workspace = true
@@ -26,6 +28,7 @@ slotmap.workspace = true
 spellbook.workspace = true
 thiserror.workspace = true
 tungstenite.workspace = true
+url.workspace = true
 zune-jpeg.workspace = true
 
 [dev-dependencies]

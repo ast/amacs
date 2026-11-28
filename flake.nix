@@ -52,6 +52,9 @@
             nativeBuildInputs = old.nativeBuildInputs ++ [
               pkgs.ripgrep
               pkgs.git
+              # The reader of feeds fetches with curl, file:// addresses in
+              # its tests.
+              pkgs.curl
               pkgs.openssh
               # The file manager packs and unpacks with these, besides the
               # tar, gzip, xz and bzip2 that every build has.

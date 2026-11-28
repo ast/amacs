@@ -472,6 +472,14 @@
 
 ;; (set-option! 'matrix-user-id "@name:example.org")
 
+;;; Feeds of news, read as elfeed reads them. C-x w lists the entries, G
+;;; fetches; RET shows one, b opens it in the browser, s filters.
+
+(set-option! 'feeds
+             '(("https://planet.emacslife.com/atom.xml" emacs)
+               ("https://blog.rust-lang.org/feed.xml" rust)
+               ("https://lwn.net/headlines/rss" linux news)))
+
 ;;; Pictures under the lines that name them, in a window.
 
 ;; (add-hook! 'markdown-mode-hook inline-images-mode)
